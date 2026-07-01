@@ -1,0 +1,39 @@
+- generic [ref=e2]:
+  - complementary [ref=e3]:
+    - generic [ref=e7]:
+      - generic [ref=e8]: Steadymade AI OS
+      - generic [ref=e9]: AGENT SYSTEM / KNOWLEDGE MAP
+    - navigation [ref=e10]:
+      - button "Command Center" [ref=e11] [cursor=pointer]
+      - button "Agent Map" [ref=e12] [cursor=pointer]
+      - button "Knowledge Docs" [ref=e13] [cursor=pointer]
+      - button "Workflows" [ref=e14] [cursor=pointer]
+      - button "Departments" [ref=e15] [cursor=pointer]
+      - button "Artifacts" [ref=e16] [cursor=pointer]
+      - button "Settings" [ref=e17] [cursor=pointer]
+    - generic [ref=e18]:
+      - generic [ref=e19]:
+        - generic [ref=e20]: PROJECT
+        - generic [ref=e21]: Steadymade AI OS
+      - generic [ref=e22]:
+        - generic [ref=e23]: MODE
+        - generic [ref=e24]: Claude Project
+      - generic [ref=e25]:
+        - generic [ref=e26]: AGENTS
+        - generic [ref=e27]: —
+      - generic [ref=e28]:
+        - generic [ref=e29]: KNOWLEDGE
+        - generic [ref=e30]: Markdown
+  - generic [ref=e31]:
+    - banner [ref=e32]:
+      - heading "Command Center" [level=1] [ref=e34]
+      - generic [ref=e36]:
+        - img [ref=e37]
+        - textbox "Search agents, docs, workflows…" [ref=e40]
+      - generic [ref=e41]:
+        - button "Add Knowledge" [ref=e42] [cursor=pointer]
+        - button "New Workflow" [ref=e43] [cursor=pointer]
+        - generic [ref=e44]: CLAUDE PROJECT MODE
+        - button "⛶" [ref=e45] [cursor=pointer]
+    - main [ref=e46]
+  - complementary

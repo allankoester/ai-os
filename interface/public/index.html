@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Steadymade AI OS — Operating Interface</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%230B2218'/><circle cx='8' cy='8' r='3' fill='%232EE66A'/></svg>" />
+</head>
+<body>
+  <div id="app">
+    <!-- ===== Left Sidebar ===== -->
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-mark"><span class="brand-dot"></span></div>
+        <div>
+          <div class="brand-name">Steadymade&nbsp;AI&nbsp;OS</div>
+          <div class="brand-sub">AGENT SYSTEM / KNOWLEDGE MAP</div>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav" id="nav">
+        <button class="nav-item active" data-view="command">Command Center</button>
+        <button class="nav-item" data-view="map">Agent Map</button>
+        <button class="nav-item" data-view="knowledge">Knowledge Docs</button>
+        <button class="nav-item" data-view="workflows">Workflows</button>
+        <button class="nav-item" data-view="departments">Departments</button>
+        <button class="nav-item" data-view="artifacts">Artifacts</button>
+        <button class="nav-item" data-view="settings">Settings</button>
+      </nav>
+
+      <div class="sidebar-status">
+        <div class="status-row"><span>PROJECT</span><span>Steadymade AI OS</span></div>
+        <div class="status-row"><span>MODE</span><span>Claude Project</span></div>
+        <div class="status-row"><span>AGENTS</span><span id="status-agents">—</span></div>
+        <div class="status-row"><span>KNOWLEDGE</span><span>Markdown</span></div>
+      </div>
+    </aside>
+
+    <!-- ===== Main column ===== -->
+    <div class="main-col">
+      <header class="topbar">
+        <div class="topbar-left">
+          <h1 id="view-title">Command Center</h1>
+        </div>
+        <div class="topbar-center">
+          <div class="search-wrap">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <input id="search" type="text" placeholder="Search agents, docs, workflows…" autocomplete="off" />
+            <div id="search-results" class="search-results hidden"></div>
+          </div>
+        </div>
+        <div class="topbar-right">
+          <button class="btn btn-ghost" id="btn-add-knowledge">Add Knowledge</button>
+          <button class="btn btn-primary" id="btn-new-workflow">New Workflow</button>
+          <span class="badge badge-mode">CLAUDE PROJECT MODE</span>
+          <button class="btn btn-ghost btn-fullscreen" id="btn-fullscreen" title="Fullscreen (F)">⛶</button>
+        </div>
+      </header>
+
+      <main id="view" class="view"></main>
+    </div>
+
+    <!-- ===== Right detail drawer (pushes layout, never overlays) ===== -->
+    <aside id="drawer" class="drawer"></aside>
+
+    <!-- toast -->
+    <div id="toast" class="toast"></div>
+  </div>
+
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

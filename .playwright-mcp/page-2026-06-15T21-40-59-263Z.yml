@@ -1,0 +1,115 @@
+- generic [ref=e2]:
+  - complementary [ref=e3]:
+    - generic [ref=e7]:
+      - generic [ref=e8]: Steadymade AI OS
+      - generic [ref=e9]: AGENT SYSTEM / KNOWLEDGE MAP
+    - navigation [ref=e10]:
+      - button "Command Center" [ref=e11] [cursor=pointer]
+      - button "Agent Map" [active] [ref=e12] [cursor=pointer]
+      - button "Knowledge Docs" [ref=e13] [cursor=pointer]
+      - button "Workflows" [ref=e14] [cursor=pointer]
+      - button "Departments" [ref=e15] [cursor=pointer]
+      - button "Artifacts" [ref=e16] [cursor=pointer]
+      - button "Settings" [ref=e17] [cursor=pointer]
+    - generic [ref=e18]:
+      - generic [ref=e19]:
+        - generic [ref=e20]: PROJECT
+        - generic [ref=e21]: Steadymade AI OS
+      - generic [ref=e22]:
+        - generic [ref=e23]: MODE
+        - generic [ref=e24]: Claude Project
+      - generic [ref=e25]:
+        - generic [ref=e26]: AGENTS
+        - generic [ref=e27]: 13 active
+      - generic [ref=e28]:
+        - generic [ref=e29]: KNOWLEDGE
+        - generic [ref=e30]: Markdown
+  - generic [ref=e31]:
+    - banner [ref=e32]:
+      - heading "Agent Map" [level=1] [ref=e179]
+      - generic [ref=e36]:
+        - img [ref=e37]
+        - textbox "Search agents, docs, workflows…" [ref=e40]
+      - generic [ref=e41]:
+        - button "Add Knowledge" [ref=e42] [cursor=pointer]
+        - button "New Workflow" [ref=e43] [cursor=pointer]
+        - generic [ref=e44]: CLAUDE PROJECT MODE
+        - button "⛶" [ref=e45] [cursor=pointer]
+    - main [ref=e46]:
+      - generic [ref=e180]:
+        - img [ref=e181]:
+          - generic [ref=e254]: STRATEGY
+          - generic [ref=e257]: KNOWLEDGE
+          - generic [ref=e260]: MARKETING
+          - generic [ref=e263]: SALES / OFFERS
+          - generic [ref=e266]: DOCUMENTS
+          - generic [ref=e269]: CREATIVE PRODUCTION
+          - generic [ref=e270] [cursor=pointer]:
+            - generic: strategy/
+            - generic: 4 DOCS
+          - generic [ref=e273] [cursor=pointer]:
+            - generic: steadymade Docs/
+            - generic: 10 DOCS
+          - generic [ref=e276] [cursor=pointer]:
+            - generic: marketing/
+            - generic: 1 DOCS
+          - generic [ref=e279] [cursor=pointer]:
+            - generic: offers/
+            - generic: 0 DOCS
+          - generic [ref=e282] [cursor=pointer]:
+            - generic: documents/
+            - generic: 0 DOCS
+          - generic [ref=e285] [cursor=pointer]:
+            - generic: creative/
+            - generic: 3 DOCS
+          - generic [ref=e288] [cursor=pointer]:
+            - generic: clients/
+            - generic: 0 DOCS
+          - generic [ref=e291] [cursor=pointer]:
+            - generic: Atlas
+            - generic: Strategic Advisor
+          - generic [ref=e294] [cursor=pointer]:
+            - generic: Nora
+            - generic: Knowledge Agent
+          - generic [ref=e297] [cursor=pointer]:
+            - generic: Mara
+            - generic: Knowledge Governance
+          - generic [ref=e300] [cursor=pointer]:
+            - generic: Ada
+            - generic: Marketing Strategy
+          - generic [ref=e303] [cursor=pointer]:
+            - generic: Clara
+            - generic: Writer
+          - generic [ref=e306] [cursor=pointer]:
+            - generic: Rosa
+            - generic: Review
+          - generic [ref=e309] [cursor=pointer]:
+            - generic: Jonas
+            - generic: Calendar
+          - generic [ref=e312] [cursor=pointer]:
+            - generic: Otto
+            - generic: Proposal Agent
+          - generic [ref=e315] [cursor=pointer]:
+            - generic: Dora
+            - generic: Document Agent
+          - generic [ref=e318] [cursor=pointer]:
+            - generic: Vera
+            - generic: Visual Concept
+          - generic [ref=e321] [cursor=pointer]:
+            - generic: Noah
+            - generic: Image Prompt Router
+          - generic [ref=e324] [cursor=pointer]:
+            - generic: Kira
+            - generic: Image Generation
+          - generic [ref=e327] [cursor=pointer]:
+            - generic [ref=e331]: Danny
+            - generic [ref=e332]: ORCHESTRATOR · CORE
+            - generic [ref=e333]: Routes requests, coordinates agents,
+            - generic [ref=e334]: retrieves context, manages approval.
+        - generic [ref=e335]: CLICK AN AGENT OR FOLDER TO INSPECT ACCESS + WORKFLOWS
+        - generic [ref=e336]:
+          - generic [ref=e337]: DANNY ROUTING
+          - generic [ref=e339]: KNOWLEDGE ACCESS (SELECTED)
+          - generic [ref=e341]: AGENT
+          - generic [ref=e343]: MARKDOWN FOLDER
+  - complementary

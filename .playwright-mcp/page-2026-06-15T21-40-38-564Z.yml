@@ -1,0 +1,164 @@
+- generic [ref=e2]:
+  - complementary [ref=e3]:
+    - generic [ref=e7]:
+      - generic [ref=e8]: Steadymade AI OS
+      - generic [ref=e9]: AGENT SYSTEM / KNOWLEDGE MAP
+    - navigation [ref=e10]:
+      - button "Command Center" [ref=e11] [cursor=pointer]
+      - button "Agent Map" [ref=e12] [cursor=pointer]
+      - button "Knowledge Docs" [ref=e13] [cursor=pointer]
+      - button "Workflows" [ref=e14] [cursor=pointer]
+      - button "Departments" [ref=e15] [cursor=pointer]
+      - button "Artifacts" [ref=e16] [cursor=pointer]
+      - button "Settings" [ref=e17] [cursor=pointer]
+    - generic [ref=e18]:
+      - generic [ref=e19]:
+        - generic [ref=e20]: PROJECT
+        - generic [ref=e21]: Steadymade AI OS
+      - generic [ref=e22]:
+        - generic [ref=e23]: MODE
+        - generic [ref=e24]: Claude Project
+      - generic [ref=e25]:
+        - generic [ref=e26]: AGENTS
+        - generic [ref=e27]: 13 active
+      - generic [ref=e28]:
+        - generic [ref=e29]: KNOWLEDGE
+        - generic [ref=e30]: Markdown
+  - generic [ref=e31]:
+    - banner [ref=e32]:
+      - heading "Command Center" [level=1] [ref=e34]
+      - generic [ref=e36]:
+        - img [ref=e37]
+        - textbox "Search agents, docs, workflows…" [ref=e40]
+      - generic [ref=e41]:
+        - button "Add Knowledge" [ref=e42] [cursor=pointer]
+        - button "New Workflow" [ref=e43] [cursor=pointer]
+        - generic [ref=e44]: CLAUDE PROJECT MODE
+        - button "⛶" [ref=e45] [cursor=pointer]
+    - main [ref=e46]:
+      - generic [ref=e47]:
+        - generic [ref=e48]:
+          - generic [ref=e49]:
+            - generic [ref=e50]: AGENTS ONLINE
+            - generic [ref=e51]: "13"
+            - generic [ref=e52]: Danny + 12 specialists, 7 departments
+          - generic [ref=e53]:
+            - generic [ref=e54]: KNOWLEDGE DOCS
+            - generic [ref=e55]: "18"
+            - generic [ref=e56]: 7 folders, Markdown on disk
+          - generic [ref=e57]:
+            - generic [ref=e58]: OPEN REVIEW ITEMS
+            - generic [ref=e59]: "0"
+            - generic [ref=e60]: 0 approved · 18 draft
+          - generic [ref=e61]:
+            - generic [ref=e62]: WORKFLOWS
+            - generic [ref=e63]: "6"
+            - generic [ref=e64]: All routed through Danny
+        - generic [ref=e65]:
+          - generic [ref=e66]:
+            - generic [ref=e67]:
+              - generic [ref=e68]: Recently Edited Knowledge
+              - button "DRAFT **Steadymade Social Media Voice Guide** marketing · 12h ago" [ref=e69] [cursor=pointer]:
+                - generic [ref=e70]: DRAFT
+                - generic [ref=e71]: "**Steadymade Social Media Voice Guide**"
+                - generic [ref=e72]: marketing · 12h ago
+              - button "DRAFT steadymade.ai — Positionierung, Brand Story, Zielkunden & Personas strategy · 8d ago" [ref=e73] [cursor=pointer]:
+                - generic [ref=e74]: DRAFT
+                - generic [ref=e75]: steadymade.ai — Positionierung, Brand Story, Zielkunden & Personas
+                - generic [ref=e76]: strategy · 8d ago
+              - button "DRAFT SSOT – 6. Security, Data & AI Governance strategy · 8d ago" [ref=e77] [cursor=pointer]:
+                - generic [ref=e78]: DRAFT
+                - generic [ref=e79]: SSOT – 6. Security, Data & AI Governance
+                - generic [ref=e80]: strategy · 8d ago
+              - button "DRAFT SSOT – 2. Markt, ICP & Value Proposition strategy · 8d ago" [ref=e81] [cursor=pointer]:
+                - generic [ref=e82]: DRAFT
+                - generic [ref=e83]: SSOT – 2. Markt, ICP & Value Proposition
+                - generic [ref=e84]: strategy · 8d ago
+              - button "DRAFT SSOT – 1. Strategy & Direction strategy · 8d ago" [ref=e85] [cursor=pointer]:
+                - generic [ref=e86]: DRAFT
+                - generic [ref=e87]: SSOT – 1. Strategy & Direction
+                - generic [ref=e88]: strategy · 8d ago
+              - button "DRAFT Kie.ai API Reference creative · 8d ago" [ref=e89] [cursor=pointer]:
+                - generic [ref=e90]: DRAFT
+                - generic [ref=e91]: Kie.ai API Reference
+                - generic [ref=e92]: creative · 8d ago
+              - button "DRAFT Steadymade Image Prompt Library creative · 8d ago" [ref=e93] [cursor=pointer]:
+                - generic [ref=e94]: DRAFT
+                - generic [ref=e95]: Steadymade Image Prompt Library
+                - generic [ref=e96]: creative · 8d ago
+            - generic [ref=e97]:
+              - generic [ref=e98]: Active Agents
+              - generic [ref=e99]:
+                - button "Danny Orchestrator" [ref=e100] [cursor=pointer]:
+                  - text: Danny
+                  - generic [ref=e102]: Orchestrator
+                - button "Atlas Strategic Advisor" [ref=e103] [cursor=pointer]:
+                  - text: Atlas
+                  - generic [ref=e105]: Strategic Advisor
+                - button "Nora Knowledge Agent" [ref=e106] [cursor=pointer]:
+                  - text: Nora
+                  - generic [ref=e108]: Knowledge Agent
+                - button "Mara Knowledge Governance" [ref=e109] [cursor=pointer]:
+                  - text: Mara
+                  - generic [ref=e111]: Knowledge Governance
+                - button "Ada Marketing Strategy" [ref=e112] [cursor=pointer]:
+                  - text: Ada
+                  - generic [ref=e114]: Marketing Strategy
+                - button "Clara Writer" [ref=e115] [cursor=pointer]:
+                  - text: Clara
+                  - generic [ref=e117]: Writer
+                - button "Rosa Review" [ref=e118] [cursor=pointer]:
+                  - text: Rosa
+                  - generic [ref=e120]: Review
+                - button "Jonas Calendar" [ref=e121] [cursor=pointer]:
+                  - text: Jonas
+                  - generic [ref=e123]: Calendar
+                - button "Otto Proposal Agent" [ref=e124] [cursor=pointer]:
+                  - text: Otto
+                  - generic [ref=e126]: Proposal Agent
+                - button "Dora Document Agent" [ref=e127] [cursor=pointer]:
+                  - text: Dora
+                  - generic [ref=e129]: Document Agent
+                - button "Vera Visual Concept" [ref=e130] [cursor=pointer]:
+                  - text: Vera
+                  - generic [ref=e132]: Visual Concept
+                - button "Noah Image Prompt Router" [ref=e133] [cursor=pointer]:
+                  - text: Noah
+                  - generic [ref=e135]: Image Prompt Router
+                - button "Kira Image Generation" [ref=e136] [cursor=pointer]:
+                  - text: Kira
+                  - generic [ref=e138]: Image Generation
+          - generic [ref=e139]:
+            - generic [ref=e140]:
+              - generic [ref=e141]: Knowledge Health
+              - generic [ref=e142]:
+                - generic [ref=e143]: strategy
+                - generic [ref=e145]: 0/4 approved
+              - generic [ref=e146]:
+                - generic [ref=e147]: steadymade Docs
+                - generic [ref=e149]: 0/10 approved
+              - generic [ref=e150]:
+                - generic [ref=e151]: marketing
+                - generic [ref=e153]: 0/1 approved
+              - generic [ref=e154]:
+                - generic [ref=e155]: offers
+                - generic [ref=e157]: 0/0 approved
+              - generic [ref=e158]:
+                - generic [ref=e159]: documents
+                - generic [ref=e161]: 0/0 approved
+              - generic [ref=e162]:
+                - generic [ref=e163]: creative
+                - generic [ref=e165]: 0/3 approved
+              - generic [ref=e166]:
+                - generic [ref=e167]: clients
+                - generic [ref=e169]: 0/0 approved
+            - generic [ref=e170]:
+              - generic [ref=e171]: Recent Artifacts
+              - generic [ref=e172]:
+                - generic [ref=e173]: FILE
+                - generic [ref=e174]: voice-agent-rag-linkedin-v1.jpg
+                - generic [ref=e175]: 8d ago
+            - generic [ref=e176]:
+              - generic [ref=e177]: Operating Principle
+              - generic [ref=e178]: One orchestrator, twelve specialists, knowledge as editable Markdown — nothing ships without review and approval.
+  - complementary
