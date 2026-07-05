@@ -21,7 +21,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
-const SCOPES = ['company', 'personal'];
+// Base scopes always exist. On a shared drive, every person can additionally
+// have an own personal workspace: skills/personal-<name>/ (gitignored). Scopes
+// are discovered dynamically so the hub's workspace filter adapts by itself.
+const BASE_SCOPES = ['company', 'personal'];
+const PERSONAL_WORKSPACE = /^personal-[a-z0-9][a-z0-9-]*$/;
 const MARKETPLACE_REPO = 'ComposioHQ/awesome-claude-skills';
 const MARKETPLACE_README = `https://raw.githubusercontent.com/${MARKETPLACE_REPO}/master/README.md`;
 const MARKETPLACE_CACHE_MS = 60 * 60 * 1000;
@@ -43,10 +47,22 @@ export function createSkillHub({ rootDir }) {
   const profileFile = path.join(rootDir, '.skill-profile');
 
   fs.mkdirSync(activeDir, { recursive: true });
-  for (const scope of SCOPES) fs.mkdirSync(path.join(libraryDir, scope), { recursive: true });
+  for (const scope of BASE_SCOPES) fs.mkdirSync(path.join(libraryDir, scope), { recursive: true });
 
   const validName = (name) => /^[a-z0-9][a-z0-9-]*$/.test(name);
   const activePath = (name) => path.join(activeDir, name);
+
+  // company + personal + every personal-<name> workspace found on disk
+  function scopeNames() {
+    const names = new Set(BASE_SCOPES);
+    try {
+      for (const e of fs.readdirSync(libraryDir, { withFileTypes: true })) {
+        if (e.isDirectory() && PERSONAL_WORKSPACE.test(e.name)) names.add(e.name);
+      }
+    } catch { /* library dir missing */ }
+    const rank = (s) => { const i = BASE_SCOPES.indexOf(s); return i === -1 ? BASE_SCOPES.length : i; };
+    return [...names].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+  }
 
   // ---------- .skill-profile ----------
 
@@ -102,7 +118,7 @@ export function createSkillHub({ rootDir }) {
   // Only touches hub-managed entries (symlinks); real directories are left alone.
   async function syncActiveDir(profile) {
     const wanted = new Map(); // name -> source path
-    for (const scope of SCOPES) {
+    for (const scope of scopeNames()) {
       for (const name of librarySkillDirs(scope)) {
         if (skillIsActiveInProfile(profile, scope, name) && !wanted.has(name)) {
           wanted.set(name, path.join(libraryDir, scope, name));
@@ -216,7 +232,7 @@ export function createSkillHub({ rootDir }) {
   }
 
   async function installFromMarketplace({ url, scope = 'personal', name }) {
-    if (!SCOPES.includes(scope)) return { errors: ['scope must be company or personal'] };
+    if (!scopeNames().includes(scope)) return { errors: [`unknown scope "${scope}" — company, personal or personal-<name>`] };
     const { skills } = await marketplace();
     const entry = skills.find((s) => s.url === url);
     if (!entry) return { errors: ['marketplace entry not found — refresh the marketplace list'] };
@@ -273,15 +289,19 @@ export function createSkillHub({ rootDir }) {
   return {
     async list() {
       const profile = readProfile() || defaultProfile();
-      return {
-        company: await listScope('company', profile),
-        personal: await listScope('personal', profile),
-        profileFile: '.skill-profile',
-      };
+      const scopes = [];
+      for (const scope of scopeNames()) {
+        scopes.push({
+          name: scope,
+          kind: scope === 'company' ? 'company' : 'personal',
+          skills: await listScope(scope, profile),
+        });
+      }
+      return { scopes, profileFile: '.skill-profile' };
     },
 
     async setActive(scope, name, active) {
-      if (!SCOPES.includes(scope)) return { errors: ['scope must be company or personal'] };
+      if (!scopeNames().includes(scope)) return { errors: [`unknown scope "${scope}" — company, personal or personal-<name>`] };
       if (!validName(name)) return { errors: ['invalid skill name'] };
       if (!fs.existsSync(path.join(libraryDir, scope, name, 'SKILL.md'))) {
         return { errors: [`skill not found in library: skills/${scope}/${name}`] };

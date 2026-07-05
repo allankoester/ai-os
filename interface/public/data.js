@@ -11,6 +11,7 @@ const DEPARTMENTS = [
   { id: 'sales',     name: 'Sales / Offers',       note: 'Proposals, scopes, service modules' },
   { id: 'documents', name: 'Documents',            note: 'Client-ready structured documents' },
   { id: 'creative',  name: 'Creative Production',  note: 'Visual concepts, prompts, generation' },
+  { id: 'it',        name: 'IT',                   note: 'Security audits, specifications, architecture' },
 ];
 
 // Folder keys map to real directories under knowledge/ (Stage 1 contract:
@@ -174,6 +175,30 @@ const AGENTS = [
     outputs: ['Generation packages', 'Asset metadata'],
     noGo: ['Claiming generation ran without a real Kie.ai integration'],
   },
+  {
+    id: 'simon', name: 'Simon', title: 'Security Audit', dept: 'it',
+    role: 'Security audits, risk assessment, permission and guardrail reviews, compliance checks.',
+    promptPath: '.claude/agents/simon-security-audit.md',
+    status: 'active',
+    access: ['company/steadymade Docs', 'company/documents', 'company/clients'],
+    workflows: ['security_audit', 'dev_spec'],
+    responsibilities: ['Security audits of setups and workflows', 'Risk assessment with severity ratings', 'Permission, guardrail and data-flow review', 'Compliance and governance checks'],
+    inputs: ['System descriptions, configs, architecture docs'],
+    outputs: ['Audit reports with findings and severities', 'Remediation recommendations'],
+    noGo: ['Fear-mongering without evidence', 'Approving a setup as "secure" without listing residual risks'],
+  },
+  {
+    id: 'iris', name: 'Iris', title: 'Spec & Architecture', dept: 'it',
+    role: 'Development specifications, architecture design, technical concepts and system diagrams.',
+    promptPath: '.claude/agents/iris-spec-architect.md',
+    status: 'active',
+    access: ['company/strategy', 'company/steadymade Docs', 'company/documents'],
+    workflows: ['dev_spec'],
+    responsibilities: ['Development specifications', 'Architecture design and trade-off analysis', 'Component and data-flow diagrams', 'Acceptance criteria and phased delivery plans'],
+    inputs: ['Requirements, use cases, constraints'],
+    outputs: ['Specification documents', 'Architecture designs with diagrams'],
+    noGo: ['Vendor lock-in by default', 'Over-engineering beyond the stated requirements', 'Specs without acceptance criteria'],
+  },
 ];
 
 const WORKFLOWS = [
@@ -206,6 +231,16 @@ const WORKFLOWS = [
     id: 'knowledge_intake', name: 'Knowledge Intake',
     desc: 'New material classified, curated and routed into docs.',
     chain: ['danny', 'mara', 'nora', 'atlas', 'docs'],
+  },
+  {
+    id: 'security_audit', name: 'Security Audit',
+    desc: 'Security and risk audit of systems, setups and workflows.',
+    chain: ['danny', 'nora', 'simon', 'atlas', 'user'],
+  },
+  {
+    id: 'dev_spec', name: 'Development Spec',
+    desc: 'Development specification incl. architecture design and security review.',
+    chain: ['danny', 'nora', 'iris', 'simon', 'rosa', 'approval'],
   },
 ];
 

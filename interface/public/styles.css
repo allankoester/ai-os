@@ -915,20 +915,24 @@ button.wf-step:hover { border-color: var(--green-light); }
   text-transform: uppercase;
   color: #7E978A;
 }
+/* The drawer panel is light (var(--white)) — form controls must use dark text
+   on a light field, otherwise the letters blend into the background. */
 .form-field input,
 .form-field select,
 .form-field textarea {
-  border: 1px solid var(--border-dark);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--white);
+  background: var(--bg);
+  color: var(--headline);
   padding: 8px 10px;
   font-size: 12.5px;
   outline: none;
 }
+.form-field input::placeholder,
+.form-field textarea::placeholder { color: var(--muted); }
 .form-field input:focus,
 .form-field select:focus,
-.form-field textarea:focus { border-color: var(--green); }
+.form-field textarea:focus { border-color: var(--green-light); background: var(--white); }
 .form-field textarea { resize: vertical; font-family: var(--font-mono); line-height: 1.55; }
 .form-field select option { color: var(--headline); background: var(--white); }
 .form-check label {
@@ -940,18 +944,18 @@ button.wf-step:hover { border-color: var(--green-light); }
   font-size: 12px;
   letter-spacing: 0;
   text-transform: none;
-  color: #9FB3A6;
+  color: var(--body);
   cursor: pointer;
 }
-.form-check input { accent-color: var(--green); }
+.form-check input { accent-color: var(--green-light); }
 
 .run-log {
   font-family: var(--font-mono);
   font-size: 11px;
   line-height: 1.6;
   color: #C9D6CD;
-  background: rgba(0, 0, 0, 0.25);
-  border: 1px solid var(--border-dark);
+  background: var(--surface-dark);
+  border: 1px solid var(--surface-dark);
   border-radius: 8px;
   padding: 12px;
   white-space: pre-wrap;
@@ -1079,24 +1083,26 @@ button.wf-step:hover { border-color: var(--green-light); }
 .settings-filter { padding: 12px 16px; }
 .settings-filter .filter-tabs { flex-wrap: wrap; }
 
-/* ===== Drawer date/time picker (dark form controls) ===== */
+/* ===== Drawer date/time picker ===== */
 
-/* Dark drawer forms: native widgets (datetime-local calendar icon + popup,
-   select arrows, checkboxes) must render in dark scheme, otherwise the
-   calendar icon is black-on-dark and effectively invisible. */
+/* The drawer is a light panel — native widgets (datetime-local calendar icon,
+   select arrows, checkboxes) render in light scheme so the icons stay dark
+   and visible on the light fields. */
 .drawer .form-field input,
 .drawer .form-field select,
 .drawer .form-field textarea,
 .drawer .form-check input {
-  color-scheme: dark;
+  color-scheme: light;
 }
-.drawer .form-field input[type="datetime-local"] {
+.drawer .form-field input[type="datetime-local"],
+.drawer .form-field input[type="time"] {
   font-family: var(--font-mono);
   font-size: 12.5px;
 }
-.drawer .form-field input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+.drawer .form-field input[type="datetime-local"]::-webkit-calendar-picker-indicator,
+.drawer .form-field input[type="time"]::-webkit-calendar-picker-indicator {
   cursor: pointer;
-  opacity: 0.9;
+  opacity: 0.75;
 }
 
 .gr-add-row {
@@ -1109,4 +1115,93 @@ button.wf-step:hover { border-color: var(--green-light); }
   border-radius: 8px;
   margin-bottom: 10px;
   background: var(--green-tint);
+}
+
+/* ===== Workflow chain editor (drawer) ===== */
+
+.wfe-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+}
+.wfe-row select {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--headline);
+  padding: 6px 8px;
+  font-size: 12px;
+  outline: none;
+}
+.wfe-row select option { background: var(--white); color: var(--headline); }
+.wfe-row .chip[disabled] { opacity: 0.35; cursor: default; }
+
+/* ===== Agent drawer plugin toggles ===== */
+
+.agent-plugin-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 12.5px;
+  color: var(--body);
+  cursor: pointer;
+}
+.agent-plugin-row input { accent-color: var(--green-light); }
+
+/* ===== Scheduler recurrence builder ===== */
+
+.wd-row {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.wd-chip {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--white);
+  color: var(--body);
+  cursor: pointer;
+  user-select: none;
+}
+.wd-chip input { display: none; }
+.wd-chip.on {
+  background: var(--surface-dark);
+  border-color: var(--surface-dark);
+  color: var(--green);
+}
+.freq-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+}
+.freq-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.freq-inline label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #7E978A;
+}
+.cron-preview {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--green-light);
+  background: var(--green-tint);
+  border-radius: 6px;
+  padding: 4px 8px;
+  display: inline-block;
 }

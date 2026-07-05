@@ -39,6 +39,33 @@ const VIEW_TITLES = {
 const agentById = (id) => AGENTS.find((a) => a.id === id);
 const deptById = (id) => DEPARTMENTS.find((d) => d.id === id);
 
+// ---------------------------------------------------------------- workflows (editable)
+// data.js WORKFLOWS is the base model; user edits live in interface/workflows.json
+// (overrides for built-ins, custom workflows, deleted built-in ids). FLOWS is the
+// merged, effective list every view uses.
+
+let FLOWS = WORKFLOWS.map((w) => ({ ...w, builtin: true }));
+let flowsCfg = { overrides: {}, custom: [], deleted: [] };
+
+function applyFlowsCfg(cfg) {
+  flowsCfg = {
+    overrides: cfg.overrides || {},
+    custom: cfg.custom || [],
+    deleted: cfg.deleted || [],
+  };
+  FLOWS = WORKFLOWS
+    .filter((w) => !flowsCfg.deleted.includes(w.id))
+    .map((w) => (flowsCfg.overrides[w.id]
+      ? { ...w, ...flowsCfg.overrides[w.id], id: w.id, builtin: true, overridden: true }
+      : { ...w, builtin: true }))
+    .concat(flowsCfg.custom.map((w) => ({ ...w, builtin: false })));
+}
+
+async function saveFlowsCfg() {
+  const result = await apiJson('/api/workflows', { method: 'PUT', body: JSON.stringify(flowsCfg) });
+  applyFlowsCfg(result.config);
+}
+
 // Preferred folder ordering for lists
 const FOLDER_ORDER = ['inbox', 'company/strategy', 'company/steadymade Docs', 'company/marketing', 'company/offers', 'company/documents', 'company/creative', 'company/clients', 'personal', 'archive'];
 function sortedFolders() {
@@ -91,6 +118,7 @@ async function boot() {
     $('#view').innerHTML = '<div class="view-pad"><div class="card">Could not reach the local file API. Start the server with <code>node interface/server.mjs</code>.</div></div>';
     return;
   }
+  try { applyFlowsCfg(await apiJson('/api/workflows')); } catch { /* base workflows only */ }
   const live = state.system.agents.length + 1; // +1 = Danny (docs/)
   $('#status-agents').textContent = live + ' active';
   bindChrome();
@@ -104,7 +132,7 @@ function bindChrome() {
 
   $('#btn-new-workflow').addEventListener('click', () => {
     setView('workflows');
-    toast('WORKFLOWS ARE DEFINED IN CLAUDE.MD — EDIT THERE, PROTOTYPE READS THEM AS FIXED', true);
+    requestAnimationFrame(() => openWorkflowDrawer(null));
   });
   $('#btn-add-knowledge').addEventListener('click', addKnowledge);
 
@@ -164,7 +192,7 @@ function renderSearch(q) {
   allDocs().filter((d) => (d.title + ' ' + d.path).toLowerCase().includes(ql))
     .slice(0, 5).forEach((d) => hits.push({ kind: 'DOC', label: d.title, go: () => openInEditor(d.path) }));
 
-  WORKFLOWS.filter((w) => w.name.toLowerCase().includes(ql))
+  FLOWS.filter((w) => w.name.toLowerCase().includes(ql))
     .slice(0, 3).forEach((w) => hits.push({ kind: 'FLOW', label: w.name, go: () => setView('workflows') }));
 
   box.innerHTML = hits.length
@@ -204,7 +232,7 @@ function renderCommand(el) {
       </div>
       <div class="card stat-card">
         <div class="mono-label">WORKFLOWS</div>
-        <div class="stat-value">${WORKFLOWS.length}</div>
+        <div class="stat-value">${FLOWS.length}</div>
         <div class="stat-note">All routed through Danny</div>
       </div>
     </div>
@@ -253,7 +281,7 @@ function renderCommand(el) {
         <div class="card card-dark">
           <div class="section-title" style="color:#7E978A">Operating Principle</div>
           <div style="font-family:var(--font-display);font-size:14px;color:var(--white);line-height:1.5">
-            One orchestrator, twelve specialists, knowledge as editable Markdown — nothing ships without review and approval.
+            One orchestrator, ${AGENTS.length - 1} specialists, knowledge as editable Markdown — nothing ships without review and approval.
           </div>
         </div>
       </div>
@@ -299,7 +327,7 @@ function drawMap(el) {
   const folders = sortedFolders();
 
   // ring agents grouped by department order
-  const order = ['strategy', 'knowledge', 'marketing', 'sales', 'documents', 'creative'];
+  const order = ['strategy', 'knowledge', 'marketing', 'sales', 'documents', 'creative', 'it'];
   agents.sort((a, b) => order.indexOf(a.dept) - order.indexOf(b.dept));
 
   // outer (folder) ellipse uses nearly the full container, inner ring ~62% of it
@@ -507,7 +535,7 @@ function closeDrawer() {
 function openAgentDrawer(id) {
   const a = agentById(id);
   const restricted = state.system.folders.map((f) => f.name).filter((n) => !a.access.includes(n));
-  const flows = WORKFLOWS.filter((w) => a.workflows.includes(w.id));
+  const flows = FLOWS.filter((w) => w.chain.includes(a.id));
   const live = state.system.agents.find((x) => x.path === a.promptPath);
 
   openDrawer(`
@@ -551,6 +579,11 @@ function openAgentDrawer(id) {
         <div class="section-title">Prompt File</div>
         <div class="path-line">${esc(a.promptPath)}</div>
       </div>
+      ${a.promptPath.startsWith('.claude/agents/') ? `
+      <div class="drawer-section">
+        <div class="section-title">Plugins</div>
+        <div id="agent-plugins-body" class="stat-note" style="white-space:normal">Loading plugins…</div>
+      </div>` : ''}
       <div class="drawer-actions">
         <button class="btn btn-green btn-small" data-act="open-prompt">Open prompt</button>
         <button class="btn btn-small" data-act="edit-prompt">Edit prompt</button>
@@ -570,13 +603,53 @@ function openAgentDrawer(id) {
     navigator.clipboard?.writeText(brief);
     toast('TASK BRIEF COPIED — PASTE INTO CLAUDE (LIVE AGENT EXECUTION PENDING)', true);
   });
+  if (a.promptPath.startsWith('.claude/agents/')) fillAgentPlugins(a);
+}
+
+// Plugins section in the agent drawer: assign plugins that are enabled in
+// Settings to this agent. Persisted as a `plugins:` frontmatter line in the
+// agent's prompt file.
+async function fillAgentPlugins(a) {
+  const box = $('#agent-plugins-body');
+  if (!box) return;
+  let plugins;
+  try { ({ plugins } = await apiJson('/api/plugins')); }
+  catch { box.textContent = 'Plugin manager unavailable.'; return; }
+  const enabled = plugins.filter((p) => p.enabled);
+  const live = state.system.agents.find((x) => x.path === a.promptPath) || {};
+  const current = new Set(live.plugins || []);
+
+  if (!enabled.length) {
+    box.innerHTML = 'No plugins are enabled — enable plugins in Settings first, then assign them here.';
+    return;
+  }
+  box.innerHTML = enabled.map((p) => `
+    <label class="agent-plugin-row">
+      <input type="checkbox" data-ap="${esc(p.id)}" ${current.has(p.id) ? 'checked' : ''}>
+      <span>${esc(p.name)} <span class="list-meta">· ${esc(p.kind)}</span></span>
+    </label>`).join('') +
+    '<div class="stat-note" style="margin-top:6px;white-space:normal">Only plugins enabled in Settings can be assigned. Saved to the agent\'s frontmatter (<code>plugins:</code>) — new Claude sessions pick it up.</div>';
+
+  $$('[data-ap]', box).forEach((cb) => cb.addEventListener('change', async () => {
+    const selected = $$('[data-ap]', box).filter((x) => x.checked).map((x) => x.dataset.ap);
+    try {
+      await apiJson('/api/agent-plugins', { method: 'PUT', body: JSON.stringify({ path: a.promptPath, plugins: selected }) });
+      if (state.system.agents.find((x) => x.path === a.promptPath)) {
+        state.system.agents.find((x) => x.path === a.promptPath).plugins = selected;
+      }
+      toast(`${a.name.toUpperCase()} PLUGINS SAVED: ${selected.join(', ').toUpperCase() || 'NONE'}`);
+    } catch (e) {
+      cb.checked = !cb.checked; // revert the failed toggle
+      toast(e.message.toUpperCase(), true);
+    }
+  }));
 }
 
 function openFolderDrawer(name) {
   const f = state.system.folders.find((x) => x.name === name);
   if (!f) return;
   const withAccess = AGENTS.filter((a) => a.access.includes(name));
-  const flows = WORKFLOWS.filter((w) => w.chain.some((id) => withAccess.some((a) => a.id === id)));
+  const flows = FLOWS.filter((w) => w.chain.some((id) => withAccess.some((a) => a.id === id)));
   const last = f.docs.length ? Math.max(...f.docs.map((d) => d.mtime)) : null;
 
   openDrawer(`
@@ -845,12 +918,27 @@ async function addKnowledge() {
 // ---------------------------------------------------------------- Workflows
 
 function renderWorkflows(el) {
+  const deletedBuiltins = WORKFLOWS.filter((w) => flowsCfg.deleted.includes(w.id));
   el.innerHTML = `<div class="view-pad">
-    ${WORKFLOWS.map((w) => `
+    <div class="card" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+      <div style="flex:1;min-width:220px">
+        <div class="section-title" style="margin:0 0 4px">Agent Workflows</div>
+        <div class="stat-note" style="white-space:normal">Edit the steps of any workflow, create new ones or delete them. Changes apply to the scheduler's workflow selection and Danny's routing view.</div>
+      </div>
+      <button class="btn btn-primary btn-small" data-wf-new>New Workflow</button>
+    </div>
+    ${FLOWS.map((w) => `
       <div class="card wf-card">
         <div class="wf-head">
           <div class="wf-name">${esc(w.name)}</div>
-          <span class="badge badge-dark">${w.id.toUpperCase()}</span>
+          <span class="badge badge-dark">${esc(w.id.toUpperCase())}</span>
+          ${w.builtin ? '' : '<span class="badge badge-gray">CUSTOM</span>'}
+          ${w.overridden ? '<span class="badge badge-apricot">EDITED</span>' : ''}
+          <span style="margin-left:auto;display:flex;gap:6px">
+            <button class="chip" data-wf-edit="${esc(w.id)}">EDIT</button>
+            ${w.overridden ? `<button class="chip" data-wf-reset="${esc(w.id)}">RESET</button>` : ''}
+            <button class="chip" data-wf-del="${esc(w.id)}" style="color:var(--apricot-deep)">DELETE</button>
+          </span>
         </div>
         <div class="wf-desc">${esc(w.desc)}</div>
         <div class="wf-chain">
@@ -863,7 +951,7 @@ function renderWorkflows(el) {
                 <span class="wf-step-role">${esc(a.title)}</span>
               </button>${arrow}`;
             }
-            const t = TERMINALS[stepId];
+            const t = TERMINALS[stepId] || { name: stepId, role: 'step' };
             return `<span class="wf-step terminal">
               <span class="wf-step-name">${esc(t.name)}</span>
               <span class="wf-step-role">${esc(t.role)}</span>
@@ -871,8 +959,126 @@ function renderWorkflows(el) {
           }).join('')}
         </div>
       </div>`).join('')}
+    ${deletedBuiltins.length ? `
+    <div class="card">
+      <div class="section-title">Deleted Built-in Workflows</div>
+      ${deletedBuiltins.map((w) => `
+        <div class="list-row" style="cursor:default">
+          <span class="badge badge-gray">DELETED</span>
+          <span class="list-title">${esc(w.name)}</span>
+          <button class="chip" data-wf-restore="${esc(w.id)}">RESTORE</button>
+        </div>`).join('')}
+    </div>` : ''}
   </div>`;
+
   $$('[data-agent]', el).forEach((b) => b.addEventListener('click', () => { setView('map'); selectMapAgent(b.dataset.agent); }));
+  $('[data-wf-new]', el).addEventListener('click', () => openWorkflowDrawer(null));
+  $$('[data-wf-edit]', el).forEach((b) => b.addEventListener('click', () => openWorkflowDrawer(FLOWS.find((w) => w.id === b.dataset.wfEdit))));
+  $$('[data-wf-reset]', el).forEach((b) => b.addEventListener('click', async () => {
+    delete flowsCfg.overrides[b.dataset.wfReset];
+    try { await saveFlowsCfg(); toast('WORKFLOW RESET TO DEFAULT'); renderWorkflows(el); }
+    catch (e) { toast(e.message.toUpperCase(), true); }
+  }));
+  $$('[data-wf-del]', el).forEach((b) => b.addEventListener('click', async () => {
+    const w = FLOWS.find((x) => x.id === b.dataset.wfDel);
+    if (!confirm(`Delete workflow "${w.name}"?${w.builtin ? '\n\nBuilt-in workflows can be restored later.' : ''}`)) return;
+    if (w.builtin) {
+      delete flowsCfg.overrides[w.id];
+      if (!flowsCfg.deleted.includes(w.id)) flowsCfg.deleted.push(w.id);
+    } else {
+      flowsCfg.custom = flowsCfg.custom.filter((x) => x.id !== w.id);
+    }
+    try { await saveFlowsCfg(); toast('WORKFLOW DELETED'); renderWorkflows(el); }
+    catch (e) { toast(e.message.toUpperCase(), true); }
+  }));
+  $$('[data-wf-restore]', el).forEach((b) => b.addEventListener('click', async () => {
+    flowsCfg.deleted = flowsCfg.deleted.filter((id) => id !== b.dataset.wfRestore);
+    try { await saveFlowsCfg(); toast('WORKFLOW RESTORED'); renderWorkflows(el); }
+    catch (e) { toast(e.message.toUpperCase(), true); }
+  }));
+}
+
+// Workflow editor drawer: name, description, and a step-by-step chain editor
+// (agents + terminal steps, reorder, add, remove).
+function openWorkflowDrawer(flow) {
+  const isNew = !flow;
+  const chain = flow ? [...flow.chain] : ['danny', 'user'];
+  const stepOptions = [
+    ...AGENTS.map((a) => ({ value: a.id, label: `${a.name} — ${a.title}` })),
+    ...Object.entries(TERMINALS).map(([id, t]) => ({ value: id, label: `${t.name} — ${t.role}` })),
+  ];
+
+  openDrawer(`
+    <div class="drawer-head">
+      <button class="drawer-close">✕</button>
+      <div class="drawer-dept">WORKFLOW · ${isNew ? 'NEW' : esc(flow.id.toUpperCase())}</div>
+      <div class="drawer-name">${isNew ? 'New Workflow' : 'Edit Workflow'}</div>
+      <div class="drawer-role">Define the agent chain Danny follows for this workflow type.</div>
+    </div>
+    <div class="drawer-body">
+      <div class="form-field"><label>Name</label><input id="wf-name" value="${esc(flow ? flow.name : '')}" placeholder="Client Onboarding"></div>
+      <div class="form-field"><label>Description</label><textarea id="wf-desc" rows="2" placeholder="What this workflow produces.">${esc(flow ? flow.desc : '')}</textarea></div>
+      <div class="form-field">
+        <label>Steps (in order)</label>
+        <div id="wf-steps"></div>
+        <button class="chip" id="wf-add-step" style="align-self:flex-start;margin-top:6px">+ ADD STEP</button>
+      </div>
+      <button class="btn btn-primary" id="wf-save">${isNew ? 'Create Workflow' : 'Save Changes'}</button>
+    </div>`);
+
+  const paintSteps = () => {
+    $('#wf-steps').innerHTML = chain.map((step, i) => `
+      <div class="wfe-row">
+        <span class="mono-label" style="width:18px;text-align:right">${i + 1}</span>
+        <select data-step="${i}">
+          ${stepOptions.map((o) => `<option value="${esc(o.value)}" ${o.value === step ? 'selected' : ''}>${esc(o.label)}</option>`).join('')}
+        </select>
+        <button class="chip" data-step-up="${i}" ${i === 0 ? 'disabled' : ''}>↑</button>
+        <button class="chip" data-step-down="${i}" ${i === chain.length - 1 ? 'disabled' : ''}>↓</button>
+        <button class="chip" data-step-del="${i}" style="color:var(--apricot-deep)" ${chain.length <= 2 ? 'disabled' : ''}>✕</button>
+      </div>`).join('');
+    $$('[data-step]', $('#wf-steps')).forEach((s) => s.addEventListener('change', () => { chain[+s.dataset.step] = s.value; }));
+    $$('[data-step-up]', $('#wf-steps')).forEach((b) => b.addEventListener('click', () => {
+      const i = +b.dataset.stepUp;
+      [chain[i - 1], chain[i]] = [chain[i], chain[i - 1]];
+      paintSteps();
+    }));
+    $$('[data-step-down]', $('#wf-steps')).forEach((b) => b.addEventListener('click', () => {
+      const i = +b.dataset.stepDown;
+      [chain[i], chain[i + 1]] = [chain[i + 1], chain[i]];
+      paintSteps();
+    }));
+    $$('[data-step-del]', $('#wf-steps')).forEach((b) => b.addEventListener('click', () => {
+      chain.splice(+b.dataset.stepDel, 1);
+      paintSteps();
+    }));
+  };
+  paintSteps();
+
+  $('#wf-add-step').addEventListener('click', () => { chain.push('rosa'); paintSteps(); });
+
+  $('#wf-save').addEventListener('click', async () => {
+    const name = $('#wf-name').value.trim();
+    const desc = $('#wf-desc').value.trim();
+    if (!name) return toast('NAME IS REQUIRED', true);
+    if (chain.length < 2) return toast('A WORKFLOW NEEDS AT LEAST 2 STEPS', true);
+
+    if (isNew) {
+      let id = name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'workflow';
+      while (FLOWS.some((w) => w.id === id) || flowsCfg.deleted.includes(id)) id += '_2';
+      flowsCfg.custom.push({ id, name, desc, chain: [...chain] });
+    } else if (flow.builtin) {
+      flowsCfg.overrides[flow.id] = { name, desc, chain: [...chain] };
+    } else {
+      flowsCfg.custom = flowsCfg.custom.map((w) => (w.id === flow.id ? { ...w, name, desc, chain: [...chain] } : w));
+    }
+    try {
+      await saveFlowsCfg();
+      closeDrawer();
+      toast(isNew ? 'WORKFLOW CREATED' : 'WORKFLOW SAVED');
+      if (state.view === 'workflows') renderWorkflows($('#view'));
+    } catch (e) { toast(e.message.toUpperCase(), true); }
+  });
 }
 
 // ---------------------------------------------------------------- Departments
@@ -900,7 +1106,7 @@ function renderDepartments(el) {
 
 // ---------------------------------------------------------------- Scheduler
 
-const schedState = { data: null, el: null };
+const schedState = { data: null, el: null, timer: null };
 
 const AGENT_OPTIONS = AGENTS
   .filter((a) => a.promptPath.startsWith('.claude/agents/'))
@@ -977,9 +1183,12 @@ function paintScheduler() {
     <div class="card">
       <div class="section-title">Run History</div>
       ${runs.length ? runs.map((r) => `
-        <div class="list-row" style="cursor:default">
+        <div class="list-row" style="cursor:default;align-items:flex-start">
           ${runBadge(r.status)}
-          <span class="list-title">${esc(r.jobName)}</span>
+          <span style="flex:1;min-width:0">
+            <span class="list-title" style="display:block">${esc(r.jobName)}</span>
+            ${r.summary ? `<span class="stat-note" style="display:block;white-space:normal">${esc(r.summary.slice(0, 180))}</span>` : ''}
+          </span>
           <span class="list-meta">${esc(r.trigger)} · ${fmtWhen(r.startedAt)}</span>
           <span class="list-meta">${r.endedAt ? Math.max(1, Math.round((r.endedAt - r.startedAt) / 1000)) + 's' : '…'}</span>
           <button class="chip" data-log="${r.id}">LOG</button>
@@ -1007,19 +1216,32 @@ function paintScheduler() {
   }));
   $$('[data-log]', el).forEach((b) => b.addEventListener('click', async () => {
     const res = await fetch(`/api/scheduler/runs/${b.dataset.log}/log`);
-    const text = res.ok ? await res.text() : 'Log not found (run may still be in progress).';
     const run = runs.find((r) => r.id === b.dataset.log);
+    let text = res.ok ? await res.text() : '';
+    // spawn failures and very short runs leave an empty log file — the run
+    // summary (exit reason / error message) is then the real information
+    if (!text.trim()) {
+      text = run
+        ? [`status: ${run.status}`, run.exitCode !== null ? `exit code: ${run.exitCode}` : null, '', run.summary || (run.status === 'running' ? 'Run is still in progress — reopen this log when it finishes.' : '(no output captured)')].filter((l) => l !== null).join('\n')
+        : 'Log not found.';
+    }
     openDrawer(`
       <div class="drawer-head">
         <button class="drawer-close">✕</button>
         <div class="drawer-dept">RUN LOG</div>
         <div class="drawer-name">${esc(run ? run.jobName : b.dataset.log)}</div>
-        <div class="drawer-role">${run ? fmtWhen(run.startedAt) + ' · ' + esc(run.status) : ''}</div>
+        <div class="drawer-role">${run ? fmtWhen(run.startedAt) + ' · ' + esc(run.status) + (run.endedAt ? ' · ' + Math.max(1, Math.round((run.endedAt - run.startedAt) / 1000)) + 's' : '') : ''}</div>
       </div>
       <div class="drawer-body">
-        <pre class="run-log">${esc(text || '(empty)')}</pre>
+        <pre class="run-log">${esc(text)}</pre>
       </div>`);
   }));
+
+  // live view: refresh automatically while something is running
+  clearTimeout(schedState.timer);
+  if (jobs.some((j) => j.running) || runs.some((r) => r.status === 'running')) {
+    schedState.timer = setTimeout(() => { if (state.view === 'scheduler') refreshScheduler(); }, 5000);
+  }
 }
 
 const CRON_PRESETS = [
@@ -1029,6 +1251,48 @@ const CRON_PRESETS = [
   { label: 'Every hour', value: '0 * * * *' },
   { label: 'First of month 08:00', value: '0 8 1 * *' },
 ];
+
+const WEEKDAYS = [[1, 'Mon'], [2, 'Tue'], [3, 'Wed'], [4, 'Thu'], [5, 'Fri'], [6, 'Sat'], [0, 'Sun']];
+
+// Recurrence builder ⇄ cron: simple patterns map onto hourly / daily / weekly /
+// monthly with individual settings; anything else stays a raw cron expression.
+function parseCronToBuilder(schedule) {
+  const def = { freq: 'daily', minute: 0, time: '07:00', days: new Set([1, 2, 3, 4, 5]), dom: 1, cron: schedule || '0 7 * * 1-5' };
+  const f = String(schedule || '').trim().split(/\s+/);
+  if (f.length !== 5) return { ...def, freq: 'custom' };
+  const [min, hour, dom, mon, dow] = f;
+  const num = (s) => /^\d{1,2}$/.test(s);
+  const pad = (n) => String(n).padStart(2, '0');
+  const parseDows = (s) => {
+    const days = new Set();
+    for (const part of s.split(',')) {
+      const r = part.match(/^(\d)(?:-(\d))?$/);
+      if (!r) return null;
+      for (let v = +r[1]; v <= +(r[2] ?? r[1]); v++) days.add(v % 7);
+    }
+    return days.size ? days : null;
+  };
+  if (num(min) && hour === '*' && dom === '*' && mon === '*' && dow === '*') return { ...def, freq: 'hourly', minute: +min };
+  if (num(min) && num(hour)) {
+    const time = pad(+hour) + ':' + pad(+min);
+    if (dom === '*' && mon === '*' && dow === '*') return { ...def, freq: 'daily', time };
+    if (dom === '*' && mon === '*' && dow !== '*') {
+      const days = parseDows(dow);
+      if (days) return { ...def, freq: 'weekly', time, days };
+    }
+    if (num(dom) && mon === '*' && dow === '*') return { ...def, freq: 'monthly', time, dom: +dom };
+  }
+  return { ...def, freq: 'custom' };
+}
+
+function buildCronFromBuilder(rec) {
+  const [h, m] = (rec.time || '07:00').split(':').map(Number);
+  if (rec.freq === 'hourly') return `${rec.minute || 0} * * * *`;
+  if (rec.freq === 'daily') return `${m} ${h} * * *`;
+  if (rec.freq === 'weekly') return rec.days.size ? `${m} ${h} * * ${[...rec.days].sort((a, b) => a - b).join(',')}` : '';
+  if (rec.freq === 'monthly') return `${m} ${h} ${rec.dom || 1} * *`;
+  return String(rec.cron || '').trim();
+}
 
 function toLocalDatetimeValue(ts) {
   const d = ts ? new Date(ts) : new Date(Date.now() + 3600_000);
@@ -1050,7 +1314,7 @@ function openJobDrawer(job) {
       <div class="form-field"><label>Workflow (optional — sets the agent chain and gates)</label>
         <select id="jf-workflow">
           <option value="">— no specific workflow —</option>
-          ${WORKFLOWS.map((w) => `<option value="${esc(w.id)}_workflow" ${j.workflow === w.id + '_workflow' ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}
+          ${FLOWS.map((w) => `<option value="${esc(w.id)}_workflow" ${j.workflow === w.id + '_workflow' ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}
         </select>
       </div>
       <div class="form-field"><label>Agent</label>
@@ -1069,15 +1333,16 @@ function openJobDrawer(job) {
       <div class="form-field" id="jf-once-wrap" style="display:${j.scheduleType === 'once' ? 'flex' : 'none'}">
         <label>Run at (date &amp; time — click the calendar icon to pick)</label>
         <input id="jf-runat" type="datetime-local" value="${toLocalDatetimeValue(j.runAt)}" min="${toLocalDatetimeValue(Date.now())}">
-        <span class="stat-note" style="color:#9FB3A6">One-time jobs disable themselves after firing. A time in the past fires on the next scheduler tick.</span>
+        <span class="stat-note">One-time jobs disable themselves after firing. A time in the past fires on the next scheduler tick.</span>
       </div>
       <div class="form-field" id="jf-cron-wrap" style="display:${j.scheduleType === 'once' ? 'none' : 'flex'}">
-        <label>Recurrence (cron: min hour day month weekday)</label>
-        <select id="jf-preset">
-          <option value="">— presets —</option>
-          ${CRON_PRESETS.map((p) => `<option value="${esc(p.value)}">${esc(p.label)} · ${esc(p.value)}</option>`).join('')}
+        <label>Recurrence</label>
+        <select id="jf-freq">
+          ${[['hourly', 'Hourly'], ['daily', 'Daily'], ['weekly', 'Weekly — pick the days'], ['monthly', 'Monthly'], ['custom', 'Custom (cron expression)']]
+            .map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}
         </select>
-        <input id="jf-schedule" value="${esc(j.schedule)}" placeholder="0 7 * * 1-5" style="margin-top:6px">
+        <div class="freq-body" id="jf-freq-body"></div>
+        <span class="stat-note">Runs as cron: <code class="cron-preview" id="jf-cron-preview"></code></span>
       </div>
       <div class="form-field"><label>Timeout (minutes)</label><input id="jf-timeout" type="number" min="1" max="120" value="${esc(j.timeoutMinutes)}"></div>
       <div class="form-field form-check"><label><input id="jf-enabled" type="checkbox" ${j.enabled ? 'checked' : ''}> Enabled</label></div>
@@ -1090,14 +1355,74 @@ function openJobDrawer(job) {
     $('#jf-once-wrap').style.display = once ? 'flex' : 'none';
     $('#jf-cron-wrap').style.display = once ? 'none' : 'flex';
   });
-  $('#jf-preset').addEventListener('change', () => {
-    if ($('#jf-preset').value) $('#jf-schedule').value = $('#jf-preset').value;
-  });
+  // close the native date/time popup as soon as a value is picked
+  $('#jf-runat').addEventListener('change', (e) => e.target.blur());
+
+  // ---- recurrence builder (individual settings per frequency) ----
+  const rec = parseCronToBuilder(j.schedule);
+  $('#jf-freq').value = rec.freq;
+
+  const updatePreview = () => {
+    const cron = buildCronFromBuilder(rec);
+    $('#jf-cron-preview').textContent = cron || '— pick at least one weekday —';
+  };
+
+  const timeFieldHtml = () => `
+    <div class="freq-inline"><label>At time</label><input id="jf-rec-time" type="time" value="${esc(rec.time)}"></div>`;
+
+  const paintFreq = () => {
+    const body = $('#jf-freq-body');
+    if (rec.freq === 'hourly') {
+      body.innerHTML = `<div class="freq-inline"><label>At minute</label><input id="jf-rec-minute" type="number" min="0" max="59" value="${rec.minute}" style="width:80px"></div>`;
+    } else if (rec.freq === 'daily') {
+      body.innerHTML = timeFieldHtml();
+    } else if (rec.freq === 'weekly') {
+      body.innerHTML = `
+        <div class="wd-row">${WEEKDAYS.map(([v, l]) => `<span class="wd-chip ${rec.days.has(v) ? 'on' : ''}" data-wd="${v}">${l}</span>`).join('')}</div>
+        ${timeFieldHtml()}`;
+    } else if (rec.freq === 'monthly') {
+      body.innerHTML = `
+        <div class="freq-inline"><label>Day of month</label><input id="jf-rec-dom" type="number" min="1" max="31" value="${rec.dom}" style="width:80px"></div>
+        ${timeFieldHtml()}`;
+    } else {
+      body.innerHTML = `
+        <select id="jf-preset">
+          <option value="">— presets —</option>
+          ${CRON_PRESETS.map((p) => `<option value="${esc(p.value)}" ${rec.cron === p.value ? 'selected' : ''}>${esc(p.label)} · ${esc(p.value)}</option>`).join('')}
+        </select>
+        <input id="jf-rec-cron" value="${esc(rec.cron)}" placeholder="0 7 * * 1-5" style="margin-top:6px">
+        <span class="stat-note">Format: min hour day month weekday — e.g. <code>*/30 8-18 * * 1-5</code></span>`;
+    }
+    $('#jf-rec-time')?.addEventListener('change', (e) => { rec.time = e.target.value || '07:00'; updatePreview(); });
+    $('#jf-rec-minute')?.addEventListener('input', (e) => { rec.minute = Math.min(59, Math.max(0, Number(e.target.value) || 0)); updatePreview(); });
+    $('#jf-rec-dom')?.addEventListener('input', (e) => { rec.dom = Math.min(31, Math.max(1, Number(e.target.value) || 1)); updatePreview(); });
+    $('#jf-rec-cron')?.addEventListener('input', (e) => { rec.cron = e.target.value; updatePreview(); });
+    $('#jf-preset')?.addEventListener('change', (e) => {
+      if (!e.target.value) return;
+      rec.cron = e.target.value;
+      $('#jf-rec-cron').value = rec.cron;
+      updatePreview();
+    });
+    $$('[data-wd]', body).forEach((chip) => chip.addEventListener('click', () => {
+      const v = +chip.dataset.wd;
+      if (rec.days.has(v)) rec.days.delete(v); else rec.days.add(v);
+      chip.classList.toggle('on', rec.days.has(v));
+      updatePreview();
+    }));
+    updatePreview();
+  };
+  paintFreq();
+  $('#jf-freq').addEventListener('change', (e) => { rec.freq = e.target.value; paintFreq(); });
 
   $('#jf-save').addEventListener('click', async () => {
     const once = $('#jf-type').value === 'once';
     if (once && !$('#jf-runat').value) {
       toast('PICK A DATE AND TIME FOR THE ONE-TIME RUN', true);
+      return;
+    }
+    const schedule = buildCronFromBuilder(rec);
+    if (!once && !schedule) {
+      toast(rec.freq === 'weekly' ? 'PICK AT LEAST ONE WEEKDAY' : 'ENTER A CRON EXPRESSION', true);
       return;
     }
     const body = JSON.stringify({
@@ -1106,7 +1431,7 @@ function openJobDrawer(job) {
       workflow: $('#jf-workflow').value || null,
       prompt: $('#jf-prompt').value,
       scheduleType: once ? 'once' : 'cron',
-      schedule: $('#jf-schedule').value,
+      schedule,
       runAt: once ? new Date($('#jf-runat').value).getTime() : null,
       timeoutMinutes: Number($('#jf-timeout').value),
       enabled: $('#jf-enabled').checked,
@@ -1125,16 +1450,28 @@ function openJobDrawer(job) {
 // ---------------------------------------------------------------- Skill Hub
 
 const skillState = {
-  data: null,          // /api/skills result
+  data: null,          // /api/skills result ({ scopes: [{name, kind, skills}] })
   q: '',               // search query
   filter: 'all',       // all | active | inactive
+  workspace: '',       // '' = all, otherwise a scope name (company / personal / personal-<name>)
   market: null,        // /api/marketplace result
   marketQ: '',
   marketCat: '',
+  marketScope: 'personal', // install target workspace
   marketOpen: false,
   installing: null,
   el: null,
 };
+
+function allSkills() {
+  return (skillState.data?.scopes || []).flatMap((s) => s.skills);
+}
+
+function workspaceLabel(scope) {
+  if (scope.name === 'company') return 'Company Skills';
+  if (scope.name === 'personal') return 'Personal Skills';
+  return `Personal Workspace — ${scope.name.replace(/^personal-/, '')}`;
+}
 
 function renderSkills(el) {
   skillState.el = el;
@@ -1161,18 +1498,26 @@ function skillMatches(s) {
 }
 
 function skillBodyHtml() {
-  const { data } = skillState;
-  const scopeSection = (scope, title, note, empty) => {
-    const skills = data[scope];
+  const notes = {
+    company: 'skills/company/ — shared via git, changes go through review.',
+    personal: 'skills/personal/ — private, gitignored, never committed.',
+  };
+  const empties = {
+    company: 'No company skills yet. Add a folder with a SKILL.md under skills/company/.',
+    personal: 'No personal skills yet — install one from the marketplace or add a folder with a SKILL.md.',
+  };
+  const scopes = skillState.data.scopes.filter((s) => !skillState.workspace || s.name === skillState.workspace);
+  return scopes.map((scope) => {
+    const skills = scope.skills;
     const visible = skills.filter(skillMatches);
     const activeCount = skills.filter((s) => s.active).length;
     return `
     <div class="card">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
-        <div class="section-title" style="flex:1;margin:0">${title} <span class="list-meta">${visible.length} / ${skills.length}</span></div>
+        <div class="section-title" style="flex:1;margin:0">${esc(workspaceLabel(scope))} <span class="list-meta">${visible.length} / ${skills.length}</span></div>
         <span class="badge badge-gray">${activeCount} ACTIVE</span>
       </div>
-      <div class="stat-note" style="margin-bottom:8px">${note}</div>
+      <div class="stat-note" style="margin-bottom:8px">${esc(notes[scope.name] || `skills/${scope.name}/ — personal workspace on the shared drive, gitignored.`)}</div>
       ${visible.length ? visible.map((s) => `
         <div class="list-row" style="cursor:default;align-items:flex-start">
           <span class="badge ${s.active ? 'badge-green' : 'badge-gray'}">${s.active ? 'ACTIVE' : 'OFF'}</span>
@@ -1184,18 +1529,16 @@ function skillBodyHtml() {
             <button class="chip" data-customize="${esc(s.path)}">CUSTOMIZE</button>
             <button class="chip" data-skill="${esc(s.scope)}:${esc(s.name)}" data-active="${s.active ? '1' : ''}">${s.active ? 'DEACTIVATE' : 'ACTIVATE'}</button>
           </span>
-        </div>`).join('') : `<div class="stat-note">${skills.length ? 'No skills match the current filter.' : empty}</div>`}
+        </div>`).join('') : `<div class="stat-note">${esc(skills.length ? 'No skills match the current filter.' : empties[scope.name] || 'No skills in this workspace yet.')}</div>`}
     </div>`;
-  };
-  return scopeSection('company', 'Company Skills', 'skills/company/ — shared via git, changes go through review.', 'No company skills yet. Add a folder with a SKILL.md under skills/company/.')
-    + scopeSection('personal', 'Personal Skills', 'skills/personal/ — private, gitignored, never committed.', 'No personal skills yet — install one from the marketplace or add a folder with a SKILL.md.');
+  }).join('');
 }
 
 function paintSkillBody() {
   const el = skillState.el;
   const body = $('#sk-body', el);
   if (!body) return;
-  const all = [...skillState.data.company, ...skillState.data.personal];
+  const all = allSkills();
   body.innerHTML = skillBodyHtml();
   const count = $('#sk-count', el);
   if (count) count.textContent = `${all.filter(skillMatches).length} of ${all.length}`;
@@ -1217,11 +1560,16 @@ function paintSkills() {
   const el = skillState.el;
   if (!el || state.view !== 'skills') return;
 
+  const scopes = skillState.data.scopes;
   el.innerHTML = `
   <div class="view-pad simple-list" style="max-width:920px">
     <div class="card">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <input id="sk-search" class="filter-input" type="text" placeholder="Search skills…" value="${esc(skillState.q)}" style="flex:1;min-width:180px">
+        <select id="sk-workspace" class="filter-input" title="Workspace filter — personal workspaces on the shared drive appear here automatically">
+          <option value="">All workspaces</option>
+          ${scopes.map((s) => `<option value="${esc(s.name)}" ${skillState.workspace === s.name ? 'selected' : ''}>${esc(workspaceLabel(s))}</option>`).join('')}
+        </select>
         <span class="filter-tabs">
           ${['all', 'active', 'inactive'].map((f) => `<button class="filter-tab ${skillState.filter === f ? 'active' : ''}" data-filter="${f}">${f === 'all' ? 'All' : f === 'active' ? 'Active' : 'Inactive'}</button>`).join('')}
         </span>
@@ -1238,12 +1586,15 @@ function paintSkills() {
         a whole scope, <code>+scope/skill</code> adds one, <code>-scope/skill</code> excludes one. The hub
         materializes it as symlinks in <code>.claude/skills/</code>, where Claude Code discovers skills —
         so activation applies to Danny, all subagents and scheduled jobs. Per machine, per user.
+        On a shared drive, each person can keep an own workspace as <code>skills/personal-&lt;name&gt;/</code>
+        (gitignored) — it appears in the workspace filter automatically.
       </div>
     </div>
   </div>`;
 
   // search re-renders only the list body, so the input keeps focus naturally
   $('#sk-search', el).addEventListener('input', (e) => { skillState.q = e.target.value; paintSkillBody(); });
+  $('#sk-workspace', el).addEventListener('change', (e) => { skillState.workspace = e.target.value; paintSkillBody(); });
   $$('.filter-tab', el).forEach((b) => b.addEventListener('click', () => { skillState.filter = b.dataset.filter; paintSkillBody(); }));
   $('[data-act="market"]', el).addEventListener('click', () => { skillState.marketOpen = !skillState.marketOpen; paintSkills(); if (skillState.marketOpen) loadMarketplace(); });
   paintSkillBody();
@@ -1292,7 +1643,7 @@ function paintMarketplaceList() {
     skillState.installing = s.url;
     paintMarketplaceList();
     try {
-      const result = await apiJson('/api/marketplace/install', { method: 'POST', body: JSON.stringify({ url: s.url, scope: 'personal' }) });
+      const result = await apiJson('/api/marketplace/install', { method: 'POST', body: JSON.stringify({ url: s.url, scope: skillState.marketScope || 'personal' }) });
       toast(`INSTALLED /${result.name.toUpperCase()} — REVIEW, THEN ACTIVATE`);
       skillState.installing = null;
       skillState.data = await apiJson('/api/skills');
@@ -1324,6 +1675,9 @@ function paintMarketplace() {
           <option value="">All categories</option>
           ${cats.map((c) => `<option value="${esc(c)}" ${skillState.marketCat === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}
         </select>
+        <select id="mkt-scope" class="filter-input" style="max-width:240px" title="Install target workspace">
+          ${(skillState.data?.scopes || []).filter((s) => s.kind === 'personal').map((s) => `<option value="${esc(s.name)}" ${skillState.marketScope === s.name ? 'selected' : ''}>Install to: ${esc(s.name)}</option>`).join('')}
+        </select>
       </div>
       <div id="mkt-list"></div>
       <div class="stat-note" style="margin-top:8px;white-space:normal">
@@ -1334,6 +1688,7 @@ function paintMarketplace() {
 
   $('#mkt-search', wrap).addEventListener('input', (e) => { skillState.marketQ = e.target.value; paintMarketplaceList(); });
   $('#mkt-cat', wrap).addEventListener('change', (e) => { skillState.marketCat = e.target.value; paintMarketplaceList(); });
+  $('#mkt-scope', wrap)?.addEventListener('change', (e) => { skillState.marketScope = e.target.value; });
   $('[data-mkt-refresh]', wrap).addEventListener('click', () => loadMarketplace(true));
   paintMarketplaceList();
 }
@@ -1377,18 +1732,71 @@ async function openFileEditorDrawer(path, { title = 'Edit File', hint = '', temp
 
 // ---------------------------------------------------------------- Artifacts / Settings
 
+const artState = { q: '', range: 'all' };
+
+const ART_RANGES = [
+  ['24h', 24 * 3600e3, 'Last 24h'],
+  ['7d', 7 * 24 * 3600e3, 'Last 7 days'],
+  ['30d', 30 * 24 * 3600e3, 'Last 30 days'],
+  ['all', Infinity, 'All time'],
+];
+
 function renderArtifacts(el) {
-  el.innerHTML = `<div class="view-pad simple-list" style="max-width:760px">
-    <div class="section-title">Artifacts (artifacts/)</div>
-    ${state.system.artifacts.length ? state.system.artifacts.map((a) => `
+  paintArtifacts(el);
+  // refresh the listing from disk so newly generated artifacts show up
+  apiJson('/api/system').then((sys) => {
+    state.system = sys;
+    if (state.view === 'artifacts') paintArtifacts(el);
+  }).catch(() => {});
+}
+
+function paintArtifacts(el) {
+  const rangeMs = ART_RANGES.find(([id]) => id === artState.range)[1];
+  const q = artState.q.toLowerCase();
+  const items = [...state.system.artifacts]
+    .sort((a, b) => (b.ctime || b.mtime) - (a.ctime || a.mtime)) // newest generated first
+    .filter((a) => (a.ctime || a.mtime) >= Date.now() - rangeMs)
+    .filter((a) => !q || (a.name + ' ' + (a.folder || '')).toLowerCase().includes(q));
+
+  el.innerHTML = `<div class="view-pad simple-list" style="max-width:860px">
+    <div class="card">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <div class="section-title" style="margin:0">Artifacts <span class="list-meta">${items.length} of ${state.system.artifacts.length}</span></div>
+        <input id="art-search" class="filter-input" type="text" placeholder="Search artifacts…" value="${esc(artState.q)}" style="flex:1;min-width:160px">
+        <span class="filter-tabs">
+          ${ART_RANGES.map(([id, , label]) => `<button class="filter-tab ${artState.range === id ? 'active' : ''}" data-range="${id}">${label}</button>`).join('')}
+        </span>
+      </div>
+      <div class="stat-note" style="margin-top:6px;white-space:normal">Generated files under <code>artifacts/</code> (incl. subfolders), newest first by creation date.</div>
+    </div>
+    ${items.length ? items.map((a) => `
       <div class="card">
-        <div style="display:flex;align-items:center;gap:14px">
-          <span class="badge badge-gray">${esc(a.name.split('.').pop().toUpperCase())}</span>
-          <span style="font-weight:600;color:var(--headline);flex:1">${esc(a.name)}</span>
-          <span class="list-meta">${(a.size / 1024).toFixed(1)} KB · ${timeAgo(a.mtime)}</span>
+        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+          <span class="badge badge-gray">${esc((a.name.includes('.') ? a.name.split('.').pop() : 'file').toUpperCase())}</span>
+          <span style="flex:1;min-width:180px">
+            <span style="display:block;font-weight:600;color:var(--headline)">${esc(a.name)}</span>
+            <span class="list-meta">${esc(a.folder || 'artifacts')}/</span>
+          </span>
+          <span class="list-meta">${(a.size / 1024).toFixed(1)} KB</span>
+          <span class="list-meta" title="${new Date(a.ctime || a.mtime).toLocaleString()}">created ${timeAgo(a.ctime || a.mtime)}</span>
+          <button class="chip" data-art-open="${esc(a.path)}">OPEN</button>
         </div>
-      </div>`).join('') : '<div class="card">No artifacts in artifacts/ yet.</div>'}
+      </div>`).join('') : `<div class="card">${state.system.artifacts.length ? 'No artifacts match the current filter.' : 'No artifacts in artifacts/ yet — agent runs place generated files there.'}</div>`}
   </div>`;
+
+  const search = $('#art-search', el);
+  search.addEventListener('input', () => {
+    artState.q = search.value;
+    const pos = search.selectionStart;
+    paintArtifacts(el);
+    const s2 = $('#art-search', el);
+    s2.focus();
+    s2.setSelectionRange(pos, pos);
+  });
+  $$('[data-range]', el).forEach((b) => b.addEventListener('click', () => { artState.range = b.dataset.range; paintArtifacts(el); }));
+  $$('[data-art-open]', el).forEach((b) => b.addEventListener('click', () => {
+    window.open('/api/artifact?path=' + encodeURIComponent(b.dataset.artOpen), '_blank');
+  }));
 }
 
 const FILE_TEMPLATES = {
@@ -1839,7 +2247,7 @@ function openPluginDrawer(p, onSaved) {
     <div class="drawer-body">
       <div class="drawer-section">
         <div class="section-title">Effect when enabled</div>
-        <div class="stat-note" style="white-space:normal;color:#9FB3A6">${esc(p.effect)}</div>
+        <div class="stat-note" style="white-space:normal">${esc(p.effect)}</div>
       </div>
       ${p.setup ? `<div class="drawer-section">
         <div class="section-title">Setup (outside this interface)</div>

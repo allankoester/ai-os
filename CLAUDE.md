@@ -296,6 +296,27 @@ Use `kira-image-generation-agent` for:
 - asset documentation templates
 - job status planning
 
+### IT Department
+
+Use `simon-security-audit` for:
+
+- security audits of systems, agent setups and workflows
+- risk assessments with severity ratings
+- permission and guardrail reviews
+- data-flow analysis
+- compliance and governance checks
+- review of third-party integrations (MCP servers, skills, plugins)
+
+Use `iris-spec-architect` for:
+
+- development specifications
+- architecture design and trade-off analysis
+- technical concepts and system diagrams
+- acceptance criteria
+- phased delivery plans (pilot → rollout → scale)
+
+Security-relevant designs from Iris go through Simon before they are final.
+
 ## Image Prompt Library
 
 The project contains an image prompt reference library:
@@ -346,6 +367,8 @@ Danny should classify each request into one or more workflow types:
 - `document_workflow`
 - `image_generation_workflow`
 - `calendar_planning_workflow`
+- `security_audit_workflow`
+- `dev_spec_workflow`
 - `multi_department_workflow`
 
 ## Strategy Gate

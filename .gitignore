@@ -14,6 +14,7 @@ backups/
 # Skill hub: personal skills are private, activation symlinks are per-machine
 skills/personal/*
 !skills/personal/.gitkeep
+skills/personal-*/
 .claude/skills/
 .skill-profile
 
@@ -23,6 +24,9 @@ interface/plugins.json
 
 # Guardrails configuration is per-machine (materialized into settings.local.json)
 interface/guardrails.json
+
+# Workflow edits (overrides / custom / deleted) are machine-local state
+interface/workflows.json
 
 # Scheduler jobs/runs/logs are machine-local state
 scheduler/*

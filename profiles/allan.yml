@@ -18,6 +18,8 @@ agents:
     - vera-visual-concept
     - noah-image-prompt-router
     - kira-image-generation-agent
+    - simon-security-audit
+    - iris-spec-architect
   excluded: []
 
 skills:
