@@ -43,9 +43,12 @@ Reproducible setup for one user on one machine. Target time: under 15 minutes.
 5. **Start the operating interface**
 
    ```bash
-   node interface/server.mjs
+   node scripts/start.mjs
    # → http://localhost:4011
    ```
+
+   macOS double-click wrapper: `./scripts/start-mac.command`  
+   Windows double-click wrapper: `scripts\\start-windows.cmd`
 
 6. **Validate the installation**
 
@@ -90,6 +93,7 @@ per `templates/task-brief.md`, and does not mark anything approved.
 - External artifacts require the approval checklist (`templates/approval-checklist.md`).
 - Significant runs get a run log in `runs/`.
 - Back up before larger reorganizations: `scripts/backup.sh backup`.
+- Stop interface cleanly: `node scripts/stop.mjs`.
 
 ## Backup and restore
 

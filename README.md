@@ -10,14 +10,78 @@ Dieses Paket ist für einen reinen Claude-/Claude-Code-Workflow gedacht: Danny i
 4. Subagents liegen unter `.claude/agents/`.
 5. Danny als Hauptagent nutzen. Der User spricht nur mit Danny.
 
-## Steadymade OS Interface starten/stoppen
+Claude/OpenCode compatibility details (Claude-first, no app-local `AGENTS.md`):
+
+- `docs/claude-opencode-compatibility.md`
+
+Cross-platform start/shutdown guide:
+
+- `docs/how-to-start.md`
+- `scripts/README.md`
+
+## How to start
+
+Open this folder as the project root:
+
+```txt
+apps/internal/steadymade-ai-os
+```
+
+The interface runs locally at:
+
+```txt
+http://localhost:4011
+```
+
+### macOS — double-click
+
+Open `scripts/` in Finder and double-click:
+
+```txt
+start-mac.command
+```
+
+To stop the interface, double-click:
+
+```txt
+stop-mac.command
+```
+
+If macOS blocks execution, run this once from the repository root:
 
 ```bash
-node apps/internal/steadymade-ai-os/interface/server.mjs
+chmod +x apps/internal/steadymade-ai-os/scripts/start-mac.command
+chmod +x apps/internal/steadymade-ai-os/scripts/stop-mac.command
+```
+
+### Windows — double-click
+
+Open `scripts\` in File Explorer and double-click:
+
+```txt
+start-windows.cmd
+```
+
+To stop the interface, double-click:
+
+```txt
+stop-windows.cmd
+```
+
+### Terminal alternative
+
+```bash
+node scripts/start.mjs
 ```
 
 ```bash
-kill "$(lsof -ti tcp:4011)"
+node scripts/stop.mjs
+```
+
+To check the setup without starting the server:
+
+```bash
+node scripts/start.mjs --check-only
 ```
 
 ## Enthaltene Subagents

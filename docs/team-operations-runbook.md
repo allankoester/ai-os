@@ -25,7 +25,7 @@ without review.
 
 | Symptom | First response |
 | --- | --- |
-| Interface won't start / port busy | `kill "$(lsof -ti tcp:4011)"`, then `node interface/server.mjs`; check Node 18+ |
+| Interface won't start / port busy | `node scripts/stop.mjs`, then `node scripts/start.mjs`; check Node 18+ |
 | Knowledge folder empty in UI | check `STEADYMADE_KNOWLEDGE_BACKEND` / `STEADYMADE_KNOWLEDGE_FS_ROOT`; server log prints the active backend and root |
 | Graph backend errors (prod) | verify tenant/client/secret env vars; 409 = remote edit conflict, re-open the doc and merge manually |
 | Agent behaves off-policy | check the agent file in `.claude/agents/` for uncommitted local edits (`git status`, `git diff`) |
