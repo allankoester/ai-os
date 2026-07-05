@@ -51,6 +51,92 @@ Therefore:
 - Specialist agents should receive only the relevant context they need.
 - Do not dump the entire knowledge base into writing, proposal or image agents.
 
+## Stage 1/2 Operating Foundations
+
+This project implements Stage 1 (personal local AI-OS) and Stage 2 (small team)
+of `docs/ai-os-comparison-and-staged-concept.md`.
+
+### Knowledge folder contract
+
+- `knowledge/company/<domain>/` — shared Steadymade knowledge, committed to git.
+- `knowledge/personal/` — private per-user knowledge. Never committed, never
+  copied into company artifacts or shared briefs. Agents may read it only for
+  the local user's own context.
+- `knowledge/inbox/` — unsorted intake. Never a source of truth; Mara
+  classifies inbox material into `company/<domain>/` or `personal/`, then the
+  inbox copy is removed. See `knowledge/README.md`.
+
+### Templates
+
+Use the templates in `templates/`:
+
+- `templates/task-brief.md` — Danny's task brief for specialist agents
+- `templates/approval-checklist.md` — mandatory before any external artifact is final
+- `templates/quality-rubric.md` — quality rubric for external outputs
+
+### Run logs
+
+After every significant multi-agent task (workflow with 2+ agents, or any task
+producing an external artifact), Danny writes a run log to
+`runs/YYYY-MM-DD-<slug>.md` using `runs/run-log-template.md`. Run logs are
+local learning data and are not committed.
+
+### Company Operating Profile
+
+`knowledge/company/operating-profile.md` is the central company custom
+instruction — read it as first company context. It is filled and maintained
+via the `/company-onboarding` skill; SSOT documents under
+`knowledge/company/steadymade Docs/` stay canonical.
+
+### Onboarding skills
+
+- `/company-onboarding` — guided interview that fills the company operating
+  profile (shared custom instructions for the whole team).
+- `/personal-onboarding` — guided interview that creates the private persona
+  profile (`knowledge/personal/user-profile.md`) and per-user custom
+  instructions in `CLAUDE.local.md` (gitignored).
+
+### Skill Hub
+
+Skills live in `skills/company/` (shared, in git) and `skills/personal/`
+(private, gitignored). The active set is declared in `.skill-profile`
+(workspace root, gitignored) and materialized as symlinks in `.claude/skills/`
+by the operating interface (Skill Hub view: search, filter, toggle, install
+from the awesome-claude-skills marketplace, customize). See `skills/README.md`.
+
+### Plugins
+
+The Settings view configures plugins (Web Search permission, Context7/custom
+MCP servers → `.mcp.json`, plus external tools like agent-browser and noVNC),
+and new custom plugins can be registered there. Only MCP and permission
+plugins have real effect from the interface; external plugins are config-only
+and installed outside it.
+
+### Guardrails
+
+Folder-level permission levels (write / ask / read / deny) are configured in
+Settings → Guardrails. They are enforced immediately by the interface file API
+and materialized as permission rules into `.claude/settings.local.json` —
+respect them: they apply to all agents in new Claude sessions, and scheduler
+runs pick them up automatically. The most specific folder rule wins.
+
+### Scheduler
+
+The operating interface includes a cron scheduler that runs agent tasks
+headlessly via `claude -p` (see `scheduler/README.md`). Scheduled runs
+produce drafts only: external artifacts still require the approval checklist
+and explicit user approval. Jobs run only while the interface server runs.
+
+### Team model (Stage 2)
+
+- Software and instructions are distributed through this git repository;
+  changes follow `docs/team-operations-runbook.md`.
+- Shared knowledge sync and naming conventions: `docs/knowledge-sync-policy.md`.
+- Each user has a skills profile in `profiles/<user>.yml` (core + optional +
+  excluded agents/skills). Danny must respect the active user's profile and not
+  route to excluded agents.
+- Repository validity is checked by `scripts/validate.mjs` (run locally or in CI).
+
 ## Strategic Defaults for Steadymade
 
 Steadymade helps DACH and Australian mid-market companies move AI from concept to daily operations. Primary market: DACH. Secondary market: Australia via Allan Köster (Sydney).
@@ -214,7 +300,7 @@ Use `kira-image-generation-agent` for:
 
 The project contains an image prompt reference library:
 
-`knowledge/creative/steadymade-image-prompt-library-v2.md`
+`knowledge/company/creative/steadymade-image-prompt-library-v2.md`
 
 This library is the reference source for visual prompt creation. It is used by Nora, Vera, Noah, Kira and Rosa.
 

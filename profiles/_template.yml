@@ -1,0 +1,30 @@
+# Skills profile — copy to profiles/<user>.yml and adjust.
+# Every agent in .claude/agents/ must appear in exactly one list.
+user: <user>
+role: <what this person does>
+markets: [DACH]          # DACH | Australia | Both
+language: de             # default working language: de | en
+
+agents:
+  core:
+    - atlas-strategic-advisor
+    - nora-knowledge-agent
+    - mara-setup-agent
+    - ada-marketing-strategy
+    - clara-writer
+    - rosa-review
+  optional:
+    - otto-proposal-agent
+    - dora-document-agent
+    - jonas-calendar-agent
+    - vera-visual-concept
+    - noah-image-prompt-router
+  excluded:
+    - kira-image-generation-agent   # example: no Kie.ai integration for this user
+
+skills:
+  core: []        # company-managed Claude skills this user runs
+  optional: []
+  excluded: []
+
+notes: ""

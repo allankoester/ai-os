@@ -190,21 +190,32 @@ export function createGraphKnowledgeStorage({ config }) {
       throw createError('CONFIG_ERROR', `graph knowledge root not found: ${config.knowledgeRoot}`, 500);
     }
 
-    const children = await listChildrenByItemId(rootItem.id);
-    const folderItems = children.filter((item) => item.folder && item.name).sort((a, b) => a.name.localeCompare(b.name));
-
+    // Recursive: supports the staged folder contract (company/<domain>, personal, inbox).
+    // Each directory becomes one flat entry whose name is its path relative to the root.
     const folders = [];
-    for (const folder of folderItems) {
-      const items = await listChildrenByItemId(folder.id);
+
+    async function walk(itemId, dirRel) {
+      const items = await listChildrenByItemId(itemId);
       const mdItems = items
         .filter((item) => item.file && item.name && item.name.toLowerCase().endsWith('.md'))
         .sort((a, b) => a.name.localeCompare(b.name));
+      const subdirs = items.filter((item) => item.folder && item.name).sort((a, b) => a.name.localeCompare(b.name));
 
       const docs = [];
       for (const item of mdItems) {
-        docs.push(await buildEntry(folder.name, item));
+        docs.push(await buildEntry(dirRel, item));
       }
-      folders.push({ name: folder.name, docs });
+      // Pure container dirs (no direct .md files, only subfolders) are not listed themselves.
+      if (docs.length > 0 || subdirs.length === 0) folders.push({ name: dirRel, docs });
+      for (const sub of subdirs) {
+        await walk(sub.id, `${dirRel}/${sub.name}`);
+      }
+    }
+
+    const children = await listChildrenByItemId(rootItem.id);
+    const folderItems = children.filter((item) => item.folder && item.name).sort((a, b) => a.name.localeCompare(b.name));
+    for (const folder of folderItems) {
+      await walk(folder.id, folder.name);
     }
 
     return folders;

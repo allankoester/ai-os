@@ -90,7 +90,12 @@ changed remotely, writes return HTTP `409`.
 | Markdown editing & saving | **Real persistence** — `PUT /api/file` writes to configured backend |
 | Doc status / market scope | Sidecar file `interface/meta.json` (real docs stay untouched) |
 | Access rules, workflows, departments | Static model in `public/data.js`, mirrors `CLAUDE.md` |
-| "Ask Nora / Mara / Atlas", "Run test task" | Prototype — copies a task brief to the clipboard; live Claude execution pending |
+| Scheduler | **Real execution** — cron + one-time jobs (date/time picker) run `claude -p` headless, optional workflow/agent targeting (API `/api/scheduler`) |
+| Skill Hub | Live — search/filter over `skills/company` + `skills/personal`, activation via `.skill-profile` → `.claude/skills/` symlinks (API `/api/skills`) |
+| Marketplace | Live — browses ComposioHQ/awesome-claude-skills, installs GitHub skills into `skills/personal/` (API `/api/marketplace`) |
+| Plugins | Real for MCP/permissions — writes `.mcp.json` and `.claude/settings.local.json`; external tools are config-only (API `/api/plugins`) |
+| Profile editors | Real — Settings edits `knowledge/personal/user-profile.md`, `CLAUDE.local.md`, `CLAUDE.md` on disk |
+| "Ask Nora / Mara / Atlas", "Run test task" | Prototype — copies a task brief to the clipboard; interactive chat execution pending |
 
 ## Files
 

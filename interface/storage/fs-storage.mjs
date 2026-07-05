@@ -66,21 +66,30 @@ export function createFsKnowledgeStorage({ root }) {
       if (!fs.existsSync(root)) {
         throw createError('CONFIG_ERROR', `knowledge root not found: ${root}`, 500);
       }
+      // Recursive: supports the staged folder contract (company/<domain>, personal, inbox).
+      // Each directory becomes one flat entry whose name is its path relative to the root.
       const folders = [];
-      const dirents = await fsp.readdir(root, { withFileTypes: true });
-      dirents.sort((a, b) => a.name.localeCompare(b.name));
-      for (const dirent of dirents) {
-        if (!dirent.isDirectory()) continue;
-        const folderName = dirent.name;
-        const folderPath = path.join(root, folderName);
-        const files = (await fsp.readdir(folderPath)).filter((f) => f.endsWith('.md')).sort();
+      async function walk(dirAbs, dirRel) {
+        const dirents = await fsp.readdir(dirAbs, { withFileTypes: true });
+        dirents.sort((a, b) => a.name.localeCompare(b.name));
         const docs = [];
-        for (const fileName of files) {
-          const absPath = path.join(folderPath, fileName);
-          const relPath = `${KNOWLEDGE_PREFIX}${folderName}/${fileName}`;
-          docs.push(await buildEntry(absPath, relPath));
+        for (const dirent of dirents) {
+          if (dirent.isFile() && dirent.name.endsWith('.md')) {
+            const absPath = path.join(dirAbs, dirent.name);
+            docs.push(await buildEntry(absPath, `${KNOWLEDGE_PREFIX}${dirRel}/${dirent.name}`));
+          }
         }
-        folders.push({ name: folderName, docs });
+        const subdirs = dirents.filter((d) => d.isDirectory());
+        // Pure container dirs (no direct .md files, only subfolders) are not listed themselves.
+        if (docs.length > 0 || subdirs.length === 0) folders.push({ name: dirRel, docs });
+        for (const dirent of subdirs) {
+          await walk(path.join(dirAbs, dirent.name), `${dirRel}/${dirent.name}`);
+        }
+      }
+      const top = await fsp.readdir(root, { withFileTypes: true });
+      top.sort((a, b) => a.name.localeCompare(b.name));
+      for (const dirent of top) {
+        if (dirent.isDirectory()) await walk(path.join(root, dirent.name), dirent.name);
       }
       return folders;
     },

@@ -1,0 +1,28 @@
+user: allan
+role: Founder / consultant, Steadymade Australia (Sydney)
+markets: [Both]
+language: en
+
+agents:
+  core:
+    - atlas-strategic-advisor
+    - nora-knowledge-agent
+    - mara-setup-agent
+    - ada-marketing-strategy
+    - clara-writer
+    - rosa-review
+    - otto-proposal-agent
+    - dora-document-agent
+  optional:
+    - jonas-calendar-agent
+    - vera-visual-concept
+    - noah-image-prompt-router
+    - kira-image-generation-agent
+  excluded: []
+
+skills:
+  core: []
+  optional: []
+  excluded: []
+
+notes: "Kira stays optional until a real Kie.ai integration is connected."

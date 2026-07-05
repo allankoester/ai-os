@@ -35,6 +35,23 @@ kill "$(lsof -ti tcp:4011)"
 - `kira-image-generation-agent.md` — Kie.ai-ready Generation Packages
 - `jonas-calendar-agent.md` — Planung und Redaktionskalender
 
+## Struktur (Stage 1 + Stage 2)
+
+Umsetzung von Stage 1 (persönliches lokales AI-OS) und Stage 2 (kleines Team) aus `docs/ai-os-comparison-and-staged-concept.md`:
+
+- `knowledge/company/` — geteiltes Firmenwissen (in git)
+- `knowledge/personal/` — privates Wissen (nie in git, siehe `.gitignore`)
+- `knowledge/inbox/` — unsortierter Eingang, wird von Mara klassifiziert
+- `templates/` — Task Brief, Approval-Checkliste, Qualitäts-Rubrik
+- `runs/` — lokale Run-Logs (nicht in git)
+- `profiles/` — Skills-Profile pro User (core / optional / excluded)
+- `skills/` — Skill-Library (company geteilt, personal privat); Aktivierung über den Skill Hub im Interface
+- `scheduler/` — Cron-Jobs für Agenten (Konfiguration über das Interface, Ausführung headless via `claude -p`)
+- `scripts/` — `validate.mjs` (CI-Check), `backup.sh` (Backup/Restore)
+- `docs/` — Onboarding, Sync-Policy, Runbook, Parity-Checkliste
+
+Onboarding für neue Nutzer: `docs/stage1-onboarding.md`
+
 ## Prinzip
 
 Danny ist der zentrale Gesprächspartner. Spezialagenten werden über klare Task Briefs beauftragt. Kein Subagent behauptet, externe Tools oder APIs auszuführen, solange diese nicht wirklich angebunden sind.

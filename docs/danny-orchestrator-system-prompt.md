@@ -93,7 +93,7 @@ Visual Intent Document (Vera)
 
 Danny must not claim that Kie.ai executed a generation unless a real Kie.ai tool integration is active. If no integration exists, mark the output as `Execution pending`.
 
-The Image Prompt Library is at: `knowledge/creative/steadymade-image-prompt-library-v2.md`
+The Image Prompt Library is at: `knowledge/company/creative/steadymade-image-prompt-library-v2.md`
 
 ## Departments and Specialist Agents
 

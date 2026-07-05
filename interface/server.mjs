@@ -12,6 +12,11 @@ import { fileURLToPath } from 'node:url';
 import { createKnowledgeConfig } from './storage/config.mjs';
 import { createFsKnowledgeStorage } from './storage/fs-storage.mjs';
 import { createGraphKnowledgeStorage } from './storage/graph-storage.mjs';
+import { createScheduler, resolveClaudeBin } from './scheduler.mjs';
+import { createSkillHub } from './skills.mjs';
+import { createPluginManager } from './plugins.mjs';
+import { createGuardrails } from './guardrails.mjs';
+import { spawn } from 'node:child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..'); // project root: steadymade-ai-os
@@ -19,6 +24,11 @@ const PUBLIC = path.join(__dirname, 'public');
 const META_FILE = path.join(__dirname, 'meta.json'); // sidecar metadata (status, scope) — keeps real docs untouched
 const PORT = process.env.PORT || 4011;
 const KNOWLEDGE_PATH_PREFIX = 'knowledge/';
+
+const scheduler = createScheduler({ rootDir: ROOT });
+const skillHub = createSkillHub({ rootDir: ROOT });
+const pluginManager = createPluginManager({ rootDir: ROOT });
+const guardrails = createGuardrails({ rootDir: ROOT });
 
 const knowledgeConfig = createKnowledgeConfig({ rootDir: ROOT });
 const knowledgeStorage = knowledgeConfig.backend === 'graph'
@@ -103,8 +113,8 @@ async function getSystem() {
   // Knowledge folders + docs
   system.folders = await knowledgeStorage.listFolders();
 
-  // Core docs (Danny prompt, routing, CLAUDE.md)
-  for (const rel of ['docs/danny-orchestrator-system-prompt.md', 'docs/agent-routing.md', 'CLAUDE.md', 'README.md']) {
+  // Core docs (Danny prompt, routing, CLAUDE.md, personal instructions if present)
+  for (const rel of ['docs/danny-orchestrator-system-prompt.md', 'docs/agent-routing.md', 'CLAUDE.md', 'CLAUDE.local.md', 'README.md']) {
     const abs = path.join(ROOT, rel);
     if (fs.existsSync(abs)) system.docs.push(await fileEntry(abs));
   }
@@ -133,6 +143,8 @@ async function handleApi(req, res, url) {
 
   if (url.pathname === '/api/file' && req.method === 'GET') {
     const rel = url.searchParams.get('path') || '';
+    const gate = guardrails.check(rel, 'read');
+    if (!gate.allowed) return send(403, { error: gate.reason });
     if (isKnowledgePath(rel)) {
       try {
         return send(200, await knowledgeStorage.readFile(rel));
@@ -150,6 +162,11 @@ async function handleApi(req, res, url) {
 
   if (url.pathname === '/api/file' && req.method === 'PUT') {
     const body = await readBody(req);
+    const writeGate = guardrails.check(body.path || '', 'write');
+    if (!writeGate.allowed) return send(403, { error: writeGate.reason });
+    if (writeGate.confirmRequired && body.confirmed !== true) {
+      return send(409, { confirmRequired: true, folder: writeGate.folder, error: `guardrail: ${writeGate.folder} is set to "ask" — confirm the write` });
+    }
     if (isKnowledgePath(body.path || '')) {
       try {
         return send(200, await knowledgeStorage.writeFile(body.path, body.content));
@@ -166,6 +183,155 @@ async function handleApi(req, res, url) {
     if (!abs || !abs.endsWith('.md')) return send(400, { error: 'only .md files inside the project can be written' });
     await fsp.writeFile(abs, body.content, 'utf8');
     return send(200, { ok: true, mtime: (await fsp.stat(abs)).mtimeMs });
+  }
+
+  // ---------- scheduler ----------
+
+  if (url.pathname === '/api/scheduler' && req.method === 'GET') {
+    return send(200, { jobs: scheduler.listJobs(), runs: scheduler.listRuns() });
+  }
+
+  if (url.pathname === '/api/scheduler/jobs' && req.method === 'POST') {
+    const result = await scheduler.createJob(await readBody(req));
+    return send(result.errors ? 400 : 200, result);
+  }
+
+  const jobMatch = url.pathname.match(/^\/api\/scheduler\/jobs\/([0-9a-f-]+)(\/run)?$/i);
+  if (jobMatch) {
+    const [, jobId, runSuffix] = jobMatch;
+    if (runSuffix && req.method === 'POST') {
+      const result = await scheduler.runNow(jobId);
+      return send(result.errors ? 400 : 200, result);
+    }
+    if (!runSuffix && req.method === 'PUT') {
+      const result = await scheduler.updateJob(jobId, await readBody(req));
+      return send(result.errors ? 400 : 200, result);
+    }
+    if (!runSuffix && req.method === 'DELETE') {
+      const result = await scheduler.deleteJob(jobId);
+      return send(result.errors ? 404 : 200, result);
+    }
+  }
+
+  const logMatch = url.pathname.match(/^\/api\/scheduler\/runs\/([0-9a-f-]+)\/log$/i);
+  if (logMatch && req.method === 'GET') {
+    const log = await scheduler.getRunLog(logMatch[1]);
+    if (log === null) return send(404, { error: 'log not found' });
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+    return res.end(log);
+  }
+
+  // ---------- skill hub ----------
+
+  if (url.pathname === '/api/skills' && req.method === 'GET') {
+    return send(200, await skillHub.list());
+  }
+
+  if (url.pathname === '/api/skills/toggle' && req.method === 'POST') {
+    const body = await readBody(req);
+    const result = await skillHub.setActive(body.scope, body.name, Boolean(body.active));
+    return send(result.errors ? 400 : 200, result);
+  }
+
+  if (url.pathname === '/api/marketplace' && req.method === 'GET') {
+    try {
+      return send(200, await skillHub.marketplace(url.searchParams.get('refresh') === '1'));
+    } catch (err) {
+      return send(502, { error: err.message });
+    }
+  }
+
+  if (url.pathname === '/api/marketplace/install' && req.method === 'POST') {
+    try {
+      const result = await skillHub.installFromMarketplace(await readBody(req));
+      return send(result.errors ? 400 : 200, result);
+    } catch (err) {
+      return send(500, { errors: [err.message] });
+    }
+  }
+
+  // ---------- plugins ----------
+
+  if (url.pathname === '/api/plugins' && req.method === 'GET') {
+    return send(200, { plugins: pluginManager.list() });
+  }
+
+  if (url.pathname === '/api/plugins' && req.method === 'POST') {
+    const result = await pluginManager.create(await readBody(req));
+    return send(result.errors ? 400 : 200, result);
+  }
+
+  const pluginMatch = url.pathname.match(/^\/api\/plugins\/([a-z0-9-]+)$/);
+  if (pluginMatch && req.method === 'PUT') {
+    const result = await pluginManager.update(pluginMatch[1], await readBody(req));
+    return send(result.errors ? 400 : 200, result);
+  }
+  if (pluginMatch && req.method === 'DELETE') {
+    const result = await pluginManager.remove(pluginMatch[1]);
+    return send(result.errors ? 400 : 200, result);
+  }
+
+  // ---------- guardrails ----------
+
+  if (url.pathname === '/api/guardrails' && req.method === 'GET') {
+    return send(200, guardrails.status());
+  }
+
+  if (url.pathname === '/api/guardrails' && req.method === 'PUT') {
+    const body = await readBody(req);
+    const result = await guardrails.save(body.folders);
+    return send(result.errors ? 400 : 200, result);
+  }
+
+  // ---------- restart ----------
+
+  if (url.pathname === '/api/restart' && req.method === 'POST') {
+    send(200, { ok: true, message: 'restarting interface server' });
+    console.log('[server] restart requested via API');
+    let relaunched = false;
+    const relaunch = () => {
+      if (relaunched) return;
+      relaunched = true;
+      spawn(process.execPath, [fileURLToPath(import.meta.url)], {
+        cwd: ROOT, detached: true, stdio: 'ignore', env: process.env,
+      }).unref();
+      process.exit(0);
+    };
+    setTimeout(() => {
+      server.close(relaunch);
+      setTimeout(relaunch, 1500).unref(); // safety: lingering connections must not block the swap
+    }, 200);
+    return;
+  }
+
+  // ---------- workspace status (profile + instructions completeness) ----------
+
+  if (url.pathname === '/api/workspace' && req.method === 'GET') {
+    const checks = [
+      { id: 'claude-md', label: 'CLAUDE.md (shared instructions)', path: 'CLAUDE.md', hint: 'core project instructions' },
+      { id: 'claude-local', label: 'CLAUDE.local.md (personal instructions)', path: 'CLAUDE.local.md', hint: 'run /personal-onboarding' },
+      { id: 'user-profile', label: 'knowledge/personal/user-profile.md (persona profile)', path: 'knowledge/personal/user-profile.md', hint: 'run /personal-onboarding' },
+      { id: 'operating-profile', label: 'knowledge/company/operating-profile.md (company profile)', path: 'knowledge/company/operating-profile.md', hint: 'run /company-onboarding' },
+      { id: 'skill-profile', label: '.skill-profile (active skills)', path: '.skill-profile', hint: 'created by the Skill Hub' },
+      { id: 'settings', label: '.claude/settings.local.json (permissions)', path: '.claude/settings.local.json', hint: 'created when plugins/permissions are set' },
+      { id: 'mcp', label: '.mcp.json (MCP servers)', path: '.mcp.json', hint: 'optional — enable an MCP plugin in Settings' },
+    ].map((c) => {
+      const abs = path.join(ROOT, c.path);
+      const exists = fs.existsSync(abs);
+      let todos = 0;
+      if (exists && c.path.endsWith('.md')) {
+        try { todos = (fs.readFileSync(abs, 'utf8').match(/TODO/g) || []).length; } catch { /* ignore */ }
+      }
+      return { ...c, exists, todos };
+    });
+    const byId = (id) => checks.find((c) => c.id === id) || {};
+    const onboarding = {
+      personalDone: Boolean(byId('user-profile').exists && byId('claude-local').exists),
+      companyDone: Boolean(byId('operating-profile').exists && byId('operating-profile').todos === 0),
+      companyTodos: byId('operating-profile').todos || 0,
+    };
+    onboarding.complete = onboarding.personalDone && onboarding.companyDone;
+    return send(200, { checks, onboarding });
   }
 
   if (url.pathname === '/api/meta' && req.method === 'PUT') {
@@ -217,4 +383,8 @@ server.listen(PORT, () => {
   console.log(`Reading project files from: ${ROOT}`);
   console.log(`Knowledge backend: ${knowledgeStorage.kind} (${knowledgeStorage.root})`);
   console.log(`Runtime mode: ${knowledgeConfig.runtime}`);
+  const claudeBin = resolveClaudeBin();
+  console.log(claudeBin
+    ? `Scheduler: claude CLI at ${claudeBin}`
+    : 'Scheduler: WARNING — claude CLI not found, jobs will fail (set CLAUDE_BIN)');
 });

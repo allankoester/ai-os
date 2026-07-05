@@ -1,0 +1,36 @@
+# Stage 1 knowledge separation: personal knowledge never leaves this machine
+knowledge/personal/*
+!knowledge/personal/README.md
+!knowledge/personal/.gitkeep
+
+# Local run logs are per-user learning data (templates stay tracked)
+runs/*
+!runs/README.md
+!runs/run-log-template.md
+
+# Local backups
+backups/
+
+# Skill hub: personal skills are private, activation symlinks are per-machine
+skills/personal/*
+!skills/personal/.gitkeep
+.claude/skills/
+.skill-profile
+
+# Plugin state + generated MCP config are machine-local
+interface/plugins.json
+.mcp.json
+
+# Guardrails configuration is per-machine (materialized into settings.local.json)
+interface/guardrails.json
+
+# Scheduler jobs/runs/logs are machine-local state
+scheduler/*
+!scheduler/README.md
+
+# Per-user custom instructions (created by /personal-onboarding)
+CLAUDE.local.md
+
+# Local env files
+.env
+.env.local

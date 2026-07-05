@@ -522,4 +522,4 @@ Use for:
 Suggested paths:
 
 ```text
-knowledge/strategy/
+knowledge/company/strategy/

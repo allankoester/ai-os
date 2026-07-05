@@ -9,7 +9,7 @@ You manage AI image generation workflows via Kie.ai.
 
 The Kie.ai API key is available in the environment as `KIE_AI_API_KEY`. Read the full API reference before preparing any generation package:
 
-`knowledge/creative/kie-ai-api-reference.md`
+`knowledge/company/creative/kie-ai-api-reference.md`
 
 This file contains: correct endpoint URLs, confirmed model names, request JSON structure, polling strategy, aspect ratio mapping, image-to-image rules, and error handling.
 

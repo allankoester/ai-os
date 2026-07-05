@@ -817,8 +817,10 @@ button.wf-step:hover { border-color: var(--green-light); }
 /* ============ Artifacts / Settings ============ */
 
 .simple-list .card { margin-bottom: 10px; }
-.settings-block { max-width: 640px; }
-.settings-block .card { margin-bottom: 12px; }
+.settings-block { max-width: 880px; }
+.settings-block .card { margin-bottom: 14px; }
+.settings-block .section-title { margin-bottom: 10px; }
+.kv-row span:first-child { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .kv-row { display: flex; justify-content: space-between; gap: 14px; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
 .kv-row:last-child { border-bottom: none; }
 .kv-row span:first-child { color: var(--muted); }
@@ -902,3 +904,209 @@ button.wf-step:hover { border-color: var(--green-light); }
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-thumb { background: #D4DAD4; border-radius: 5px; border: 2px solid var(--bg); }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* ===== Scheduler + Skill Hub ===== */
+
+.form-field { display: flex; flex-direction: column; gap: 5px; }
+.form-field label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #7E978A;
+}
+.form-field input,
+.form-field select,
+.form-field textarea {
+  border: 1px solid var(--border-dark);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--white);
+  padding: 8px 10px;
+  font-size: 12.5px;
+  outline: none;
+}
+.form-field input:focus,
+.form-field select:focus,
+.form-field textarea:focus { border-color: var(--green); }
+.form-field textarea { resize: vertical; font-family: var(--font-mono); line-height: 1.55; }
+.form-field select option { color: var(--headline); background: var(--white); }
+.form-check label {
+  flex-direction: row;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-body, inherit);
+  font-size: 12px;
+  letter-spacing: 0;
+  text-transform: none;
+  color: #9FB3A6;
+  cursor: pointer;
+}
+.form-check input { accent-color: var(--green); }
+
+.run-log {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  color: #C9D6CD;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border-dark);
+  border-radius: 8px;
+  padding: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 60vh;
+  overflow: auto;
+}
+
+/* ===== Skill hub filters (light cards) ===== */
+
+.filter-input {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--white);
+  color: var(--headline);
+  padding: 7px 10px;
+  font-size: 12.5px;
+  outline: none;
+}
+.filter-input:focus { border-color: var(--green-light); }
+
+.filter-tabs {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+}
+.filter-tab {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 6px 12px;
+  background: var(--white);
+  color: var(--body);
+  cursor: pointer;
+  border: none;
+  border-right: 1px solid var(--border);
+}
+.filter-tab:last-child { border-right: none; }
+.filter-tab.active { background: var(--surface-dark); color: var(--green); }
+
+/* ===== Guardrails ===== */
+
+.gr-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.gr-row:last-of-type { border-bottom: none; }
+.gr-folder {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--headline);
+  flex: 1;
+  min-width: 160px;
+  word-break: break-all;
+}
+.gr-tabs .filter-tab { padding: 5px 9px; font-size: 9px; }
+.gr-tabs .filter-tab.active.gr-write { background: var(--surface-dark); color: var(--green); }
+.gr-tabs .filter-tab.active.gr-ask   { background: #4a3b12; color: #f5c04e; }
+.gr-tabs .filter-tab.active.gr-read  { background: #16324a; color: #6fb6e8; }
+.gr-tabs .filter-tab.active.gr-deny  { background: #4a1616; color: #f08a8a; }
+
+/* ===== Onboarding modal ===== */
+
+.modal-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(11, 34, 24, 0.55);
+  display: grid;
+  place-items: center;
+  z-index: 200;
+  padding: 24px;
+}
+.modal-card {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 26px 28px;
+  max-width: 560px;
+  width: 100%;
+  max-height: 85vh;
+  overflow-y: auto;
+}
+.modal-card .drawer-dept { color: var(--green-light); }
+.onb-title {
+  font-family: var(--font-display);
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--headline);
+  margin: 6px 0 10px;
+}
+.onb-step {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+.onb-step-title { display: block; font-weight: 600; color: var(--headline); font-size: 13.5px; }
+.onb-cmd {
+  display: inline-block;
+  margin-top: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--surface-dark);
+  color: var(--green);
+  border-radius: 6px;
+  padding: 4px 10px;
+}
+.onb-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+/* settings section filter */
+.settings-filter { padding: 12px 16px; }
+.settings-filter .filter-tabs { flex-wrap: wrap; }
+
+/* ===== Drawer date/time picker (dark form controls) ===== */
+
+/* Dark drawer forms: native widgets (datetime-local calendar icon + popup,
+   select arrows, checkboxes) must render in dark scheme, otherwise the
+   calendar icon is black-on-dark and effectively invisible. */
+.drawer .form-field input,
+.drawer .form-field select,
+.drawer .form-field textarea,
+.drawer .form-check input {
+  color-scheme: dark;
+}
+.drawer .form-field input[type="datetime-local"] {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+.drawer .form-field input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.9;
+}
+
+.gr-add-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 10px;
+  border: 1px dashed var(--green-light);
+  border-radius: 8px;
+  margin-bottom: 10px;
+  background: var(--green-tint);
+}

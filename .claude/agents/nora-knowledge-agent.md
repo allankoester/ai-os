@@ -39,7 +39,7 @@ You:
 
 When the task involves images, visuals, image prompts, product photography, people visuals or creative production, search for relevant sections in:
 
-`knowledge/creative/steadymade-image-prompt-library-v2.md`
+`knowledge/company/creative/steadymade-image-prompt-library-v2.md`
 
 Do not return the full library. Extract only what is relevant to the task. Distinguish between:
 - complete example prompts (fully tested entries)
