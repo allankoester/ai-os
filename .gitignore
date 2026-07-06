@@ -38,3 +38,7 @@ CLAUDE.local.md
 # Local env files
 .env
 .env.local
+
+# OS/editor noise
+.DS_Store
+**/.DS_Store

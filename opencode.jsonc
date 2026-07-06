@@ -1,0 +1,25 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    "../../../.opencode/plugins/claude-agent-adapter.js"
+  ],
+  "agent": {
+    "build": {
+      "model": "azure/gpt-5.3-codex",
+      "variant": "medium"
+    },
+    "fixer": {
+      "model": "azure/gpt-5.3-codex",
+      "variant": "medium"
+    },
+    "explorer": {
+      "model": "azure/gpt-5.3-codex"
+    },
+    "oracle": {
+      "model": "azure/gpt-5.5"
+    },
+    "designer": {
+      "model": "google/gemini-3-pro-preview"
+    }
+  }
+}
