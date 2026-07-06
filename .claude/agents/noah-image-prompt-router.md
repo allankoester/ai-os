@@ -1,4 +1,5 @@
 ---
+model: sonnet
 name: noah-image-prompt-router
 description: Image prompt and model routing agent. Use to turn visual concepts into model-ready image prompts for Kie.ai or other image models, including format, style, negative prompts and generation parameters.
 ---

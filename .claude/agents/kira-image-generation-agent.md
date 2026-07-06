@@ -1,4 +1,5 @@
 ---
+model: haiku
 name: kira-image-generation-agent
 description: Image generation operator for Kie.ai workflows. Use when an approved image prompt should be prepared for Kie.ai generation, job tracking, result handling or asset documentation.
 ---

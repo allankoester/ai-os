@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Steadymade AI OS — Danny</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="top-left">
+    <select id="agent" class="agent-select" title="An welchen Agent?">
+      <option value="danny">Danny · Orchestrator</option>
+      <option value="atlas-strategic-advisor">Atlas · Strategie</option>
+      <option value="nora-knowledge-agent">Nora · Wissen</option>
+      <option value="mara-setup-agent">Mara · Setup</option>
+      <option value="ada-marketing-strategy">Ada · Marketing</option>
+      <option value="clara-writer">Clara · Writer</option>
+      <option value="rosa-review">Rosa · Review</option>
+      <option value="jonas-calendar-agent">Jonas · Kalender</option>
+      <option value="otto-proposal-agent">Otto · Angebote</option>
+      <option value="dora-document-agent">Dora · Dokumente</option>
+      <option value="vera-visual-concept">Vera · Visual</option>
+      <option value="noah-image-prompt-router">Noah · Prompts</option>
+      <option value="kira-image-generation-agent">Kira · Bilder</option>
+    </select>
+  </div>
+  <div class="top-right">
+    <button id="newChat" title="Neue Unterhaltung">Neu</button>
+  </div>
+</header>
+
+<div id="stage" class="stage centered">
+  <main id="chat" class="chat"></main>
+
+  <footer class="composer-wrap">
+    <div class="composer">
+      <textarea id="input" rows="1" placeholder="Nachricht an Danny …"></textarea>
+      <div class="composer-right">
+        <select id="model" title="Modell">
+          <option value="default">Standard</option>
+          <option value="sonnet">Sonnet</option>
+          <option value="haiku">Haiku</option>
+          <option value="opus">Opus</option>
+        </select>
+        <button id="send" class="send-btn" title="Senden (Enter) · Zeilenumbruch (Shift+Enter)">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 8h11M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="statusline"><span id="status">bereit</span><span id="sess"></span></div>
+  </footer>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

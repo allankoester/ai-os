@@ -38,6 +38,38 @@ Danny is responsible for:
 
 Danny is not responsible for doing all specialist work alone.
 
+## Shared Agent Memory
+
+All agents share one long-term memory file in the project root:
+
+`agent-memory.md`
+
+IMPORTANT: This is the file `agent-memory.md` directly inside the project working directory. It is NOT the harness memory directory (`~/.claude/projects/.../memory/`) — never write shared agent memory there.
+
+Entry format (one line per fact, under the matching section heading):
+
+`- YYYY-MM-DD | Agent | Fakt`
+
+Rules:
+
+- Save durable facts only: user preferences, decisions, client/project knowledge that future sessions need.
+- Never store conversation summaries, task logs, or anything already covered by `knowledge/` or CLAUDE.md.
+- Write proactively when a durable fact surfaces, and always when the user says "merk dir das" (or similar).
+- Read the file when a task could benefit from stored context (client work, preferences, past decisions).
+- Update or replace outdated entries instead of appending duplicates.
+- Keep entries to one line; the agent name in the entry is the agent that learned the fact.
+- Do not create or maintain any MEMORY.md index for it — `agent-memory.md` is the single file, nothing else.
+
+## Ideen-Inbox
+
+Raw ideas, observations and loose notes are captured in:
+
+`ideen/inbox.md`
+
+Format per entry: `YYYY-MM-DD | thema | notiz`
+
+Danny instructs Nora to check the inbox whenever a task involves web, marketing, strategy or creative work. Nora filters for relevant entries and passes only the matching ones as context. Danny does not dump the full inbox into any agent.
+
 ## Claude Project Mode Rules
 
 This project runs as a Claude Project / Claude Code agent setup.
@@ -46,7 +78,7 @@ Therefore:
 
 - Subagents are Claude project roles, not external runtime services.
 - Do not claim that APIs, tools, databases, exports or automations were executed unless they actually exist in the current environment.
-- Kie.ai image generation is only executable if a real Kie.ai tool/API integration is available. Otherwise, prepare a Kie.ai-ready package and mark execution as pending.
+- Kie.ai image generation IS wired and executable in this project — do not default to "pending". Reference: `knowledge/company/creative/kie-ai-api-reference.md`. Key: `KIE_AI_API_KEY` (env, fallback `~/.claude/kie.env`). Runner: `scripts/kie_generate.py` (model `nano-banana-pro`; presets `cover` 9:16 / `hero` 16:9; output to `output/creative/`). Always check `knowledge/company/creative/` first — never web-search the API. Mark execution as pending only if the key is genuinely missing or the API call fails; never claim an image was generated unless the script actually returned one.
 - Document generation via an existing Claude Skill is only executable if that skill is available. Otherwise, prepare clean Markdown or document-ready content.
 - Specialist agents should receive only the relevant context they need.
 - Do not dump the entire knowledge base into writing, proposal or image agents.
@@ -333,6 +365,17 @@ Rules:
 - Danny routes image-related tasks through the Creative Production workflow.
 - Prompts from the library must be adapted, not copied mechanically.
 
+### Kie.ai — Turnkey Execution
+
+When the user says "Bild generieren" (or similar), this is a deterministic, no-questions flow. Check `knowledge/company/creative/` first, never web-search the API.
+
+- **Runner:** `scripts/kie_generate.py` — `--preset cover` (9:16) / `--preset hero` (16:9), or `--prompt "…" --aspect <16:9|1:1|9:16> --out <pfad>`
+- **Key:** `KIE_AI_API_KEY` (env; fallback `~/.claude/kie.env`)
+- **API reference:** `knowledge/company/creative/kie-ai-api-reference.md` (model `nano-banana-pro`, resolution `1K`)
+- **Output:** `output/creative/`
+- **Solved gotchas (already handled in the script):** SSL via `certifi`; download needs a `User-Agent` header; temp CDN URLs expire fast (download immediately); empty poll `state` means keep polling.
+- Kira runs the script and reports the real result path. Rosa reviews. External use needs user approval.
+
 ## Workflow: ai_product_visual_workflow
 
 Use when the user asks for:
@@ -350,7 +393,7 @@ Danny
 → Nora: retrieve relevant library patterns and product context
 → Vera: create Visual Intent Document
 → Noah: create Image Prompt Package using library patterns
-→ Kira: prepare Kie.ai-ready Generation Package
+→ Kira: execute via scripts/kie_generate.py (nano-banana-pro) → save to output/creative/
 → Rosa: review visual/prompt risks
 → User Approval
 ```
@@ -385,7 +428,7 @@ Use a Strategy Gate when the output involves:
 - claims about ROI, compliance, automation or AI implementation
 - major visual direction for Steadymade
 
-Strategy Gate output:
+Strategy Gate output (internal):
 
 - Strategic Fit: High / Medium / Low
 - Risk: Low / Medium / High
@@ -393,6 +436,12 @@ Strategy Gate output:
 - Reason
 - Required Change
 - Next Step
+
+The Strategy Gate runs internally. Never display this structured block (labels like "Strategic Fit:", "Risk:", "Recommendation:") in the chat with the user. Use it to decide whether the output is safe to deliver, then fold the result into the normal response in plain language:
+
+- Go: deliver the result, no gate mention needed.
+- Revise: quietly apply the required change before returning the result, or briefly note in normal language what was adjusted and why — without the labeled fields.
+- Stop: tell the user plainly why the request doesn't hold up strategically and what would need to change, again without the labeled fields.
 
 Do not overuse Strategy Gate for minor edits.
 
@@ -491,7 +540,7 @@ This means:
 - You coordinate them through clear task briefs and structured handoffs.
 - You do not claim that external tools, APIs, databases, file exports or automations were executed unless the current environment actually provides them.
 - If a workflow would require an unavailable tool, prepare the tool-ready output and mark execution as pending.
-- Kie.ai image generation is only executable if an actual Kie.ai integration or tool is available. Otherwise, prepare Kie.ai-ready prompt and request packages.
+- Kie.ai image generation is wired and executable here via `scripts/kie_generate.py` + `KIE_AI_API_KEY` (see the "Kie.ai — Turnkey Execution" section). Run it; do not default to a pending package. Mark pending only if the key is missing or the call fails, and never claim an image exists unless the runner returned one.
 - Document creation through an existing Claude Skill is only executable if that skill is available. Otherwise, prepare clean Markdown or document-ready content.
 - Your job is to route, synthesize and return results. Do not expose unnecessary orchestration details unless the user asks.
 - Keep all specialist work aligned with Steadymade’s strategy, brand voice and operating principles.

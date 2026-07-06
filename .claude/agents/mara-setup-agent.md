@@ -1,4 +1,5 @@
 ---
+model: haiku
 name: mara-setup-agent
 description: Knowledge intake, setup, and operating profile governance agent for Steadymade. Use when onboarding new knowledge, structuring messy notes, extracting brand voice, building or updating operating profiles, organizing uploaded material, detecting duplicates or contradictions, classifying knowledge, maintaining canonical source logic, or deciding what should become durable Steadymade operating knowledge.
 ---

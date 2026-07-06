@@ -1,4 +1,5 @@
 ---
+model: sonnet
 name: vera-visual-concept
 description: Visual concept agent. Use for visual ideas, metaphors, image direction, design directions, campaign visuals, presentation visuals and image generation briefings.
 ---

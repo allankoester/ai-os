@@ -1,4 +1,5 @@
 ---
+model: haiku
 name: jonas-calendar-agent
 description: Calendar and planning agent. Use for editorial planning, content scheduling, workflow timing, publication cadence, campaign calendars and planning approved artifacts.
 ---

@@ -11,6 +11,8 @@ const state = {
   view: 'command',
   selectedAgent: null,   // agent id selected on the map
   selectedFolder: null,  // folder name selected on the map
+  chatAgent: null,       // agent id to preset in the Chat iframe
+  chatDraft: null,       // draft text to preset in the Chat iframe
   kn: {
     folder: null,        // active folder key in Knowledge view
     doc: null,           // active doc path
@@ -20,14 +22,20 @@ const state = {
   },
 };
 
+// Shared agent memory (agent-memory.md at project root) — edited in the Memory view.
+const MEMORY_PATH = 'agent-memory.md';
+const mem = { loaded: false, content: '', savedContent: '', mode: 'edit' };
+
 const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 const VIEW_TITLES = {
+  chat: 'Chat',
   command: 'Command Center',
   map: 'Agent Map',
   knowledge: 'Knowledge Docs',
+  memory: 'Memory',
   workflows: 'Workflows',
   scheduler: 'Scheduler',
   skills: 'Skill Hub',
@@ -128,7 +136,7 @@ async function boot() {
 
 function bindChrome() {
   $$('#nav .nav-item').forEach((btn) =>
-    btn.addEventListener('click', () => setView(btn.dataset.view)));
+    btn.addEventListener('click', () => btn.dataset.view === 'chat' ? openChat(null) : setView(btn.dataset.view)));
 
   $('#btn-new-workflow').addEventListener('click', () => {
     setView('workflows');
@@ -162,6 +170,14 @@ function toggleFullscreen() {
   else document.documentElement.requestFullscreen().catch(() => toast('FULLSCREEN BLOCKED BY BROWSER', true));
 }
 
+// Open the Chat view, optionally preselecting an agent and/or prefilling the
+// composer. The preset is delivered to the chat iframe on the next render.
+function openChat(agentId, draftMessage) {
+  state.chatAgent = agentId || null;
+  state.chatDraft = draftMessage || null;
+  setView('chat');
+}
+
 function setView(view) {
   state.view = view;
   state.selectedAgent = state.selectedFolder = null;
@@ -170,9 +186,20 @@ function setView(view) {
   $('#view-title').textContent = VIEW_TITLES[view];
   closeDrawer();
   const el = $('#view');
+  const isChat = view === 'chat';
+  // The chat lives in a persistent sibling container (#chat-holder): hide/show
+  // instead of re-rendering, so switching views never kills a running conversation.
+  $('#chat-holder').classList.toggle('hidden', !isChat);
+  if (isChat) {
+    el.className = 'view hidden';
+    el.innerHTML = '';
+    renderChat();
+    return;
+  }
   el.className = 'view view-enter';
   el.innerHTML = '';
   ({ command: renderCommand, map: renderMap, knowledge: renderKnowledge,
+     memory: renderMemory,
      workflows: renderWorkflows, scheduler: renderScheduler, skills: renderSkills,
      departments: renderDepartments,
      artifacts: renderArtifacts, settings: renderSettings }[view])(el);
@@ -585,7 +612,8 @@ function openAgentDrawer(id) {
         <div id="agent-plugins-body" class="stat-note" style="white-space:normal">Loading plugins…</div>
       </div>` : ''}
       <div class="drawer-actions">
-        <button class="btn btn-green btn-small" data-act="open-prompt">Open prompt</button>
+        <button class="btn btn-green btn-small" data-act="chat-agent">Chat</button>
+        <button class="btn btn-small" data-act="open-prompt">Open prompt</button>
         <button class="btn btn-small" data-act="edit-prompt">Edit prompt</button>
         <button class="btn btn-small" data-act="view-knowledge">View connected knowledge</button>
         <button class="btn btn-small" data-act="test-task">Run test task</button>
@@ -595,13 +623,14 @@ function openAgentDrawer(id) {
   const d = $('#drawer');
   $$('[data-folder]', d).forEach((b) => b.addEventListener('click', () => { setView('knowledge'); selectKnFolder(b.dataset.folder); }));
   $$('[data-flow]', d).forEach((b) => b.addEventListener('click', () => setView('workflows')));
+  $('[data-act="chat-agent"]', d).addEventListener('click', () => { closeDrawer(); openChat(a.id); });
   $('[data-act="open-prompt"]', d).addEventListener('click', () => openInEditor(a.promptPath, 'preview'));
   $('[data-act="edit-prompt"]', d).addEventListener('click', () => openInEditor(a.promptPath, 'edit'));
   $('[data-act="view-knowledge"]', d).addEventListener('click', () => { closeDrawer(); if (state.view !== 'map') setView('map'); requestAnimationFrame(() => selectMapAgent(a.id)); });
   $('[data-act="test-task"]', d).addEventListener('click', () => {
-    const brief = `**Subagent:** ${a.name} — ${a.title}\n**Workflow Type:** ${a.workflows[0]}\n**Task:** <describe the test task>\n**Context:** <only the relevant context>\n**Required Output:** <expected format>`;
-    navigator.clipboard?.writeText(brief);
-    toast('TASK BRIEF COPIED — PASTE INTO CLAUDE (LIVE AGENT EXECUTION PENDING)', true);
+    const draft = `Test task: confirm your role and responsibilities in one short paragraph, then produce one small example deliverable that is typical for your role.`;
+    closeDrawer();
+    openChat(a.id, draft);
   });
   if (a.promptPath.startsWith('.claude/agents/')) fillAgentPlugins(a);
 }
@@ -2345,6 +2374,124 @@ function mdToHtml(src) {
   flushList();
   if (inCode) out.push('<pre><code>' + esc(codeBuf.join('\n')) + '</code></pre>');
   return fm + out.join('\n');
+}
+
+// ---------------------------------------------------------------- Memory
+
+function renderMemory(el) {
+  el.innerHTML = `<div class="kn-editor" style="height:100%"><div class="kn-editor-empty">Loading memory …</div></div>`;
+  (async () => {
+    if (!mem.loaded || mem.content === mem.savedContent) {
+      try {
+        const res = await (await fetch('/api/file?path=' + encodeURIComponent(MEMORY_PATH))).json();
+        mem.content = mem.savedContent = res.content;
+        mem.loaded = true;
+      } catch {
+        el.innerHTML = `<div class="kn-editor-empty">Could not load ${esc(MEMORY_PATH)}.</div>`;
+        return;
+      }
+    }
+    paintMemory(el);
+  })();
+}
+
+function paintMemory(el) {
+  const dirty = mem.content !== mem.savedContent;
+  const entries = (mem.content.match(/^- \d{4}-\d{2}-\d{2} \|/gm) || []).length;
+  el.innerHTML = `
+    <div class="kn-editor" style="height:100%">
+      <div class="kn-meta-bar">
+        <div class="kn-meta-top">
+          <div>
+            <div class="kn-doc-h">Agent Memory</div>
+            <div class="kn-path">${esc(MEMORY_PATH)} · shared by all agents · ${entries} ${entries === 1 ? 'entry' : 'entries'}</div>
+          </div>
+          <div class="kn-actions-row">
+            <span class="save-state ${dirty ? 'dirty' : ''}" id="mem-state">${dirty ? 'UNSAVED CHANGES' : 'SAVED'}</span>
+            <button class="btn btn-small" id="mem-mode">${mem.mode === 'edit' ? 'Preview' : 'Edit'}</button>
+            <button class="btn btn-green btn-small" id="mem-save">Save</button>
+          </div>
+        </div>
+      </div>
+      <div class="kn-edit-area">
+        ${mem.mode === 'edit'
+          ? `<textarea class="kn-textarea" id="mem-text" spellcheck="false">${esc(mem.content)}</textarea>`
+          : `<div class="kn-preview"><div class="md">${mdToHtml(mem.content)}</div></div>`}
+      </div>
+    </div>`;
+
+  $('#mem-mode', el).addEventListener('click', () => {
+    mem.mode = mem.mode === 'edit' ? 'preview' : 'edit';
+    paintMemory(el);
+  });
+  $('#mem-save', el).addEventListener('click', saveMemory);
+  const ta = $('#mem-text', el);
+  if (ta) ta.addEventListener('input', () => {
+    mem.content = ta.value;
+    const s = $('#mem-state', el);
+    const d = mem.content !== mem.savedContent;
+    s.textContent = d ? 'UNSAVED CHANGES' : 'SAVED';
+    s.classList.toggle('dirty', d);
+  });
+}
+
+async function saveMemory() {
+  const res = await fetch('/api/file', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: MEMORY_PATH, content: mem.content }),
+  });
+  if (res.ok) {
+    mem.savedContent = mem.content;
+    if (state.view === 'memory') paintMemory($('#view'));
+    toast('MEMORY SAVED TO DISK');
+  } else {
+    toast('SAVE FAILED', true);
+  }
+}
+
+// ---------------------------------------------------------------- Chat
+
+const CHAT_URL = `${location.protocol}//${location.hostname}:4012`;
+
+function chatSlug(a) {
+  if (a.id === 'danny') return 'danny';
+  const m = (a.promptPath || '').match(/([^/]+)\.md$/);
+  return m ? m[1] : a.id;
+}
+
+// The chat iframe is created once and kept alive in #chat-holder. Agent/draft
+// presets are delivered via postMessage; a preset that arrives before the
+// iframe reported ready is buffered and flushed on the ready signal.
+const chatFrameState = { frame: null, ready: false, pending: null };
+
+window.addEventListener('message', (e) => {
+  if (e.origin !== CHAT_URL || e.data?.type !== 'steadymade-chat-ready') return;
+  chatFrameState.ready = true;
+  if (chatFrameState.pending) {
+    chatFrameState.frame.contentWindow.postMessage(chatFrameState.pending, CHAT_URL);
+    chatFrameState.pending = null;
+  }
+});
+
+function renderChat() {
+  const holder = $('#chat-holder');
+  if (!chatFrameState.frame) {
+    const f = document.createElement('iframe');
+    f.className = 'chat-frame';
+    f.src = CHAT_URL;
+    f.title = 'Danny Chat';
+    f.allow = 'clipboard-write';
+    holder.appendChild(f);
+    chatFrameState.frame = f;
+  }
+  if (state.chatAgent || state.chatDraft) {
+    const a = state.chatAgent ? agentById(state.chatAgent) : null;
+    const msg = { type: 'steadymade-preset', agent: a ? chatSlug(a) : null, draft: state.chatDraft };
+    if (chatFrameState.ready) chatFrameState.frame.contentWindow.postMessage(msg, CHAT_URL);
+    else chatFrameState.pending = msg;
+    state.chatDraft = null; // one-shot: don't re-inject on next chat render
+  }
 }
 
 // ---------------------------------------------------------------- go

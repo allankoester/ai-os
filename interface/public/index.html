@@ -23,9 +23,11 @@
       </div>
 
       <nav class="sidebar-nav" id="nav">
+        <button class="nav-item" data-view="chat">Chat</button>
         <button class="nav-item active" data-view="command">Command Center</button>
         <button class="nav-item" data-view="map">Agent Map</button>
         <button class="nav-item" data-view="knowledge">Knowledge Docs</button>
+        <button class="nav-item" data-view="memory">Memory</button>
         <button class="nav-item" data-view="workflows">Workflows</button>
         <button class="nav-item" data-view="scheduler">Scheduler</button>
         <button class="nav-item" data-view="skills">Skill Hub</button>
@@ -63,6 +65,9 @@
       </header>
 
       <main id="view" class="view"></main>
+      <!-- persistent chat iframe: hidden on other views instead of destroyed,
+           so switching views never kills a running conversation -->
+      <div id="chat-holder" class="chat-holder hidden"></div>
     </div>
 
     <!-- ===== Right detail drawer (pushes layout, never overlays) ===== -->

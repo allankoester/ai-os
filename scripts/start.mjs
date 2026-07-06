@@ -125,14 +125,35 @@ async function main() {
     env,
   });
 
+  // Optionally start the Danny chat runtime (chat/server.mjs on 4012), which the
+  // interface embeds as an iframe in the Chat view. Skips cleanly if the file is
+  // missing or the port is busy — the rest of the interface works without it.
+  let chatChild = null;
+  const chatPort = Number(process.env.CHAT_PORT || 4012);
+  if (exists('chat/server.mjs')) {
+    if (await isPortFree(chatPort)) {
+      console.log(`Chat runtime: http://localhost:${chatPort}`);
+      chatChild = spawn(process.execPath, ['chat/server.mjs'], { cwd: ROOT, stdio: 'inherit', env });
+      chatChild.on('exit', (code, signal) => {
+        if (signal) console.error(`Chat runtime stopped by signal ${signal}.`);
+        else if (code) console.error(`Chat runtime exited with code ${code}.`);
+        chatChild = null;
+      });
+    } else {
+      console.log(`Chat runtime: port ${chatPort} in use — skipping (Chat view iframe will be empty).`);
+    }
+  }
+
   const forwardSignal = (signal) => {
     if (!child.killed) child.kill(signal);
+    if (chatChild && !chatChild.killed) chatChild.kill(signal);
   };
 
   process.on('SIGINT', () => forwardSignal('SIGINT'));
   process.on('SIGTERM', () => forwardSignal('SIGTERM'));
 
   child.on('exit', (code, signal) => {
+    if (chatChild && !chatChild.killed) chatChild.kill('SIGTERM');
     if (signal) {
       console.error(`Interface stopped by signal ${signal}.`);
       process.exit(1);
