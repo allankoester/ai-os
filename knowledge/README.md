@@ -1,7 +1,7 @@
 # Knowledge Folder Contract (Stage 1)
 
 This folder follows the staged AI-OS folder contract from
-`docs/ai-os-comparison-and-staged-concept.md`.
+`docs/reference/ai-os-comparison-and-staged-concept.md`.
 
 ```
 knowledge/
@@ -22,6 +22,17 @@ knowledge/
    `company/<domain>/` or advises moving it to `personal/`, then the inbox copy
    is removed.
 
+## What `inbox/` means
+
+`knowledge/inbox/` means temporary intake/staging for unsorted material.
+
+- It is not an email/message inbox.
+- It is not a task queue.
+- It is not a CRM system.
+
+If the name remains ambiguous for the team, a future dedicated migration can
+rename it to `knowledge/intake/`. For now, `knowledge/inbox/` stays canonical.
+
 ## Company domains
 
 | Folder | Content |
@@ -34,4 +45,4 @@ knowledge/
 | `company/creative/` | Image prompt library, Kie.ai reference |
 | `company/clients/` | Client notes (check data sensitivity before adding) |
 
-Naming conventions are defined in `docs/knowledge-sync-policy.md`.
+Naming conventions are defined in `docs/policy-knowledge-sync.md`.

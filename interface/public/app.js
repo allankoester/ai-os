@@ -1940,7 +1940,7 @@ function paintSettingsBody(el) {
       <div class="kv-row"><span>Knowledge format</span><span>Markdown on disk</span></div>
       <div class="kv-row"><span>Agents</span><span>${AGENTS.length} (Danny + ${AGENTS.length - 1} specialists)</span></div>
       <div class="kv-row"><span>Agent prompts</span><span>.claude/agents/*.md</span></div>
-      <div class="kv-row"><span>Orchestrator prompt</span><span>docs/danny-orchestrator-system-prompt.md</span></div>
+      <div class="kv-row"><span>Orchestrator prompt</span><span>CLAUDE.md</span></div>
     </div>
     <div class="card" data-section="project">
       <div class="section-title">Persistence</div>

@@ -79,7 +79,7 @@ verstanden, was fehlt?" Erst nach Bestätigung schreibst du Dateien.
    was Danny proaktiv tun/lassen soll, Verweis auf das Profil.
 3. `profiles/<user>.yml` — Vorschlag für core/optional/excluded auf Basis
    der Aufgaben; Änderung als Diff zeigen und auf den Review-Prozess
-   hinweisen (`docs/team-operations-runbook.md`), nicht eigenmächtig mergen.
+   hinweisen (`docs/runbook-team-operations.md`), nicht eigenmächtig mergen.
 
 ### Schritt 5 — Abschluss
 

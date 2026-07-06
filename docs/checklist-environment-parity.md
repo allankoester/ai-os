@@ -1,4 +1,4 @@
-# Environment Parity Checklist (Stage 2 → 3 gate)
+# Environment Parity Checklist
 
 Run per user machine. All boxes must be checked on **every** team machine
 before moving execution to a VM (Stage 3).
@@ -29,4 +29,4 @@ Machine: ____________  User: ____________  Date: __________
 
 - [ ] Backup created within the last 7 days (`scripts/backup.sh list`)
 - [ ] Restore tested at least once on this machine
-- [ ] User has read `docs/team-operations-runbook.md`
+- [ ] User has read `docs/runbook-team-operations.md`

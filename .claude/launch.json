@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ai-os-interface",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["interface/server.mjs"],
+      "port": 4011
+    }
+  ]
+}

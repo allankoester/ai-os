@@ -1,5 +1,8 @@
 # Agent Routing Guide
 
+Archived: active routing logic is maintained in `CLAUDE.md`.
+This file is kept for historical context only.
+
 ## Default Flow
 
 User → Danny → Subagent(s) → Danny → User

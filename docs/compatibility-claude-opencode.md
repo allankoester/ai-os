@@ -1,4 +1,4 @@
-# Claude-First Compatibility (Claude Code + OpenCode)
+# Claude/OpenCode Compatibility
 
 This project is intentionally Claude-first.
 

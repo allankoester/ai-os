@@ -12,11 +12,12 @@ Dieses Paket ist für einen reinen Claude-/Claude-Code-Workflow gedacht: Danny i
 
 Claude/OpenCode compatibility details (Claude-first, no app-local `AGENTS.md`):
 
-- `docs/claude-opencode-compatibility.md`
+- `docs/compatibility-claude-opencode.md`
+- `docs/status-and-roadmap.md`
 
 Cross-platform start/shutdown guide:
 
-- `docs/how-to-start.md`
+- `docs/guide-how-to-start.md`
 - `scripts/README.md`
 
 ## How to start
@@ -101,7 +102,7 @@ node scripts/start.mjs --check-only
 
 ## Struktur (Stage 1 + Stage 2)
 
-Umsetzung von Stage 1 (persönliches lokales AI-OS) und Stage 2 (kleines Team) aus `docs/ai-os-comparison-and-staged-concept.md`:
+Umsetzung von Stage 1 (persönliches lokales AI-OS) und Stage 2 (kleines Team) aus `docs/reference/ai-os-comparison-and-staged-concept.md`:
 
 - `knowledge/company/` — geteiltes Firmenwissen (in git)
 - `knowledge/personal/` — privates Wissen (nie in git, siehe `.gitignore`)
@@ -114,7 +115,7 @@ Umsetzung von Stage 1 (persönliches lokales AI-OS) und Stage 2 (kleines Team) a
 - `scripts/` — `validate.mjs` (CI-Check), `backup.sh` (Backup/Restore)
 - `docs/` — Onboarding, Sync-Policy, Runbook, Parity-Checkliste
 
-Onboarding für neue Nutzer: `docs/stage1-onboarding.md`
+Onboarding für neue Nutzer: `docs/runbook-stage1-onboarding.md`
 
 ## Prinzip
 

@@ -51,12 +51,14 @@ for (const f of [
   'scripts/start-windows.cmd',
   'scripts/stop-windows.cmd',
   'scripts/README.md',
-  'docs/stage1-onboarding.md',
-  'docs/how-to-start.md',
-  'docs/claude-opencode-compatibility.md',
-  'docs/knowledge-sync-policy.md',
-  'docs/team-operations-runbook.md',
-  'docs/environment-parity-checklist.md',
+  'docs/runbook-stage1-onboarding.md',
+  'docs/guide-how-to-start.md',
+  'docs/compatibility-claude-opencode.md',
+  'docs/status-and-roadmap.md',
+  'docs/policy-knowledge-sync.md',
+  'docs/runbook-team-operations.md',
+  'docs/checklist-environment-parity.md',
+  'docs/README.md',
   'profiles/_template.yml',
   'knowledge/README.md',
   'knowledge/company/operating-profile.md',
@@ -114,7 +116,7 @@ for (const f of agentFiles) {
 
 // no stale pre-contract knowledge paths in instructions
 const OLD_PATH = /knowledge\/(?!company\/|personal\/|inbox\/|README)[A-Za-z]/;
-for (const f of ['CLAUDE.md', 'docs/danny-orchestrator-system-prompt.md', ...agentFiles.map((a) => `.claude/agents/${a}`)]) {
+for (const f of ['CLAUDE.md', ...agentFiles.map((a) => `.claude/agents/${a}`)]) {
   if (!exists(f)) continue;
   check(`no stale knowledge paths in ${f}`, !OLD_PATH.test(read(f)));
 }

@@ -1,5 +1,7 @@
 # Cockpit Best Practices Integration Plan (Claude-first, staged)
 
+Archived and superseded by `docs/reference/stage4-runtime-integration-plan.md`.
+
 ## Objective
 
 Integrate the strongest Cockpit AI-OS runtime practices into Steadymade AI-OS while preserving the staged rollout model:

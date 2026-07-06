@@ -174,8 +174,8 @@ async function getSystem() {
   // Knowledge folders + docs
   system.folders = await knowledgeStorage.listFolders();
 
-  // Core docs (Danny prompt, routing, CLAUDE.md, personal instructions if present)
-  for (const rel of ['docs/danny-orchestrator-system-prompt.md', 'docs/agent-routing.md', 'CLAUDE.md', 'CLAUDE.local.md', 'README.md']) {
+  // Core docs (active project instructions and key indexes)
+  for (const rel of ['CLAUDE.md', 'CLAUDE.local.md', 'README.md', 'docs/README.md', 'docs/status-and-roadmap.md']) {
     const abs = path.join(ROOT, rel);
     if (fs.existsSync(abs)) system.docs.push(await fileEntry(abs));
   }

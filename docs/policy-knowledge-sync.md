@@ -1,4 +1,4 @@
-# Knowledge Sync Policy and Naming Conventions (Stage 2)
+# Knowledge Sync Policy
 
 Applies to `knowledge/company/` shared across 2–3 users. Personal knowledge
 (`knowledge/personal/`) is never synced and is out of scope here.
@@ -51,5 +51,16 @@ development/operating knowledge (see repo-level instructions).
 
 1. New/changed material lands in `knowledge/inbox/` or directly in a branch.
 2. Mara classifies, checks duplicates/contradictions, proposes target path.
-3. Review per `docs/team-operations-runbook.md` (PR or explicit team OK).
+3. Review per `docs/runbook-team-operations.md` (PR or explicit team OK).
 4. Merged/synced → other users pull; `node scripts/validate.mjs` must pass.
+
+## Intake folder meaning
+
+`knowledge/inbox/` is a temporary intake/staging area for unsorted material.
+
+- Not a source of truth
+- Not a task queue
+- Not a CRM inbox
+
+Material in `knowledge/inbox/` must be classified into canonical locations or
+discarded after review.

@@ -54,7 +54,7 @@ Therefore:
 ## Stage 1/2 Operating Foundations
 
 This project implements Stage 1 (personal local AI-OS) and Stage 2 (small team)
-of `docs/ai-os-comparison-and-staged-concept.md`.
+of `docs/reference/ai-os-comparison-and-staged-concept.md`.
 
 ### Knowledge folder contract
 
@@ -130,8 +130,8 @@ and explicit user approval. Jobs run only while the interface server runs.
 ### Team model (Stage 2)
 
 - Software and instructions are distributed through this git repository;
-  changes follow `docs/team-operations-runbook.md`.
-- Shared knowledge sync and naming conventions: `docs/knowledge-sync-policy.md`.
+  changes follow `docs/runbook-team-operations.md`.
+- Shared knowledge sync and naming conventions: `docs/policy-knowledge-sync.md`.
 - Each user has a skills profile in `profiles/<user>.yml` (core + optional +
   excluded agents/skills). Danny must respect the active user's profile and not
   route to excluded agents.

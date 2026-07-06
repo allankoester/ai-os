@@ -79,7 +79,7 @@ Fehlt der Verweis, füge ihn ein — ohne Bestehendes zu zerstören.
 Zeig den Diff (`git diff -- "knowledge/company/operating-profile.md"`), fasse
 zusammen, welche Abschnitte gefüllt wurden und welche TODOs bewusst offen
 bleiben. Änderungen laufen über den normalen Review-Prozess
-(`docs/team-operations-runbook.md`) — committe nur nach Freigabe des Users.
+(`docs/runbook-team-operations.md`) — committe nur nach Freigabe des Users.
 
 ## Referenzen
 

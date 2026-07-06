@@ -14,7 +14,7 @@ Rules:
 1. Every agent in `.claude/agents/` must appear in exactly one of the three
    lists (checked by `scripts/validate.mjs`).
 2. Profiles are shared team configuration — committed to git and changed via
-   the normal review process (`docs/team-operations-runbook.md`).
+   the normal review process (`docs/runbook-team-operations.md`).
 3. Danny reads the active user's profile and never routes to excluded agents.
 4. Private/personal skills that are not part of the company setup do not
    belong here — they stay in the user's local environment.

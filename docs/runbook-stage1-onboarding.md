@@ -1,4 +1,4 @@
-# Stage 1 Onboarding — Personal Local AI-OS
+# Stage 1 Onboarding Runbook
 
 Reproducible setup for one user on one machine. Target time: under 15 minutes.
 

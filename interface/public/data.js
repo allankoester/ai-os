@@ -22,7 +22,7 @@ const AGENTS = [
   {
     id: 'danny', name: 'Danny', title: 'Orchestrator', dept: 'core',
     role: 'Central interface. Routes requests, coordinates agents, retrieves context, manages review and approval.',
-    promptPath: 'docs/danny-orchestrator-system-prompt.md',
+    promptPath: 'CLAUDE.md',
     status: 'active',
     access: ['inbox', 'company/strategy', 'company/steadymade Docs', 'company/offers', 'company/marketing', 'company/documents', 'company/creative', 'company/clients'],
     workflows: ['strategy_review', 'marketing_content', 'proposal', 'document', 'creative_image', 'knowledge_intake'],

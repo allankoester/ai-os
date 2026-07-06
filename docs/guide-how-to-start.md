@@ -1,4 +1,4 @@
-# How To Start (Mac + Windows)
+# Start and Stop Guide
 
 Use the scripts in `scripts/` to validate setup and run the interface in a
 known initial local state.

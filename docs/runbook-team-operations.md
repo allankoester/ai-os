@@ -1,7 +1,7 @@
-# Team Operations Runbook (Stage 2)
+# Team Operations Runbook
 
 For a 2–3 person team running the AI-OS locally, sharing software via git and
-company knowledge per `docs/knowledge-sync-policy.md`.
+company knowledge per `docs/policy-knowledge-sync.md`.
 
 ## Change management
 
@@ -11,12 +11,15 @@ Everything under version control follows one simple flow:
 2. Make the change: agents (`.claude/agents/`), instructions (`CLAUDE.md`),
    templates, profiles, interface code, company knowledge.
 3. Run `node scripts/validate.mjs` — must pass.
-4. Open a PR. Reviewer requirements:
-   - agent/instruction changes → one other team member
-   - strategy-relevant knowledge (offers, pricing, positioning, SSOT docs) →
-     Allan or the strategy owner (this is the human Strategy Gate)
-   - pure typo/format fixes → self-merge allowed, mention in team channel
-5. Merge → everyone pulls at the start of their next working session.
+4. If the change affects implementation status, runtime behavior, stage/phase
+   progress, or folder contracts, update
+   `docs/status-and-roadmap.md` in the same change.
+5. Open a PR. Reviewer requirements:
+    - agent/instruction changes → one other team member
+    - strategy-relevant knowledge (offers, pricing, positioning, SSOT docs) →
+      Allan or the strategy owner (this is the human Strategy Gate)
+    - pure typo/format fixes → self-merge allowed, mention in team channel
+6. Merge → everyone pulls at the start of their next working session.
 
 Versioning rule: never edit another user's profile or a canonical SSOT doc
 without review.
@@ -48,5 +51,5 @@ runbook updates.
 - Start of session: `git pull`, restart interface if it was running.
 - Weekly (or per sprint): review open inbox items, prune stale drafts,
   create a backup (`scripts/backup.sh backup`).
-- Before onboarding a new user: run through `docs/stage1-onboarding.md`
+- Before onboarding a new user: run through `docs/runbook-stage1-onboarding.md`
   yourself once — it must still be reproducible (Stage 1 → 2 gate).
