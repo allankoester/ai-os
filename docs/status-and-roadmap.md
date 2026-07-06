@@ -42,6 +42,15 @@ the same change set.
 - Canonical-source policy is documented in `docs/policy-knowledge-sync.md`
 - Onboarding and team operations runbooks are implemented in docs
 - Validation checks enforce key Stage 1/2 contracts via `scripts/validate.mjs`
+- OneDrive knowledge audit and migration planning (Phases 1-3) are implemented:
+  - audit: `docs/audit-knowledge-onedrive-2026-07-06.md`
+  - structure recommendation: `docs/ai-os-knowledge-structure-recommendation-2026-07-06.md`
+  - development plan: `docs/ai-os-development-plan-2026-07-06.md`
+  - migration plan: `docs/ai-os-migration-plan-2026-07-06.md`
+  - dry-run inventory: `docs/onedrive-migration-inventory-2026-07-06.json`
+- Canonical OneDrive root scaffold created:
+  - `SteadyMade.ai - General/AI_OS_Knowledge/`
+  - subfolders: `company/`, `team/`, `inbox/`, `archive/`, `_attachments/`
 
 ### Skills and agent model
 
@@ -78,6 +87,14 @@ Roadmap baseline references:
 | 3 | OpenClaw personal assistant integration | planned | Personal assistant layer with governed access to company knowledge |
 | 4 | VM execution runtime and common harness | planned | Runtime migration not active yet; target SQLite-backed scheduler harness |
 | 5 | Enterprise connectors/policy | planned | Not implemented |
+
+### OneDrive knowledge migration status
+
+- Phase 1 (docs and decision lock): implemented
+- Phase 2 (OneDrive root scaffold and path alignment): implemented
+- Phase 3 (dry-run migration inventory): implemented
+- Phase 4 (copy-first migration execution): planned
+- Phase 5 (canonical switch and stabilization): planned
 
 ### Planned runtime shift for Stage 4
 
@@ -154,6 +171,8 @@ duplicate.
 7. Run scheduler parity tests against the current JSON behavior.
 8. Add basic health/usage diagnostics for scheduler runs.
 9. Update the Stage 4 readiness checklist after the SQLite harness is stable.
+10. Execute OneDrive migration Phase 4 with approved exception list.
+11. Run OneDrive canonical switch verification (Phase 5).
 
 ## Update Rules
 

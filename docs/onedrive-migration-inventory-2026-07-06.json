@@ -1,0 +1,1477 @@
+{
+  "generated_on": "2026-07-06",
+  "source_root": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General",
+  "target_root_recommendation": "SteadyMade.ai - General/AI_OS_Knowledge",
+  "scope_note": "AI_OS_Knowledge target scaffold and system folders are excluded from this legacy-source inventory.",
+  "summary": {
+    "file_count": 199,
+    "extensions": {
+      ".md": 48,
+      "[no_ext]": 36,
+      ".png": 24,
+      ".pdf": 18,
+      ".mjs": 14,
+      ".html": 8,
+      ".pptx": 8,
+      ".jpg": 7,
+      ".mp4": 5,
+      ".xlsx": 5,
+      ".docx": 4,
+      ".sh": 3,
+      ".eml": 2,
+      ".service": 2,
+      ".json": 2,
+      ".rtf": 2,
+      ".mov": 1,
+      ".zip": 1,
+      ".js": 1,
+      ".ttf": 1,
+      ".css": 1,
+      ".conf": 1,
+      ".py": 1,
+      ".loop": 1,
+      ".url": 1,
+      ".base": 1,
+      ".whiteboard": 1
+    },
+    "classifications": {
+      "migrate_as_attachment_with_index": 56,
+      "migrate_markdown_source": 40,
+      "manual_review": 40,
+      "exclude_system": 32,
+      "review_sensitive": 14,
+      "triage_inbox": 14,
+      "convert_to_markdown_summary_with_attachment": 3
+    }
+  },
+  "rules": {
+    "exclude_system": [
+      ".obsidian/",
+      ".trash/",
+      ".DS_Store",
+      ".849C9593-D756-4E56-8D6E-42412F2A707B",
+      "AI_OS_Knowledge/"
+    ],
+    "review_sensitive": [
+      "04_Finance_&_Legal/",
+      "02_Sales_&_Pipeline/02_Opportunities/",
+      "Microsoft Planner/",
+      "98_XChange/"
+    ],
+    "attachment_only": [
+      ".pdf",
+      ".pptx",
+      ".xlsx",
+      ".docx",
+      ".zip",
+      ".png",
+      ".jpg",
+      ".jpeg",
+      ".mp4",
+      ".mov",
+      ".whiteboard",
+      ".loop",
+      ".base",
+      ".url",
+      ".eml"
+    ],
+    "markdown_source": [
+      ".md"
+    ]
+  },
+  "items": [
+    {
+      "path": ".849C9593-D756-4E56-8D6E-42412F2A707B",
+      "top_folder": "[root]",
+      "extension": "[no_ext]",
+      "size_bytes": 63,
+      "classification": "exclude_system"
+    },
+    {
+      "path": ".DS_Store",
+      "top_folder": "[root]",
+      "extension": "[no_ext]",
+      "size_bytes": 18436,
+      "classification": "exclude_system"
+    },
+    {
+      "path": "01_Strategy_&_Company/.DS_Store",
+      "top_folder": "01_Strategy_&_Company",
+      "extension": "[no_ext]",
+      "size_bytes": 12292,
+      "classification": "exclude_system"
+    },
+    {
+      "path": "01_Strategy_&_Company/01_Registration_&_Legal/SteadyMade & SMAPAS Signature.docx",
+      "top_folder": "01_Strategy_&_Company",
+      "extension": ".docx",
+      "size_bytes": 35319,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "01_Strategy_&_Company/02_Strategy/.DS_Store",
+      "top_folder": "01_Strategy_&_Company",
+      "extension": "[no_ext]",
+      "size_bytes": 6148,
+      "classification": "exclude_system"
+    },
+    {
+      "path": "01_Strategy_&_Company/02_Strategy/BAFA KMU Beratung/Anmeldung - BAFA & Pru\u0308fung bei Beratunsgabschluss.md",
+      "top_folder": "01_Strategy_&_Company",
+      "extension": ".md",
+      "size_bytes": 11947,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "01_Strategy_&_Company/02_Strategy/BAFA KMU Beratung/Beratungs- und Angebotskonzept.md",
+      "top_folder": "01_Strategy_&_Company",
+      "extension": ".md",
+      "size_bytes": 5606,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "01_Strategy_&_Company/02_Strategy/BAFA KMU Beratung/KI-Beratungsangebote fu\u0308r KMU (BAFA-konforme Pakete.md",
+      "top_folder": "01_Strategy_&_Company",
+      "extension": ".md",
+      "size_bytes": 4763,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "01_Strategy_&_Company/02_Strategy/BAFA KMU Beratung/Website - Angebotsstatement.md",
+      "top_folder": "01_Strategy_&_Company",
+      "extension": ".md",
+      "size_bytes": 612,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "01_Strategy_&_Company/04_Brand_&_Design/.DS_Store",
+      "top_folder": "01_Strategy_&_Company",
+      "extension": "[no_ext]",
+      "size_bytes": 10244,
+      "classification": "exclude_system"
+    },
+    {
+      "path": "01_Strategy_&_Company/04_Brand_&_Design/Assets/Steadymade2 Intro Video.mp4",
+      "top_folder": "01_Strategy_&_Company",
+      "extension": ".mp4",
+      "size_bytes": 105673990,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "01_Strategy_&_Company/04_Brand_&_Design/Design_Guide/Design System - SMAPAS v2.html",
+      "top_folder": "01_Strategy_&_Company",
+      "extension": ".html",
+      "size_bytes": 177802,
+      "classification": "manual_review"
+    },
+    {
+      "path": "01_Strategy_&_Company/04_Brand_&_Design/Design_Guide/Design System.html",
+      "top_folder": "01_Strategy_&_Company",
+      "extension": ".html",
+      "size_bytes": 180141,
+      "classification": "manual_review"
+    },
+    {
+      "path": "01_Strategy_&_Company/04_Brand_&_Design/Design_Guide/Product Landing.html",
+      "top_folder": "01_Strategy_&_Company",
+      "extension": ".html",
+      "size_bytes": 41609,
+      "classification": "manual_review"
+    },
+    {
+      "path": "01_Strategy_&_Company/04_Brand_&_Design/Design_Guide/Steadymade Design System _v2.html",
+      "top_folder": "01_Strategy_&_Company",
+      "extension": ".html",
+      "size_bytes": 449745,
+      "classification": "manual_review"
+    },
+    {
+      "path": "01_Strategy_&_Company/04_Brand_&_Design/Design_Guide/Steadymade design.md",
+      "top_folder": "01_Strategy_&_Company",
+      "extension": ".md",
+      "size_bytes": 14262,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "01_Strategy_&_Company/04_Brand_&_Design/Teams BG/.DS_Store",
+      "top_folder": "01_Strategy_&_Company",
+      "extension": "[no_ext]",
+      "size_bytes": 6148,
+      "classification": "exclude_system"
+    },
+    {
+      "path": "01_Strategy_&_Company/04_Brand_&_Design/Teams BG/steadymade teams BG.jpg",
+      "top_folder": "01_Strategy_&_Company",
+      "extension": ".jpg",
+      "size_bytes": 222494,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "01_Strategy_&_Company/README.md",
+      "top_folder": "01_Strategy_&_Company",
+      "extension": ".md",
+      "size_bytes": 471,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "02_Sales_&_Pipeline/.DS_Store",
+      "top_folder": "02_Sales_&_Pipeline",
+      "extension": "[no_ext]",
+      "size_bytes": 10244,
+      "classification": "exclude_system"
+    },
+    {
+      "path": "02_Sales_&_Pipeline/01_Leads/.DS_Store",
+      "top_folder": "02_Sales_&_Pipeline",
+      "extension": "[no_ext]",
+      "size_bytes": 6148,
+      "classification": "exclude_system"
+    },
+    {
+      "path": "02_Sales_&_Pipeline/02_Opportunities/.DS_Store",
+      "top_folder": "02_Sales_&_Pipeline",
+      "extension": "[no_ext]",
+      "size_bytes": 8196,
+      "classification": "exclude_system"
+    },
+    {
+      "path": "02_Sales_&_Pipeline/02_Opportunities/4p Consulting/Typical Agent and Assitant Projects Langdock Screen Recording 2026-06-03 at 07.08.25.mov",
+      "top_folder": "02_Sales_&_Pipeline",
+      "extension": ".mov",
+      "size_bytes": 218872023,
+      "classification": "review_sensitive"
+    },
+    {
+      "path": "02_Sales_&_Pipeline/02_Opportunities/CGKi Training Consulting/AW_ Fragen zu mo\u0308glicher Zusammenarbeit.eml",
+      "top_folder": "02_Sales_&_Pipeline",
+      "extension": ".eml",
+      "size_bytes": 520822,
+      "classification": "review_sensitive"
+    },
+    {
+      "path": "02_Sales_&_Pipeline/02_Opportunities/CGKi Training Consulting/Fragebogen_Copilot_Potenzialanalyse_Entwurf.pdf",
+      "top_folder": "02_Sales_&_Pipeline",
+      "extension": ".pdf",
+      "size_bytes": 178373,
+      "classification": "review_sensitive"
+    },
+    {
+      "path": "02_Sales_&_Pipeline/02_Opportunities/NDR/.DS_Store",
+      "top_folder": "02_Sales_&_Pipeline",
+      "extension": "[no_ext]",
+      "size_bytes": 10244,
+      "classification": "exclude_system"
+    },
+    {
+      "path": "02_Sales_&_Pipeline/02_Opportunities/NDR/Moring Briefing MS Copilot/Angebot.md",
+      "top_folder": "02_Sales_&_Pipeline",
+      "extension": ".md",
+      "size_bytes": 6237,
+      "classification": "review_sensitive"
+    },
+    {
+      "path": "02_Sales_&_Pipeline/02_Opportunities/NDR/Moring Briefing MS Copilot/MS Copilot Morning Briefing Option1 - Sheduled Agent.png",
+      "top_folder": "02_Sales_&_Pipeline",
+      "extension": ".png",
+      "size_bytes": 123314,
+      "classification": "review_sensitive"
+    },
+    {
+      "path": "02_Sales_&_Pipeline/02_Opportunities/NDR/Moring Briefing MS Copilot/MS Copilot Morning Briefing Option2 - Custom Agent.png",
+      "top_folder": "02_Sales_&_Pipeline",
+      "extension": ".png",
+      "size_bytes": 474215,
+      "classification": "review_sensitive"
+    },
+    {
+      "path": "02_Sales_&_Pipeline/02_Opportunities/NDR/Moring Briefing MS Copilot/MS Morning Briefing Samples.md",
+      "top_folder": "02_Sales_&_Pipeline",
+      "extension": ".md",
+      "size_bytes": 13801,
+      "classification": "review_sensitive"
+    },
+    {
+      "path": "02_Sales_&_Pipeline/02_Opportunities/NDR/Moring Briefing MS Copilot/Prompt Quality Analysis & Version History.md",
+      "top_folder": "02_Sales_&_Pipeline",
+      "extension": ".md",
+      "size_bytes": 11085,
+      "classification": "review_sensitive"
+    },
+    {
+      "path": "02_Sales_&_Pipeline/02_Opportunities/NDR/Newsletter Projekt/Angebot - Jahresabonnement \u2013 Automatisierte Newsletter\u2011Plattform.md",
+      "top_folder": "02_Sales_&_Pipeline",
+      "extension": ".md",
+      "size_bytes": 3365,
+      "classification": "review_sensitive"
+    },
+    {
+      "path": "02_Sales_&_Pipeline/02_Opportunities/NDR/Newsletter Projekt/PROJEKTBESCHREIBUNG.md",
+      "top_folder": "02_Sales_&_Pipeline",
+      "extension": ".md",
+      "size_bytes": 2872,
+      "classification": "review_sensitive"
+    },
+    {
+      "path": "02_Sales_&_Pipeline/02_Opportunities/NDR/Newsletter Projekt/SPEC.md",
+      "top_folder": "02_Sales_&_Pipeline",
+      "extension": ".md",
+      "size_bytes": 32498,
+      "classification": "review_sensitive"
+    },
+    {
+      "path": "02_Sales_&_Pipeline/README.md",
+      "top_folder": "02_Sales_&_Pipeline",
+      "extension": ".md",
+      "size_bytes": 419,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "03_Projects/.DS_Store",
+      "top_folder": "03_Projects",
+      "extension": "[no_ext]",
+      "size_bytes": 10244,
+      "classification": "exclude_system"
+    },
+    {
+      "path": "03_Projects/00_Internal/.DS_Store",
+      "top_folder": "03_Projects",
+      "extension": "[no_ext]",
+      "size_bytes": 8196,
+      "classification": "exclude_system"
+    },
+    {
+      "path": "03_Projects/00_Internal/STD_Handbook_AI-Compliance_and_Deployment.md",
+      "top_folder": "03_Projects",
+      "extension": ".md",
+      "size_bytes": 40699,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "03_Projects/00_Internal/STD_Handbook_AI-Compliance_and_Deployment_GER.md",
+      "top_folder": "03_Projects",
+      "extension": ".md",
+      "size_bytes": 42766,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "03_Projects/00_Internal/ai-first-agency-blueprint alias",
+      "top_folder": "03_Projects",
+      "extension": "[no_ext]",
+      "size_bytes": 956,
+      "classification": "manual_review"
+    },
+    {
+      "path": "03_Projects/00_Internal/steadymade-master alias",
+      "top_folder": "03_Projects",
+      "extension": "[no_ext]",
+      "size_bytes": 896,
+      "classification": "manual_review"
+    },
+    {
+      "path": "03_Projects/01_Active/NDR Newsletter.zip",
+      "top_folder": "03_Projects",
+      "extension": ".zip",
+      "size_bytes": 1490493,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "03_Projects/README.md",
+      "top_folder": "03_Projects",
+      "extension": ".md",
+      "size_bytes": 413,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "04_Finance_&_Legal/.DS_Store",
+      "top_folder": "04_Finance_&_Legal",
+      "extension": "[no_ext]",
+      "size_bytes": 8196,
+      "classification": "exclude_system"
+    },
+    {
+      "path": "04_Finance_&_Legal/03_Contracts/.DS_Store",
+      "top_folder": "04_Finance_&_Legal",
+      "extension": "[no_ext]",
+      "size_bytes": 8196,
+      "classification": "exclude_system"
+    },
+    {
+      "path": "04_Finance_&_Legal/03_Contracts/Partners/.DS_Store",
+      "top_folder": "04_Finance_&_Legal",
+      "extension": "[no_ext]",
+      "size_bytes": 6148,
+      "classification": "exclude_system"
+    },
+    {
+      "path": "04_Finance_&_Legal/03_Contracts/Partners/4P Consulting/20260603_AVV Steadymade AI_V01.pdf",
+      "top_folder": "04_Finance_&_Legal",
+      "extension": ".pdf",
+      "size_bytes": 538936,
+      "classification": "review_sensitive"
+    },
+    {
+      "path": "04_Finance_&_Legal/README.md",
+      "top_folder": "04_Finance_&_Legal",
+      "extension": ".md",
+      "size_bytes": 426,
+      "classification": "review_sensitive"
+    },
+    {
+      "path": "05_Marketing_&_Content/.DS_Store",
+      "top_folder": "05_Marketing_&_Content",
+      "extension": "[no_ext]",
+      "size_bytes": 10244,
+      "classification": "exclude_system"
+    },
+    {
+      "path": "05_Marketing_&_Content/01_Presentations/SMAPAS_Pitch_Deck.pptx",
+      "top_folder": "05_Marketing_&_Content",
+      "extension": ".pptx",
+      "size_bytes": 379995,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "05_Marketing_&_Content/03_Social_Media/.DS_Store",
+      "top_folder": "05_Marketing_&_Content",
+      "extension": "[no_ext]",
+      "size_bytes": 6148,
+      "classification": "exclude_system"
+    },
+    {
+      "path": "05_Marketing_&_Content/03_Social_Media/Post Ideas/.DS_Store",
+      "top_folder": "05_Marketing_&_Content",
+      "extension": "[no_ext]",
+      "size_bytes": 6148,
+      "classification": "exclude_system"
+    },
+    {
+      "path": "05_Marketing_&_Content/03_Social_Media/Post Ideas/How We Work - OpenCode MultiAgent Development/AI Agent Development with Enhanced Planning  UI.png",
+      "top_folder": "05_Marketing_&_Content",
+      "extension": ".png",
+      "size_bytes": 529073,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "05_Marketing_&_Content/03_Social_Media/Post Ideas/How We Work - OpenCode MultiAgent Development/OpenCode - Smaple Multiagent Development.png",
+      "top_folder": "05_Marketing_&_Content",
+      "extension": ".png",
+      "size_bytes": 118581,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "05_Marketing_&_Content/03_Social_Media/Post Ideas/How We Work - OpenCode MultiAgent Development/Screenshot 2026-07-02 at 13.00.22.png",
+      "top_folder": "05_Marketing_&_Content",
+      "extension": ".png",
+      "size_bytes": 118650,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "05_Marketing_&_Content/04_Flyer_&_Infographics/.DS_Store",
+      "top_folder": "05_Marketing_&_Content",
+      "extension": "[no_ext]",
+      "size_bytes": 8196,
+      "classification": "exclude_system"
+    },
+    {
+      "path": "05_Marketing_&_Content/04_Flyer_&_Infographics/5 Stage Vlaue Driven AI Startegy v1.jpg",
+      "top_folder": "05_Marketing_&_Content",
+      "extension": ".jpg",
+      "size_bytes": 459485,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "05_Marketing_&_Content/04_Flyer_&_Infographics/5 Stage Vlaue Driven AI Startegy v2.png",
+      "top_folder": "05_Marketing_&_Content",
+      "extension": ".png",
+      "size_bytes": 1427721,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "05_Marketing_&_Content/04_Flyer_&_Infographics/5 Stage Vlaue Driven AI Startegy v3.png",
+      "top_folder": "05_Marketing_&_Content",
+      "extension": ".png",
+      "size_bytes": 965728,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "05_Marketing_&_Content/04_Flyer_&_Infographics/5 Stage Vlaue Driven AI Startegy v4.png",
+      "top_folder": "05_Marketing_&_Content",
+      "extension": ".png",
+      "size_bytes": 977055,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "05_Marketing_&_Content/04_Flyer_&_Infographics/Archive/.DS_Store",
+      "top_folder": "05_Marketing_&_Content",
+      "extension": "[no_ext]",
+      "size_bytes": 6148,
+      "classification": "exclude_system"
+    },
+    {
+      "path": "05_Marketing_&_Content/04_Flyer_&_Infographics/Archive/DESIGN-7436-Build-Your-AI-Strategy-Blueprint-1920x1080_distro.jpg",
+      "top_folder": "05_Marketing_&_Content",
+      "extension": ".jpg",
+      "size_bytes": 265627,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "05_Marketing_&_Content/04_Flyer_&_Infographics/Build-Your-Generative-AI-Roadmap.jpg",
+      "top_folder": "05_Marketing_&_Content",
+      "extension": ".jpg",
+      "size_bytes": 405940,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "05_Marketing_&_Content/04_Flyer_&_Infographics/ChatGPT Image 17. Mai 2026, 12_27_22.png",
+      "top_folder": "05_Marketing_&_Content",
+      "extension": ".png",
+      "size_bytes": 1380741,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "05_Marketing_&_Content/04_Flyer_&_Infographics/Exponential_IT_Thought_Model_1220w_original.png",
+      "top_folder": "05_Marketing_&_Content",
+      "extension": ".png",
+      "size_bytes": 1021841,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "05_Marketing_&_Content/04_Flyer_&_Infographics/Screenshot 2026-05-15 at 11.57.16.png",
+      "top_folder": "05_Marketing_&_Content",
+      "extension": ".png",
+      "size_bytes": 2216586,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "05_Marketing_&_Content/README.md",
+      "top_folder": "05_Marketing_&_Content",
+      "extension": ".md",
+      "size_bytes": 452,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "98_XChange/.DS_Store",
+      "top_folder": "98_XChange",
+      "extension": "[no_ext]",
+      "size_bytes": 6148,
+      "classification": "exclude_system"
+    },
+    {
+      "path": "98_XChange/AI-OS/.DS_Store",
+      "top_folder": "98_XChange",
+      "extension": "[no_ext]",
+      "size_bytes": 8196,
+      "classification": "exclude_system"
+    },
+    {
+      "path": "98_XChange/AI-OS/AI-OS Training Provision Model with Shafred Ressources and Individual Sandboxes Mermaid-preview.png",
+      "top_folder": "98_XChange",
+      "extension": ".png",
+      "size_bytes": 304330,
+      "classification": "triage_inbox"
+    },
+    {
+      "path": "98_XChange/AI-OS/Claude Concepts/Screenshot 2026-06-25 at 10.16.29.png",
+      "top_folder": "98_XChange",
+      "extension": ".png",
+      "size_bytes": 279211,
+      "classification": "triage_inbox"
+    },
+    {
+      "path": "98_XChange/AI-OS/How To Plan - small helper Planetor.png",
+      "top_folder": "98_XChange",
+      "extension": ".png",
+      "size_bytes": 204471,
+      "classification": "triage_inbox"
+    },
+    {
+      "path": "98_XChange/AI-OS/M365 Personal Assistant Sample.PNG",
+      "top_folder": "98_XChange",
+      "extension": ".png",
+      "size_bytes": 250187,
+      "classification": "triage_inbox"
+    },
+    {
+      "path": "98_XChange/AI-OS/OpenClaw Concept/IMG_7271.jpg",
+      "top_folder": "98_XChange",
+      "extension": ".jpg",
+      "size_bytes": 216210,
+      "classification": "triage_inbox"
+    },
+    {
+      "path": "98_XChange/AI-OS/OpenClaw Concept/IMG_7272.jpg",
+      "top_folder": "98_XChange",
+      "extension": ".jpg",
+      "size_bytes": 175683,
+      "classification": "triage_inbox"
+    },
+    {
+      "path": "98_XChange/AI-OS/OpenClaw Concept/IMG_7273.jpg",
+      "top_folder": "98_XChange",
+      "extension": ".jpg",
+      "size_bytes": 176613,
+      "classification": "triage_inbox"
+    },
+    {
+      "path": "98_XChange/AI-OS/Sample 1 - Claude VM AI OS/Screenshot 2026-06-27 at 15.28.30.png",
+      "top_folder": "98_XChange",
+      "extension": ".png",
+      "size_bytes": 364608,
+      "classification": "triage_inbox"
+    },
+    {
+      "path": "98_XChange/AI-OS/Sample 1 - Claude VM AI OS/Screenshot 2026-06-27 at 15.28.55.png",
+      "top_folder": "98_XChange",
+      "extension": ".png",
+      "size_bytes": 355643,
+      "classification": "triage_inbox"
+    },
+    {
+      "path": "98_XChange/AI-OS/Sample 1 - Claude VM AI OS/Screenshot 2026-06-27 at 15.29.31.png",
+      "top_folder": "98_XChange",
+      "extension": ".png",
+      "size_bytes": 109971,
+      "classification": "triage_inbox"
+    },
+    {
+      "path": "98_XChange/AI-OS/Sample 1 - Claude VM AI OS/Screenshot 2026-06-27 at 15.30.13.png",
+      "top_folder": "98_XChange",
+      "extension": ".png",
+      "size_bytes": 614799,
+      "classification": "triage_inbox"
+    },
+    {
+      "path": "98_XChange/Next Steps Alex.docx",
+      "top_folder": "98_XChange",
+      "extension": ".docx",
+      "size_bytes": 48589,
+      "classification": "triage_inbox"
+    },
+    {
+      "path": "98_XChange/README.md",
+      "top_folder": "98_XChange",
+      "extension": ".md",
+      "size_bytes": 493,
+      "classification": "triage_inbox"
+    },
+    {
+      "path": "98_XChange/Website Feedback.docx",
+      "top_folder": "98_XChange",
+      "extension": ".docx",
+      "size_bytes": 4350550,
+      "classification": "triage_inbox"
+    },
+    {
+      "path": "99_Resources/.DS_Store",
+      "top_folder": "99_Resources",
+      "extension": "[no_ext]",
+      "size_bytes": 10244,
+      "classification": "exclude_system"
+    },
+    {
+      "path": "99_Resources/02_Reports_Whitepapgers/.DS_Store",
+      "top_folder": "99_Resources",
+      "extension": "[no_ext]",
+      "size_bytes": 10244,
+      "classification": "exclude_system"
+    },
+    {
+      "path": "99_Resources/02_Reports_Whitepapgers/AI Strartegy Frameworks/.DS_Store",
+      "top_folder": "99_Resources",
+      "extension": "[no_ext]",
+      "size_bytes": 12292,
+      "classification": "exclude_system"
+    },
+    {
+      "path": "99_Resources/02_Reports_Whitepapgers/AI Strartegy Frameworks/Build-Your-AI-Strategy-and-Roadmap/01-Build-Your-AI-Strategy-and-Roadmap--Phases-1-4.pptx",
+      "top_folder": "99_Resources",
+      "extension": ".pptx",
+      "size_bytes": 26922096,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/02_Reports_Whitepapgers/AI Strartegy Frameworks/Build-Your-AI-Strategy-and-Roadmap/02-AI-Use-Case-Selection-Tool.xlsx",
+      "top_folder": "99_Resources",
+      "extension": ".xlsx",
+      "size_bytes": 136198,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/02_Reports_Whitepapgers/AI Strartegy Frameworks/Build-Your-AI-Strategy-and-Roadmap/03-AI-Initiatives-Prioritization-and-Roadmap-Planning-Tool.xlsx",
+      "top_folder": "99_Resources",
+      "extension": ".xlsx",
+      "size_bytes": 131306,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/02_Reports_Whitepapgers/AI Strartegy Frameworks/Build-Your-AI-Strategy-and-Roadmap/04-AI-Maturity-Assessment-Tool.xlsx",
+      "top_folder": "99_Resources",
+      "extension": ".xlsx",
+      "size_bytes": 2896221,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/02_Reports_Whitepapgers/AI Strartegy Frameworks/Build-Your-AI-Strategy-and-Roadmap/05-VP-AI-Job-Description-Template.docx",
+      "top_folder": "99_Resources",
+      "extension": ".docx",
+      "size_bytes": 144975,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/02_Reports_Whitepapgers/AI Strartegy Frameworks/Build-Your-AI-Strategy-and-Roadmap/06-AI-Strategy-and-Roadmap-Presentation-Template.pptx",
+      "top_folder": "99_Resources",
+      "extension": ".pptx",
+      "size_bytes": 13123079,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/02_Reports_Whitepapgers/AI Strartegy Frameworks/Build-Your-Generative-AI-Roadmap/01-Build-Your-Generative-AI-Roadmap--Phases-1-4.pptx",
+      "top_folder": "99_Resources",
+      "extension": ".pptx",
+      "size_bytes": 20095031,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/02_Reports_Whitepapgers/AI Strartegy Frameworks/Build-Your-Generative-AI-Roadmap/02-AI-Maturity-Assessment-and-Roadmap-Tool.xlsx",
+      "top_folder": "99_Resources",
+      "extension": ".xlsx",
+      "size_bytes": 2945315,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/02_Reports_Whitepapgers/AI Strartegy Frameworks/Build-Your-Generative-AI-Roadmap/03-The-Era-of-Generative-AI-C-Suite-Presentation.pptx",
+      "top_folder": "99_Resources",
+      "extension": ".pptx",
+      "size_bytes": 25133807,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/02_Reports_Whitepapgers/AI Strartegy Frameworks/Path2Scale-AgenticAI 6 Dimensions generation-agentic-ai-path-to-scale-2025-v2.pdf",
+      "top_folder": "99_Resources",
+      "extension": ".pdf",
+      "size_bytes": 5532354,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/02_Reports_Whitepapgers/AI Strartegy Frameworks/Reimagine-Business-Processes-With-an-AI-First-Approach/01-Reimagine-Business-Processes-With-an-AI-First-Approach--Phases-1-3.pptx",
+      "top_folder": "99_Resources",
+      "extension": ".pptx",
+      "size_bytes": 21991625,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/02_Reports_Whitepapgers/AI Strartegy Frameworks/Reimagine-Business-Processes-With-an-AI-First-Approach/02-Process-Discovery-and-Evaluation-Tool.xlsx",
+      "top_folder": "99_Resources",
+      "extension": ".xlsx",
+      "size_bytes": 101247,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/02_Reports_Whitepapgers/AI Strartegy Frameworks/Reimagine-Business-Processes-With-an-AI-First-Approach/03-Process-Reimagination-Canvas.pptx",
+      "top_folder": "99_Resources",
+      "extension": ".pptx",
+      "size_bytes": 7109476,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/02_Reports_Whitepapgers/AI Strartegy Frameworks/Reimagine-Business-Processes-With-an-AI-First-Approach/Reimagine_Business_Processes_With_an_AI-First_Approach_original.png",
+      "top_folder": "99_Resources",
+      "extension": ".png",
+      "size_bytes": 1931062,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/02_Reports_Whitepapgers/AI Strartegy Frameworks/Reimagine-Business-Processes-With-an-AI-First-Approach/~$01-Reimagine-Business-Processes-With-an-AI-First-Approach--Phases-1-3.pptx",
+      "top_folder": "99_Resources",
+      "extension": ".pptx",
+      "size_bytes": 165,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/02_Reports_Whitepapgers/AI Strartegy Frameworks/The-IT-Playbooks.pdf",
+      "top_folder": "99_Resources",
+      "extension": ".pdf",
+      "size_bytes": 4029290,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/02_Reports_Whitepapgers/AI Strartegy Frameworks/ai-dossier.pdf",
+      "top_folder": "99_Resources",
+      "extension": ".pdf",
+      "size_bytes": 10924415,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/02_Reports_Whitepapgers/AI Strartegy Frameworks/state-of-ai-in-the-enterprise-2026-2.pdf",
+      "top_folder": "99_Resources",
+      "extension": ".pdf",
+      "size_bytes": 8218684,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/02_Reports_Whitepapgers/KI-Audit-Report 2026-06-05.pdf",
+      "top_folder": "99_Resources",
+      "extension": ".pdf",
+      "size_bytes": 1967162,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/02_Reports_Whitepapgers/Leaders of AI - KI Assessentcenter/Virtual-Identity_Leaders-Lab_Whitepaper_Assessment_Center_fur_KI_Agenten.pdf",
+      "top_folder": "99_Resources",
+      "extension": ".pdf",
+      "size_bytes": 14672331,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/04_Partner/.DS_Store",
+      "top_folder": "99_Resources",
+      "extension": "[no_ext]",
+      "size_bytes": 10244,
+      "classification": "exclude_system"
+    },
+    {
+      "path": "99_Resources/04_Partner/Heimat-KIOS-Partner/.DS_Store",
+      "top_folder": "99_Resources",
+      "extension": "[no_ext]",
+      "size_bytes": 6148,
+      "classification": "exclude_system"
+    },
+    {
+      "path": "99_Resources/04_Partner/Heimat-KIOS-Partner/KIOS-FAQ.md",
+      "top_folder": "99_Resources",
+      "extension": ".md",
+      "size_bytes": 11102,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "99_Resources/04_Partner/Heimat-KIOS-Partner/KIOS-FRONTMATTER-SCHEMA.md",
+      "top_folder": "99_Resources",
+      "extension": ".md",
+      "size_bytes": 8290,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "99_Resources/04_Partner/Heimat-KIOS-Partner/KIOS-INGESTION-DOCLING-WORKFLOW.md",
+      "top_folder": "99_Resources",
+      "extension": ".md",
+      "size_bytes": 6815,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "99_Resources/04_Partner/Heimat-KIOS-Partner/KIOS-INTRO-FUER-PARTNER.md",
+      "top_folder": "99_Resources",
+      "extension": ".md",
+      "size_bytes": 9400,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "99_Resources/04_Partner/Heimat-KIOS-Partner/KIOS-MITARBEITER-INTRO.md",
+      "top_folder": "99_Resources",
+      "extension": ".md",
+      "size_bytes": 9228,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "99_Resources/04_Partner/Heimat-KIOS-Partner/KIOS-ROLLOUT-CHECKLISTE.md",
+      "top_folder": "99_Resources",
+      "extension": ".md",
+      "size_bytes": 5482,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "99_Resources/04_Partner/Heimat-KIOS-Partner/KIOS-STRUKTUR-BAUPLAN.md",
+      "top_folder": "99_Resources",
+      "extension": ".md",
+      "size_bytes": 15303,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "99_Resources/04_Partner/Heimat-KIOS-Partner/KIOS-v4.7-FULL.md",
+      "top_folder": "99_Resources",
+      "extension": ".md",
+      "size_bytes": 96253,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "99_Resources/04_Partner/Heimat-KIOS-Partner/SKILLS/.DS_Store",
+      "top_folder": "99_Resources",
+      "extension": "[no_ext]",
+      "size_bytes": 6148,
+      "classification": "exclude_system"
+    },
+    {
+      "path": "99_Resources/04_Partner/Heimat-KIOS-Partner/SKILLS/global/00-INDEX.md",
+      "top_folder": "99_Resources",
+      "extension": ".md",
+      "size_bytes": 2340,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "99_Resources/04_Partner/Heimat-KIOS-Partner/SKILLS/global/archive-session_v1.0.md",
+      "top_folder": "99_Resources",
+      "extension": ".md",
+      "size_bytes": 1463,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "99_Resources/04_Partner/Heimat-KIOS-Partner/SKILLS/global/debate_v1.0.md",
+      "top_folder": "99_Resources",
+      "extension": ".md",
+      "size_bytes": 1141,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "99_Resources/04_Partner/Heimat-KIOS-Partner/SKILLS/global/entscheidung_v1.0.md",
+      "top_folder": "99_Resources",
+      "extension": ".md",
+      "size_bytes": 1454,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "99_Resources/04_Partner/Heimat-KIOS-Partner/SKILLS/global/grill-me_v1.0.md",
+      "top_folder": "99_Resources",
+      "extension": ".md",
+      "size_bytes": 1650,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "99_Resources/04_Partner/Heimat-KIOS-Partner/SKILLS/global/ikigai-discovery_v0.1.md",
+      "top_folder": "99_Resources",
+      "extension": ".md",
+      "size_bytes": 2921,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "99_Resources/04_Partner/Heimat-KIOS-Partner/SKILLS/global/ikigai-to-brain_v0.1.md",
+      "top_folder": "99_Resources",
+      "extension": ".md",
+      "size_bytes": 938,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "99_Resources/04_Partner/Heimat-KIOS-Partner/SKILLS/global/insights_v1.0.md",
+      "top_folder": "99_Resources",
+      "extension": ".md",
+      "size_bytes": 1340,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "99_Resources/04_Partner/Heimat-KIOS-Partner/SKILLS/global/karpathy-wiki_v1.1.md",
+      "top_folder": "99_Resources",
+      "extension": ".md",
+      "size_bytes": 2208,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "99_Resources/04_Partner/Heimat-KIOS-Partner/SKILLS/global/level10_v1.0.md",
+      "top_folder": "99_Resources",
+      "extension": ".md",
+      "size_bytes": 1193,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "99_Resources/04_Partner/Heimat-KIOS-Partner/SKILLS/global/meeting-prep_v1.0.md",
+      "top_folder": "99_Resources",
+      "extension": ".md",
+      "size_bytes": 1357,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "99_Resources/04_Partner/Heimat-KIOS-Partner/SKILLS/global/new-project_v1.0.md",
+      "top_folder": "99_Resources",
+      "extension": ".md",
+      "size_bytes": 2321,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "99_Resources/04_Partner/Heimat-KIOS-Partner/SKILLS/global/query-brain_v1.0.md",
+      "top_folder": "99_Resources",
+      "extension": ".md",
+      "size_bytes": 1543,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "99_Resources/04_Partner/Heimat-KIOS-Partner/SKILLS/global/session-handoff_v1.0.md",
+      "top_folder": "99_Resources",
+      "extension": ".md",
+      "size_bytes": 1091,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/.DS_Store",
+      "top_folder": "99_Resources",
+      "extension": "[no_ext]",
+      "size_bytes": 18436,
+      "classification": "exclude_system"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/4-Wochen Mentoring Programm/4-Wochen-Fahrplan-Coach-Leitfaden.pdf",
+      "top_folder": "99_Resources",
+      "extension": ".pdf",
+      "size_bytes": 168249,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/4-Wochen Mentoring Programm/OnePager Kundenprofil Hausverwaltung 3 Rollen.pdf",
+      "top_folder": "99_Resources",
+      "extension": ".pdf",
+      "size_bytes": 75758,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/4-Wochen Mentoring Programm/OnePager Reframe- KI-OS in einem Satz.pdf",
+      "top_folder": "99_Resources",
+      "extension": ".pdf",
+      "size_bytes": 84006,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/4-Wochen Mentoring Programm/UseCase-Repertoire nachschlagewerk.pdf",
+      "top_folder": "99_Resources",
+      "extension": ".pdf",
+      "size_bytes": 482314,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/4-Wochen Mentoring Programm/VM & Claude Code-20260624204600.html",
+      "top_folder": "99_Resources",
+      "extension": ".html",
+      "size_bytes": 769060,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Cockpit AI-OS/.DS_Store",
+      "top_folder": "99_Resources",
+      "extension": "[no_ext]",
+      "size_bytes": 6148,
+      "classification": "exclude_system"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Cockpit AI-OS/NODE_VERSION",
+      "top_folder": "99_Resources",
+      "extension": "[no_ext]",
+      "size_bytes": 9,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Cockpit AI-OS/cockpit/README.md",
+      "top_folder": "99_Resources",
+      "extension": ".md",
+      "size_bytes": 8018,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Cockpit AI-OS/cockpit/auth.mjs",
+      "top_folder": "99_Resources",
+      "extension": ".mjs",
+      "size_bytes": 817,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Cockpit AI-OS/cockpit/cockpit-start.sh",
+      "top_folder": "99_Resources",
+      "extension": ".sh",
+      "size_bytes": 944,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Cockpit AI-OS/cockpit/config.mjs",
+      "top_folder": "99_Resources",
+      "extension": ".mjs",
+      "size_bytes": 1924,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Cockpit AI-OS/cockpit/db.mjs",
+      "top_folder": "99_Resources",
+      "extension": ".mjs",
+      "size_bytes": 7099,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Cockpit AI-OS/cockpit/executor.mjs",
+      "top_folder": "99_Resources",
+      "extension": ".mjs",
+      "size_bytes": 7858,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Cockpit AI-OS/cockpit/lib/doctor.mjs",
+      "top_folder": "99_Resources",
+      "extension": ".mjs",
+      "size_bytes": 1538,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Cockpit AI-OS/cockpit/lib/relogin.mjs",
+      "top_folder": "99_Resources",
+      "extension": ".mjs",
+      "size_bytes": 2310,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Cockpit AI-OS/cockpit/lib/skills.mjs",
+      "top_folder": "99_Resources",
+      "extension": ".mjs",
+      "size_bytes": 9875,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Cockpit AI-OS/cockpit/lib/usage.mjs",
+      "top_folder": "99_Resources",
+      "extension": ".mjs",
+      "size_bytes": 7492,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Cockpit AI-OS/cockpit/mitarbyte-cockpit@.service",
+      "top_folder": "99_Resources",
+      "extension": ".service",
+      "size_bytes": 597,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Cockpit AI-OS/cockpit/package-lock.json",
+      "top_folder": "99_Resources",
+      "extension": ".json",
+      "size_bytes": 50147,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Cockpit AI-OS/cockpit/package.json",
+      "top_folder": "99_Resources",
+      "extension": ".json",
+      "size_bytes": 608,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Cockpit AI-OS/cockpit/public/app.js",
+      "top_folder": "99_Resources",
+      "extension": ".js",
+      "size_bytes": 59349,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Cockpit AI-OS/cockpit/public/brand/mitarbyte-logo.png",
+      "top_folder": "99_Resources",
+      "extension": ".png",
+      "size_bytes": 9108,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Cockpit AI-OS/cockpit/public/fonts/nordique-pro-bold.ttf",
+      "top_folder": "99_Resources",
+      "extension": ".ttf",
+      "size_bytes": 25112,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Cockpit AI-OS/cockpit/public/index.html",
+      "top_folder": "99_Resources",
+      "extension": ".html",
+      "size_bytes": 12509,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Cockpit AI-OS/cockpit/public/style.css",
+      "top_folder": "99_Resources",
+      "extension": ".css",
+      "size_bytes": 56378,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Cockpit AI-OS/cockpit/routes/api.mjs",
+      "top_folder": "99_Resources",
+      "extension": ".mjs",
+      "size_bytes": 12229,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Cockpit AI-OS/cockpit/routes/files.mjs",
+      "top_folder": "99_Resources",
+      "extension": ".mjs",
+      "size_bytes": 6953,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Cockpit AI-OS/cockpit/routes/pages.mjs",
+      "top_folder": "99_Resources",
+      "extension": ".mjs",
+      "size_bytes": 404,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Cockpit AI-OS/cockpit/scheduler.mjs",
+      "top_folder": "99_Resources",
+      "extension": ".mjs",
+      "size_bytes": 3071,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Cockpit AI-OS/cockpit/server.mjs",
+      "top_folder": "99_Resources",
+      "extension": ".mjs",
+      "size_bytes": 2178,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Cockpit AI-OS/cockpit/stream-parser.mjs",
+      "top_folder": "99_Resources",
+      "extension": ".mjs",
+      "size_bytes": 5208,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Cockpit AI-OS/cockpit-start.sh",
+      "top_folder": "99_Resources",
+      "extension": ".sh",
+      "size_bytes": 944,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Cockpit AI-OS/mitarbyte-cockpit@.service",
+      "top_folder": "99_Resources",
+      "extension": ".service",
+      "size_bytes": 597,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Cockpit AI-OS/systemd-override/mitarbyte-cockpit@.service.d/10-ki-os-display.conf",
+      "top_folder": "99_Resources",
+      "extension": ".conf",
+      "size_bytes": 140,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Cockpit AI-OS alias",
+      "top_folder": "99_Resources",
+      "extension": "[no_ext]",
+      "size_bytes": 1132,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Contracts/Coach-NDA signed.pdf",
+      "top_folder": "99_Resources",
+      "extension": ".pdf",
+      "size_bytes": 283114,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Contracts/Coach-NDA.pdf",
+      "top_folder": "99_Resources",
+      "extension": ".pdf",
+      "size_bytes": 119045,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Contracts/Freelancer-Vertrag-KI-Coach signed.pdf",
+      "top_folder": "99_Resources",
+      "extension": ".pdf",
+      "size_bytes": 12259643,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Contracts/Freelancer-Vertrag-KI-Coach.pdf",
+      "top_folder": "99_Resources",
+      "extension": ".pdf",
+      "size_bytes": 426752,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Onboarding KI-OS Durchfu\u0308hrung 2026-06-24/.DS_Store",
+      "top_folder": "99_Resources",
+      "extension": "[no_ext]",
+      "size_bytes": 6148,
+      "classification": "exclude_system"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Onboarding KI-OS Durchfu\u0308hrung 2026-06-24/Kundenonboarding Email .rtf",
+      "top_folder": "99_Resources",
+      "extension": ".rtf",
+      "size_bytes": 2873,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Onboarding KI-OS Durchfu\u0308hrung 2026-06-24/MItarbyte - Onboarding Teil 1 High Level Architektur.mp4",
+      "top_folder": "99_Resources",
+      "extension": ".mp4",
+      "size_bytes": 17593745,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Onboarding KI-OS Durchfu\u0308hrung 2026-06-24/Meeting Summary.rtf",
+      "top_folder": "99_Resources",
+      "extension": ".rtf",
+      "size_bytes": 25011,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Onboarding KI-OS Durchfu\u0308hrung 2026-06-24/Mitarbyte Onboarding - Teil 2 Features & Konzepte des KI-OS.mp4",
+      "top_folder": "99_Resources",
+      "extension": ".mp4",
+      "size_bytes": 71142689,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Onboarding KI-OS Durchfu\u0308hrung 2026-06-24/Screenshot sample - skool onboarding.png",
+      "top_folder": "99_Resources",
+      "extension": ".png",
+      "size_bytes": 196015,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Onboarding KI-OS Durchfu\u0308hrung 2026-06-24/Tools/Activate Your Account | mitarbyte GmbH.pdf",
+      "top_folder": "99_Resources",
+      "extension": ".pdf",
+      "size_bytes": 77070,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Onboarding KI-OS Durchfu\u0308hrung 2026-06-24/Tools/Screenshot sample - clickup.png",
+      "top_folder": "99_Resources",
+      "extension": ".png",
+      "size_bytes": 170318,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Onboarding KI-OS Durchfu\u0308hrung 2026-06-24/Tools/Victor Reisenauer invited you to join Mitarbyte on ClickUp.eml",
+      "top_folder": "99_Resources",
+      "extension": ".eml",
+      "size_bytes": 46404,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Onboarding KI-OS Durchfu\u0308hrung 2026-06-24/Tools/Welcome to mitarbyte School.pdf",
+      "top_folder": "99_Resources",
+      "extension": ".pdf",
+      "size_bytes": 24899,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Onboarding KI-OS Durchfu\u0308hrung 2026-06-24/Youtube MItarbyte - So setzt du als Hausverwaltung Dein KI Bteriebssystem auf.mp4",
+      "top_folder": "99_Resources",
+      "extension": ".mp4",
+      "size_bytes": 149463304,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Onboarding KI-OS Durchfu\u0308hrung 2026-06-24/video.mp4",
+      "top_folder": "99_Resources",
+      "extension": ".mp4",
+      "size_bytes": 106307994,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Projektpartner/feingeist-impuls.html",
+      "top_folder": "99_Resources",
+      "extension": ".html",
+      "size_bytes": 128419,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/Screenshot sample - youtube AI OS advertisement.png",
+      "top_folder": "99_Resources",
+      "extension": ".png",
+      "size_bytes": 1035189,
+      "classification": "migrate_as_attachment_with_index"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/onboarding_vm-connection_puplic-key.md",
+      "top_folder": "99_Resources",
+      "extension": ".md",
+      "size_bytes": 1633,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "99_Resources/04_Partner/Mitarbyte/schulung-user-onboarding.html",
+      "top_folder": "99_Resources",
+      "extension": ".html",
+      "size_bytes": 17156,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/Agent Skills/.DS_Store",
+      "top_folder": "99_Resources",
+      "extension": "[no_ext]",
+      "size_bytes": 6148,
+      "classification": "exclude_system"
+    },
+    {
+      "path": "99_Resources/Agent Skills/mac-startup-audit-skill/README.md",
+      "top_folder": "99_Resources",
+      "extension": ".md",
+      "size_bytes": 1553,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "99_Resources/Agent Skills/mac-startup-audit-skill/SKILL.md",
+      "top_folder": "99_Resources",
+      "extension": ".md",
+      "size_bytes": 1520,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "99_Resources/Agent Skills/mac-startup-audit-skill/classify.py",
+      "top_folder": "99_Resources",
+      "extension": ".py",
+      "size_bytes": 10547,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/Agent Skills/mac-startup-audit-skill/run_audit.sh",
+      "top_folder": "99_Resources",
+      "extension": ".sh",
+      "size_bytes": 5102,
+      "classification": "manual_review"
+    },
+    {
+      "path": "99_Resources/README.md",
+      "top_folder": "99_Resources",
+      "extension": ".md",
+      "size_bytes": 463,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "99_Resources/SMAPAS-KIOS-6-WEEK-COACHING-PROGRAM.md",
+      "top_folder": "99_Resources",
+      "extension": ".md",
+      "size_bytes": 9020,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "Loop-Absatz.loop",
+      "top_folder": "[root]",
+      "extension": ".loop",
+      "size_bytes": 12196,
+      "classification": "convert_to_markdown_summary_with_attachment"
+    },
+    {
+      "path": "Microsoft Planner/company development_6253366d2e972104/Copilot/Whiteboard.url",
+      "top_folder": "Microsoft Planner",
+      "extension": ".url",
+      "size_bytes": 358,
+      "classification": "review_sensitive"
+    },
+    {
+      "path": "README.md",
+      "top_folder": "[root]",
+      "extension": ".md",
+      "size_bytes": 3416,
+      "classification": "migrate_markdown_source"
+    },
+    {
+      "path": "Untitled.base",
+      "top_folder": "[root]",
+      "extension": ".base",
+      "size_bytes": 39,
+      "classification": "convert_to_markdown_summary_with_attachment"
+    },
+    {
+      "path": "Whiteboards/Embedded Whiteboard.whiteboard",
+      "top_folder": "Whiteboards",
+      "extension": ".whiteboard",
+      "size_bytes": 13448,
+      "classification": "convert_to_markdown_summary_with_attachment"
+    }
+  ]
+}
