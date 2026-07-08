@@ -13,5 +13,6 @@ Suggested structure (free-form, Markdown):
 personal/
 ├── notes/          personal working notes
 ├── contacts/       personal relationship notes
-└── drafts/         private drafts not ready for company knowledge
+├── drafts/         private drafts not ready for company knowledge
+└── memory.md        optional personal agent memory (private)
 ```

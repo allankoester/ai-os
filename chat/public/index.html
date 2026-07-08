@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Steadymade AI OS Chat</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="top-left">
+      <select id="agent" class="agent-select" title="Route via Danny to specialist">
+        <option value="danny">Danny · Orchestrator</option>
+        <option value="atlas">Atlas · via Danny</option>
+        <option value="nora">Nora · via Danny</option>
+        <option value="mara">Mara · via Danny</option>
+        <option value="ada">Ada · via Danny</option>
+        <option value="clara">Clara · via Danny</option>
+        <option value="rosa">Rosa · via Danny</option>
+        <option value="jonas">Jonas · via Danny</option>
+        <option value="otto">Otto · via Danny</option>
+        <option value="dora">Dora · via Danny</option>
+        <option value="vera">Vera · via Danny</option>
+        <option value="noah">Noah · via Danny</option>
+        <option value="kira">Kira · via Danny</option>
+        <option value="simon">Simon · via Danny</option>
+        <option value="iris">Iris · via Danny</option>
+      </select>
+    </div>
+    <div class="top-right">
+      <button id="newChat" title="Start new conversation">New</button>
+    </div>
+  </header>
+
+  <div id="stage" class="stage centered">
+    <main id="chat" class="chat">
+      <div class="welcome">
+        <div class="w-label">STEADYMADE AI OS</div>
+        <h1>Danny Chat</h1>
+        <p>Select a specialist if needed. Messages are always routed through Danny.</p>
+      </div>
+    </main>
+
+    <footer class="composer-wrap">
+      <div class="composer">
+        <textarea id="input" rows="1" placeholder="Message Danny…"></textarea>
+        <div class="composer-right">
+          <select id="model" title="Model">
+            <option value="default">Default</option>
+            <option value="sonnet">Sonnet</option>
+            <option value="haiku">Haiku</option>
+            <option value="opus">Opus</option>
+          </select>
+          <button id="send" class="send-btn" title="Send (Enter), newline (Shift+Enter)">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 8h11M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="statusline"><span id="status">ready</span><span id="sess"></span></div>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

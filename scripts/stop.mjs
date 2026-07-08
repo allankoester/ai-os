@@ -3,6 +3,7 @@
 import { execFileSync } from 'node:child_process';
 
 const PORT = Number(process.env.PORT || 4011);
+const CHAT_PORT = Number(process.env.CHAT_PORT || 4012);
 
 function unique(nums) {
   return [...new Set(nums.filter((n) => Number.isInteger(n) && n > 0))];
@@ -47,13 +48,12 @@ function stopPidPosix(pid) {
   }
 }
 
-function main() {
-  const isWindows = process.platform === 'win32';
-  const pids = isWindows ? getPidsFromWindows(PORT) : getPidsFromMacLinux(PORT);
+function stopPort(port, isWindows) {
+  const pids = isWindows ? getPidsFromWindows(port) : getPidsFromMacLinux(port);
 
   if (pids.length === 0) {
-    console.log(`No process found on port ${PORT}.`);
-    return;
+    console.log(`No process found on port ${port}.`);
+    return 0;
   }
 
   let stopped = 0;
@@ -62,11 +62,17 @@ function main() {
     const ok = isWindows ? stopPidWindows(pid) : stopPidPosix(pid);
     if (ok) {
       stopped += 1;
-      console.log(`Stopped PID ${pid} on port ${PORT}.`);
+      console.log(`Stopped PID ${pid} on port ${port}.`);
     } else {
-      console.log(`Could not stop PID ${pid} on port ${PORT}.`);
+      console.log(`Could not stop PID ${pid} on port ${port}.`);
     }
   }
+  return stopped;
+}
+
+function main() {
+  const isWindows = process.platform === 'win32';
+  const stopped = stopPort(PORT, isWindows) + stopPort(CHAT_PORT, isWindows);
 
   if (stopped === 0) {
     process.exitCode = 1;

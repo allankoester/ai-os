@@ -89,6 +89,15 @@
       "source_type": "generated_draft",
       "owner": "Creative Production",
       "last_reviewed": "2026-07-08"
+    },
+    "knowledge/company/company_handbook_SSOT/agent-memory.md": {
+      "status": "draft",
+      "scope": "Both",
+      "knowledge_type": "operational",
+      "market_scope": "both",
+      "source_type": "approved_document",
+      "owner": "Steadymade founders",
+      "last_reviewed": "2026-07-08"
     }
   }
 }

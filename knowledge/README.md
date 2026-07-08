@@ -72,3 +72,14 @@ Naming conventions are defined in `docs/policy-knowledge-sync.md`.
 The external OneDrive root `AI_OS/knowledge/team/` exists as shared operating
 material, but it is not part of the Stage 1/2 in-repo knowledge contract unless
 explicitly linked and documented in this repo.
+
+## Agent memory locations
+
+- **Company shared memory:**
+  `knowledge/company/company_handbook_SSOT/agent-memory.md`
+  (in this setup `knowledge/company/` is a symlink to shared OneDrive storage)
+- **Personal memory (private, gitignored):**
+  under `knowledge/personal/` (for example `knowledge/personal/memory.md`)
+- **Team shared memory:**
+  use the shared OneDrive `AI_OS/knowledge/team/` location unless this repo
+  explicitly adds and documents a linked `knowledge/team/` path.

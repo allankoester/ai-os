@@ -125,14 +125,37 @@ async function main() {
     env,
   });
 
+  let chatChild = null;
+  const chatPort = Number(process.env.CHAT_PORT || 4012);
+  if (exists('chat/server.mjs')) {
+    const chatFree = await isPortFree(chatPort);
+    if (chatFree) {
+      console.log(`Chat runtime: http://localhost:${chatPort}`);
+      chatChild = spawn(process.execPath, ['chat/server.mjs'], {
+        cwd: ROOT,
+        stdio: 'inherit',
+        env,
+      });
+      chatChild.on('exit', (code, signal) => {
+        if (signal) console.error(`Chat runtime stopped by signal ${signal}.`);
+        else if (code) console.error(`Chat runtime exited with code ${code}.`);
+        chatChild = null;
+      });
+    } else {
+      console.log(`Chat runtime: port ${chatPort} already in use, skipping chat startup.`);
+    }
+  }
+
   const forwardSignal = (signal) => {
     if (!child.killed) child.kill(signal);
+    if (chatChild && !chatChild.killed) chatChild.kill(signal);
   };
 
   process.on('SIGINT', () => forwardSignal('SIGINT'));
   process.on('SIGTERM', () => forwardSignal('SIGTERM'));
 
   child.on('exit', (code, signal) => {
+    if (chatChild && !chatChild.killed) chatChild.kill('SIGTERM');
     if (signal) {
       console.error(`Interface stopped by signal ${signal}.`);
       process.exit(1);

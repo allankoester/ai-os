@@ -23,6 +23,7 @@ const ROOT = path.resolve(__dirname, '..'); // project root: steadymade-ai-os
 const PUBLIC = path.join(__dirname, 'public');
 const META_FILE = path.join(__dirname, 'meta.json'); // sidecar metadata (status, scope) — keeps real docs untouched
 const FLOWS_FILE = path.join(__dirname, 'workflows.json'); // user workflow edits: overrides / custom / deleted (machine-local)
+const USAGE_LOG = path.join(ROOT, 'runs', 'chat-usage.jsonl');
 const PORT = process.env.PORT || 4011;
 const HOST = process.env.HOST || '127.0.0.1';
 const API_TOKEN = process.env.STEADYMADE_INTERFACE_TOKEN || '';
@@ -166,6 +167,35 @@ async function scanArtifacts(baseAbs) {
   return out;
 }
 
+async function readUsageLog() {
+  let text = '';
+  try { text = await fsp.readFile(USAGE_LOG, 'utf8'); }
+  catch (err) { if (err.code !== 'ENOENT') throw err; }
+  const entries = text.split(/\r?\n/).filter(Boolean).map((line) => {
+    try { return JSON.parse(line); } catch { return null; }
+  }).filter(Boolean).sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')));
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const summary = entries.reduce((acc, e) => {
+    acc.count += 1;
+    if (e.session_id) acc.sessions.add(e.session_id);
+    acc.total_cost_usd += num(e.cost_usd);
+    acc.total_duration_ms += num(e.duration_ms);
+    acc.total_turns += num(e.num_turns);
+    acc.input_tokens += num(e.input_tokens);
+    acc.output_tokens += num(e.output_tokens);
+    acc.cache_creation_input_tokens += num(e.cache_creation_input_tokens);
+    acc.cache_read_input_tokens += num(e.cache_read_input_tokens);
+    acc.total_tokens += num(e.total_tokens);
+    if (e.is_error) acc.errors += 1;
+    return acc;
+  }, { count: 0, sessions: new Set(), total_cost_usd: 0, total_duration_ms: 0, total_turns: 0, input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, total_tokens: 0, errors: 0 });
+  return {
+    path: 'runs/chat-usage.jsonl',
+    entries,
+    summary: { ...summary, sessions: summary.sessions.size },
+  };
+}
+
 // ---------- API ----------
 
 async function getSystem() {
@@ -208,6 +238,10 @@ async function handleApi(req, res, url) {
 
   if (url.pathname === '/api/system' && req.method === 'GET') {
     return send(200, await getSystem());
+  }
+
+  if (url.pathname === '/api/usage' && req.method === 'GET') {
+    return send(200, await readUsageLog());
   }
 
   if (url.pathname === '/api/file' && req.method === 'GET') {
@@ -411,21 +445,15 @@ async function handleApi(req, res, url) {
   // ---------- restart ----------
 
   if (url.pathname === '/api/restart' && req.method === 'POST') {
-    send(200, { ok: true, message: 'restarting interface server' });
-    console.log('[server] restart requested via API');
-    let relaunched = false;
-    const relaunch = () => {
-      if (relaunched) return;
-      relaunched = true;
-      spawn(process.execPath, [fileURLToPath(import.meta.url)], {
-        cwd: ROOT, detached: true, stdio: 'ignore', env: process.env,
-      }).unref();
-      process.exit(0);
-    };
-    setTimeout(() => {
-      server.close(relaunch);
-      setTimeout(relaunch, 1500).unref(); // safety: lingering connections must not block the swap
-    }, 200);
+    send(200, { ok: true, message: 'restarting interface and chat runtimes' });
+    console.log('[server] restart requested via API (interface + chat)');
+    spawn(process.execPath, ['scripts/restart.mjs'], {
+      cwd: ROOT,
+      detached: true,
+      stdio: 'ignore',
+      env: process.env,
+    }).unref();
+    setTimeout(() => process.exit(0), 200).unref();
     return;
   }
 

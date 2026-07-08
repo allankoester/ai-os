@@ -11,6 +11,8 @@ const state = {
   view: 'command',
   selectedAgent: null,   // agent id selected on the map
   selectedFolder: null,  // folder name selected on the map
+  chatAgent: null,       // agent preset for chat view
+  chatDraft: null,       // one-shot draft preset for chat view
   kn: {
     folder: null,        // active folder key in Knowledge view
     level: '',           // folder level shown in the folder column ('' = root)
@@ -26,6 +28,9 @@ const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 const VIEW_TITLES = {
+  chat: 'Chat',
+  usage: 'Usage',
+  memory: 'Memory',
   command: 'Command Center',
   map: 'Agent Map',
   knowledge: 'Knowledge Docs',
@@ -41,6 +46,26 @@ const agentById = (id) => AGENTS.find((a) => a.id === id);
 const deptById = (id) => DEPARTMENTS.find((d) => d.id === id);
 // an access entry covers the folder itself and every folder nested under it
 const agentAccess = (a, folder) => a.access.some((acc) => folder === acc || folder.startsWith(acc + '/'));
+
+const CHAT_PORT = Number(window.CHAT_PORT || 4012);
+const CHAT_URL = `${location.protocol}//${location.hostname}:${CHAT_PORT}`;
+const CHAT_AGENT_MAP = {
+  danny: 'danny',
+  atlas: 'atlas',
+  nora: 'nora',
+  mara: 'mara',
+  ada: 'ada',
+  clara: 'clara',
+  rosa: 'rosa',
+  jonas: 'jonas',
+  otto: 'otto',
+  dora: 'dora',
+  vera: 'vera',
+  noah: 'noah',
+  kira: 'kira',
+  simon: 'simon',
+  iris: 'iris',
+};
 
 // ---------------------------------------------------------------- workflows (editable)
 // data.js WORKFLOWS is the base model; user edits live in interface/workflows.json
@@ -165,6 +190,12 @@ function toggleFullscreen() {
   else document.documentElement.requestFullscreen().catch(() => toast('FULLSCREEN BLOCKED BY BROWSER', true));
 }
 
+function openChat(agentId, draftMessage) {
+  state.chatAgent = agentId || null;
+  state.chatDraft = draftMessage || null;
+  setView('chat');
+}
+
 function setView(view) {
   state.view = view;
   state.selectedAgent = state.selectedFolder = null;
@@ -173,12 +204,25 @@ function setView(view) {
   $('#view-title').textContent = VIEW_TITLES[view];
   closeDrawer();
   const el = $('#view');
+  const holder = $('#chat-holder');
+  const isChat = view === 'chat';
+
+  holder.classList.toggle('hidden', !isChat);
+  el.classList.toggle('hidden', isChat);
+
+  if (isChat) {
+    el.innerHTML = '';
+    renderChat();
+    return;
+  }
+
   el.className = 'view view-enter';
   el.innerHTML = '';
   ({ command: renderCommand, map: renderMap, knowledge: renderKnowledge,
      workflows: renderWorkflows, scheduler: renderScheduler, skills: renderSkills,
-     departments: renderDepartments,
-     artifacts: renderArtifacts, settings: renderSettings }[view])(el);
+      usage: renderUsage, memory: renderMemory,
+      departments: renderDepartments,
+      artifacts: renderArtifacts, settings: renderSettings }[view])(el);
 }
 
 // ---------------------------------------------------------------- search
@@ -769,6 +813,7 @@ function openAgentDrawer(id) {
         <div id="agent-plugins-body" class="stat-note" style="white-space:normal">Loading plugins…</div>
       </div>` : ''}
       <div class="drawer-actions">
+        <button class="btn btn-green btn-small" data-act="open-chat">Ask in Chat</button>
         <button class="btn btn-green btn-small" data-act="open-prompt">Open prompt</button>
         <button class="btn btn-small" data-act="edit-prompt">Edit prompt</button>
         <button class="btn btn-small" data-act="view-knowledge">View connected knowledge</button>
@@ -779,6 +824,10 @@ function openAgentDrawer(id) {
   const d = $('#drawer');
   $$('[data-folder]', d).forEach((b) => b.addEventListener('click', () => { setView('knowledge'); selectKnFolder(b.dataset.folder); }));
   $$('[data-flow]', d).forEach((b) => b.addEventListener('click', () => setView('workflows')));
+  $('[data-act="open-chat"]', d).addEventListener('click', () => {
+    closeDrawer();
+    openChat(a.id, `Task for ${a.name}: <describe what you want help with>`);
+  });
   $('[data-act="open-prompt"]', d).addEventListener('click', () => openInEditor(a.promptPath, 'preview'));
   $('[data-act="edit-prompt"]', d).addEventListener('click', () => openInEditor(a.promptPath, 'edit'));
   $('[data-act="view-knowledge"]', d).addEventListener('click', () => { closeDrawer(); if (state.view !== 'map') setView('map'); requestAnimationFrame(() => selectMapAgent(a.id)); });
@@ -1101,10 +1150,15 @@ function paintKnEditor() {
   $('#sel-scope').addEventListener('change', (e) => setDocMeta('scope', e.target.value));
   $$('[data-agent]', el).forEach((b) => b.addEventListener('click', () => { setView('map'); selectMapAgent(b.dataset.agent); }));
   $$('[data-ask]', el).forEach((b) => b.addEventListener('click', () => {
-    const who = { nora: 'Nora (Knowledge Agent)', mara: 'Mara (Knowledge Governance)', atlas: 'Atlas (Strategic Advisor)' }[b.dataset.ask];
-    const verbs = { nora: 'Summarize this document and list its key facts with sources.', mara: 'Classify this document: type, market scope, duplicates, canonical status.', atlas: 'Review the strategic relevance of this document for Steadymade.' };
-    navigator.clipboard?.writeText(`Task for ${who}:\n${verbs[b.dataset.ask]}\nDocument: ${state.kn.doc}`);
-    toast('TASK BRIEF COPIED — PASTE INTO CLAUDE (LIVE AGENT EXECUTION PENDING)', true);
+    const verbs = {
+      nora: 'Summarize this document and list key facts with sources.',
+      mara: 'Classify this document: type, market scope, duplicates, canonical status.',
+      atlas: 'Review this document for strategic relevance to Steadymade.',
+    };
+    const draft = `${verbs[b.dataset.ask]}\n\nDocument: ${state.kn.doc}`;
+    openChat(b.dataset.ask, draft);
+    navigator.clipboard?.writeText(`Task:\n${draft}`);
+    toast('OPENED IN CHAT (DRAFT PREFILLED). TASK ALSO COPIED TO CLIPBOARD.');
   }));
 }
 
@@ -2058,6 +2112,120 @@ function paintArtifacts(el) {
   }));
 }
 
+// ---------------------------------------------------------------- Usage / Memory
+
+function fmtUsd(v) {
+  return Number(v || 0).toLocaleString(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 3, maximumFractionDigits: 3 });
+}
+
+function fmtInt(v) {
+  return Number(v || 0).toLocaleString();
+}
+
+function fmtDuration(ms) {
+  const s = Math.round(Number(ms || 0) / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m ${s % 60}s`;
+}
+
+async function renderUsage(el) {
+  el.innerHTML = '<div class="view-pad"><div class="card">Loading usage…</div></div>';
+  let data;
+  try { data = await apiJson('/api/usage'); }
+  catch (e) {
+    el.innerHTML = `<div class="view-pad"><div class="card">Usage unavailable: ${esc(e.message)}</div></div>`;
+    return;
+  }
+  if (state.view !== 'usage') return;
+  const s = data.summary || {};
+  const entries = data.entries || [];
+  el.innerHTML = `<div class="view-pad simple-list" style="max-width:1040px">
+    <div class="card">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <div class="section-title" style="flex:1;margin:0">Chat Usage Report</div>
+        <span class="list-meta">${esc(data.path || 'runs/chat-usage.jsonl')}</span>
+        <button class="btn btn-ghost btn-small" id="usage-refresh">Refresh</button>
+      </div>
+      <div class="stat-note" style="margin-top:6px;white-space:normal">
+        Usage is local telemetry from the Chat runtime. Token counts appear when the Claude stream exposes them; cost, duration and turns are logged from result metadata.
+      </div>
+    </div>
+
+    <div class="cc-grid">
+      <div class="card stat-card"><div class="mono-label">TURNS</div><div class="stat-value">${fmtInt(s.count)}</div><div class="stat-note">${fmtInt(s.sessions)} sessions · ${fmtInt(s.errors)} errors</div></div>
+      <div class="card stat-card"><div class="mono-label">COST</div><div class="stat-value" style="font-size:28px">${fmtUsd(s.total_cost_usd)}</div><div class="stat-note">reported by Claude result metadata</div></div>
+      <div class="card stat-card"><div class="mono-label">DURATION</div><div class="stat-value" style="font-size:28px">${fmtDuration(s.total_duration_ms)}</div><div class="stat-note">sum of chat turns</div></div>
+      <div class="card stat-card"><div class="mono-label">TOKENS</div><div class="stat-value" style="font-size:28px">${fmtInt(s.total_tokens)}</div><div class="stat-note">in ${fmtInt(s.input_tokens)} · out ${fmtInt(s.output_tokens)}</div></div>
+    </div>
+
+    <div class="card">
+      <div class="section-title">Recent chat turns</div>
+      ${entries.length ? entries.slice(0, 80).map((e) => `
+        <div class="list-row" style="cursor:default">
+          <span class="badge ${e.is_error ? 'badge-apricot' : 'badge-gray'}">${e.is_error ? 'ERROR' : 'CHAT'}</span>
+          <span class="list-title">${esc(e.selected_agent || 'danny')} <span class="list-meta">${esc(e.mode || '')}</span></span>
+          <span class="list-meta">${esc(e.model || 'default')}</span>
+          <span class="list-meta">${fmtDuration(e.duration_ms)}</span>
+          <span class="list-meta">${fmtUsd(e.cost_usd)}</span>
+          <span class="list-meta">${fmtInt(e.total_tokens)} tokens</span>
+          <span class="list-meta" title="${esc(e.timestamp || '')}">${e.timestamp ? timeAgo(Date.parse(e.timestamp)) : '—'}</span>
+        </div>`).join('') : '<div class="stat-note">No chat usage recorded yet. Send one message in Chat to create the first entry.</div>'}
+    </div>
+  </div>`;
+  $('#usage-refresh')?.addEventListener('click', () => renderUsage(el));
+}
+
+function renderMemory(el) {
+  const companyPath = 'knowledge/company/company_handbook_SSOT/agent-memory.md';
+  const personalPath = 'knowledge/personal/memory.md';
+  const personalTemplate = '# Personal Agent Memory\n\nPrivate, per-user memory. This file is gitignored.\n\n- YYYY-MM-DD | source/owner | memory item\n';
+  el.innerHTML = `<div class="view-pad simple-list" style="max-width:900px">
+    <div class="card">
+      <div class="section-title">Agent Memory</div>
+      <div class="stat-note" style="white-space:normal">
+        Memory is split by scope so local/private context does not leak into shared company material.
+      </div>
+    </div>
+    <div class="card">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <span class="badge badge-green">COMPANY</span>
+        <span class="list-title">Shared company memory</span>
+        <span class="list-meta">${esc(companyPath)}</span>
+        <button class="btn btn-green btn-small" id="mem-company">Open</button>
+      </div>
+      <div class="stat-note" style="margin-top:8px;white-space:normal">For organization-level facts that all agents may use. No private personal facts.</div>
+    </div>
+    <div class="card">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <span class="badge badge-apricot">PERSONAL</span>
+        <span class="list-title">Private personal memory</span>
+        <span class="list-meta">${esc(personalPath)} · gitignored</span>
+        <button class="btn btn-small" id="mem-personal">Create / Open</button>
+      </div>
+      <div class="stat-note" style="margin-top:8px;white-space:normal">For local user preferences and private working context only. Never copied into company artifacts.</div>
+    </div>
+    <div class="card">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <span class="badge badge-gray">TEAM</span>
+        <span class="list-title">Shared team memory</span>
+        <span class="list-meta">AI_OS/knowledge/team/ in OneDrive</span>
+      </div>
+      <div class="stat-note" style="margin-top:8px;white-space:normal">Team memory remains in the shared OneDrive team area unless this repo explicitly links and documents a <code>knowledge/team/</code> path.</div>
+    </div>
+  </div>`;
+  $('#mem-company')?.addEventListener('click', () => openInEditor(companyPath, 'edit'));
+  $('#mem-personal')?.addEventListener('click', async () => {
+    try {
+      await apiJson('/api/file?path=' + encodeURIComponent(personalPath));
+    } catch {
+      try { await putFileGuarded(personalPath, personalTemplate); }
+      catch (e) { toast(e.message.toUpperCase(), true); return; }
+    }
+    openInEditor(personalPath, 'edit');
+  });
+}
+
 const FILE_TEMPLATES = {
   'knowledge/personal/user-profile.md': `# User Profile — <Name>\n\n- **Rolle:** TODO\n- **Märkte:** TODO (DACH / Australia / Both)\n- **Sprache:** TODO (de / en)\n\n## Verantwortung & Aufgaben\n\n- TODO\n\n## Arbeitsweise\n\n- Entscheidungen: TODO\n- Detailtiefe: TODO\n\n## Kommunikation\n\n- Ton: TODO\n\n## Schmerzpunkte & Ziele\n\n- TODO\n\n> Tipp: /personal-onboarding füllt dieses Profil im Interview.\n`,
   'CLAUDE.local.md': `<!-- persona:start -->\n# Persönliche Instructions — <Name>\n\n- Ich bin TODO (Rolle). Vollständiges Profil: knowledge/personal/user-profile.md\n- Antworte auf TODO (de/en); Ton: TODO.\n- Detailtiefe: TODO.\n- Standard-Markt: TODO.\n<!-- persona:end -->\n`,
@@ -2147,7 +2315,7 @@ function paintSettingsBody(el) {
             up automatically (each run is a fresh session); an open interactive Claude session must be restarted by you.
           </div>
         </div>
-        <button class="btn btn-primary btn-small" data-act="restart-app">Restart Interface</button>
+        <button class="btn btn-primary btn-small" data-act="restart-app">Restart App + Chat</button>
       </div>
     </div>` : ''}
 
@@ -2264,7 +2432,7 @@ function paintSettingsBody(el) {
   $('[data-act="add-plugin"]', el)?.addEventListener('click', () => openPluginCreateDrawer(() => paintSettings(el)));
 
   $('[data-act="restart-app"]', el)?.addEventListener('click', async () => {
-    if (!confirm('Restart the interface server? Running scheduler jobs are aborted; the page reloads automatically.')) return;
+    if (!confirm('Restart the interface and chat runtime? Running scheduler jobs are aborted; the page reloads automatically.')) return;
     try { await apiJson('/api/restart', { method: 'POST' }); } catch { /* connection drops during restart */ }
     toast('RESTARTING…');
     const tryReload = (attempt = 0) => setTimeout(async () => {
@@ -2610,6 +2778,59 @@ function mdToHtml(src) {
   flushList();
   if (inCode) out.push('<pre><code>' + esc(codeBuf.join('\n')) + '</code></pre>');
   return fm + out.join('\n');
+}
+
+// ---------------------------------------------------------------- Chat integration
+
+const chatFrameState = { frame: null, ready: false, pending: null };
+
+function chatSlug(agentId) {
+  return CHAT_AGENT_MAP[agentId] || 'danny';
+}
+
+window.addEventListener('message', (e) => {
+  if (e.origin !== CHAT_URL || e.data?.type !== 'steadymade-chat-ready') return;
+  chatFrameState.ready = true;
+  if (chatFrameState.pending && chatFrameState.frame?.contentWindow) {
+    chatFrameState.frame.contentWindow.postMessage(chatFrameState.pending, CHAT_URL);
+    chatFrameState.pending = null;
+  }
+});
+
+function renderChat() {
+  const holder = $('#chat-holder');
+  if (!holder) return;
+
+  if (!chatFrameState.frame) {
+    holder.innerHTML = `<div class="chat-offline-note">
+      <strong>Chat runtime:</strong> embedded from <code>${esc(CHAT_URL)}</code>.
+      If this area stays blank, run <code>node chat/server.mjs</code> or restart with <code>node scripts/start.mjs</code>.
+    </div>`;
+    const frame = document.createElement('iframe');
+    frame.className = 'chat-frame';
+    frame.src = CHAT_URL;
+    frame.title = 'Steadymade Danny Chat';
+    frame.allow = 'clipboard-write';
+    frame.addEventListener('load', () => holder.querySelector('.chat-offline-note')?.remove());
+    holder.appendChild(frame);
+    chatFrameState.frame = frame;
+  }
+
+  if (state.chatAgent || state.chatDraft) {
+    const preset = {
+      type: 'steadymade-preset',
+      agent: state.chatAgent ? chatSlug(state.chatAgent) : null,
+      draft: state.chatDraft || null,
+    };
+    if (chatFrameState.ready && chatFrameState.frame?.contentWindow) {
+      chatFrameState.frame.contentWindow.postMessage(preset, CHAT_URL);
+    } else {
+      chatFrameState.pending = preset;
+    }
+  }
+
+  state.chatDraft = null;
+  state.chatAgent = null;
 }
 
 // ---------------------------------------------------------------- go
