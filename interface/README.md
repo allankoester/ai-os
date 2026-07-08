@@ -40,7 +40,7 @@ MICROSOFT_TENANT_ID=
 MICROSOFT_CLIENT_ID=
 MICROSOFT_CLIENT_SECRET=
 GRAPH_DRIVE_ID=
-GRAPH_KNOWLEDGE_ROOT=AI_OS_Knowledge
+GRAPH_KNOWLEDGE_ROOT=AI_OS/knowledge
 ```
 
 ### Dev mode (local machine)
@@ -50,7 +50,7 @@ Use filesystem backend and point to a OneDrive-synced local folder if desired:
 ```bash
 STEADYMADE_RUNTIME=dev \
 STEADYMADE_KNOWLEDGE_BACKEND=fs \
-STEADYMADE_KNOWLEDGE_FS_ROOT="/Users/allan/Applications/VS Code/steadymade-master/_local/onedrive-company/AI_OS_Knowledge" \
+STEADYMADE_KNOWLEDGE_FS_ROOT="../../../_local/onedrive-company/AI_OS/knowledge" \
 node interface/server.mjs
 ```
 
@@ -68,7 +68,7 @@ MICROSOFT_TENANT_ID="..." \
 MICROSOFT_CLIENT_ID="..." \
 MICROSOFT_CLIENT_SECRET="..." \
 GRAPH_DRIVE_ID="..." \
-GRAPH_KNOWLEDGE_ROOT="AI_OS_Knowledge" \
+GRAPH_KNOWLEDGE_ROOT="AI_OS/knowledge" \
 node interface/server.mjs
 ```
 

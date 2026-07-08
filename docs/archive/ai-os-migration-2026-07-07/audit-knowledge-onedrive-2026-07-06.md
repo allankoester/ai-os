@@ -17,9 +17,9 @@ Audit of:
 2. Runtime is currently using repo-local knowledge storage.
 3. OneDrive shared root exists and is reachable:
    - `/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General`
-4. New canonical AI-OS root has been created in OneDrive:
-   - `/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS_Knowledge`
-5. Linking to `99_Resources/AI_OS_Knowledge` is not used and not recommended.
+4. Canonical AI-OS root is now:
+   - `/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS`
+5. Legacy `AI_OS_Knowledge` scaffold has been archived inside `AI_OS/archive/`.
 
 ## Evidence
 
@@ -54,7 +54,7 @@ Detected top-level folders under shared OneDrive root:
 
 ### Company domain folders
 
-Primary candidates for `AI_OS_Knowledge/company/` migration:
+Primary candidates for `AI_OS/knowledge/company/` migration:
 
 - `01_Strategy_&_Company/`
 - `02_Sales_&_Pipeline/`
@@ -64,7 +64,7 @@ Primary candidates for `AI_OS_Knowledge/company/` migration:
 
 ### Team folders
 
-Primary candidates for `AI_OS_Knowledge/team/` migration:
+Primary candidates for `AI_OS/knowledge/team/` migration:
 
 - README/index and governance docs with shared operating value
 - reusable process and partner execution material under `99_Resources/04_Partner/`
@@ -87,11 +87,14 @@ Do not auto-migrate without review:
 
 Created:
 
-- `AI_OS_Knowledge/company/`
-- `AI_OS_Knowledge/team/`
-- `AI_OS_Knowledge/inbox/`
-- `AI_OS_Knowledge/archive/`
-- `AI_OS_Knowledge/_attachments/`
+- `AI_OS/knowledge/company/`
+- `AI_OS/knowledge/team/`
+- `AI_OS/knowledge/inbox/`
+- `AI_OS/technical_config/company|team|personal/`
+- `AI_OS/tools/`
+- `AI_OS/apps/`
+- `AI_OS/archive/`
+- `AI_OS/_artifacts/`
 
 README files were added to each scaffold folder.
 
@@ -100,6 +103,7 @@ README files were added to each scaffold folder.
 Machine-readable dry-run inventory has been generated:
 
 - `docs/onedrive-migration-inventory-2026-07-06.json`
+- `docs/onedrive-migration-report-2026-07-07.json`
 
 This includes per-file classification and extension distribution for migration planning.
 

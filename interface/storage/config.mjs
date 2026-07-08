@@ -29,7 +29,7 @@ export function createKnowledgeConfig({ rootDir, env = process.env }) {
       clientId: env.MICROSOFT_CLIENT_ID || '',
       clientSecret: env.MICROSOFT_CLIENT_SECRET || '',
       driveId: env.GRAPH_DRIVE_ID || '',
-      knowledgeRoot: String(env.GRAPH_KNOWLEDGE_ROOT || 'AI_OS_Knowledge').trim().replace(/^\/+|\/+$/g, ''),
+      knowledgeRoot: String(env.GRAPH_KNOWLEDGE_ROOT || 'AI_OS/knowledge').trim().replace(/^\/+|\/+$/g, ''),
     },
   };
 }

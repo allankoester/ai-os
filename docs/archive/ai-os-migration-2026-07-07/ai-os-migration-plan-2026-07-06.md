@@ -2,17 +2,17 @@
 
 ## Goal
 
-Migrate relevant OneDrive content into `AI_OS_Knowledge` so AI-OS can operate as CMS and system of record, with Markdown-first source strategy.
+Migrate relevant OneDrive content into `AI_OS` so AI-OS can operate as CMS and system of record, with Markdown-first source strategy.
 
 ## Canonical target
 
-`/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS_Knowledge`
+`/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS`
 
 ## Core migration strategy
 
 1. Copy-first migration (no destructive move in first pass).
 2. Markdown-first for source-of-truth records.
-3. Binary artifacts are attachments or exports, not canonical editable records.
+3. Binary artifacts are artifacts/exports, not canonical editable records.
 4. Sensitive folders are review-first.
 
 ## File compatibility and handling rules
@@ -35,7 +35,7 @@ Migrate relevant OneDrive content into `AI_OS_Knowledge` so AI-OS can operate as
 
 ### Media/assets (`.png`, `.jpg`, `.mp4`, `.mov`)
 
-- Store under `_attachments/`.
+- Store under `_artifacts/` (origin-local preferred).
 - Reference from Markdown records.
 
 ### Collaboration/system artifacts (`.loop`, `.base`, `.whiteboard`, planner exports)
@@ -48,15 +48,15 @@ Migrate relevant OneDrive content into `AI_OS_Knowledge` so AI-OS can operate as
 
 | Current path | Target path | Treatment |
 | --- | --- | --- |
-| `01_Strategy_&_Company/` | `company/ssot/`, `company/strategy/`, `company/creative/` | Markdown-first migration + attachment indexing |
-| `02_Sales_&_Pipeline/` | `company/clients/`, `company/offers/` | review-first for client-sensitive branches |
-| `03_Projects/` | `company/projects/` + `team/runbooks/` for internal playbooks | structured migration |
-| `04_Finance_&_Legal/` | `company/finance-legal/` | review-first, preserve originals |
-| `05_Marketing_&_Content/` | `company/marketing/`, `company/creative/` | Markdown source + attachment strategy |
-| `98_XChange/` | `inbox/_triage/` | classify first, then migrate/discard |
-| `99_Resources/` | `company/references/` and selected `team/` | curated migration only |
+| `01_Strategy_&_Company/` | `knowledge/company/strategy/` and `knowledge/company/company_handbook/` | Markdown-first migration + artifact indexing |
+| `02_Sales_&_Pipeline/` | `knowledge/company/sales/` and `knowledge/company/clients/` | review-first for client-sensitive branches |
+| `03_Projects/` | `knowledge/company/projects/` and selected `knowledge/team/runbooks/` | structured migration |
+| `04_Finance_&_Legal/` | `knowledge/company/finance_legal/` | review-first, preserve originals |
+| `05_Marketing_&_Content/` | `knowledge/company/marketing/` and `knowledge/company/creative/` | Markdown source + artifact strategy |
+| `98_XChange/` | `knowledge/inbox/` | classify first, then migrate/discard |
+| `99_Resources/` | `knowledge/company/references/` and selected `knowledge/team/runbooks/` | curated migration only |
 | `Microsoft Planner/` | exception/review | no automatic migration |
-| `Whiteboards/` | `_attachments/exports/whiteboards/` + Markdown summaries | attachment-first |
+| `Whiteboards/` | `knowledge/team/runbooks/whiteboards/` and `_artifacts/` + Markdown summaries | artifact-first |
 
 ## Explicit exceptions for first migration pass
 
@@ -81,6 +81,16 @@ Do not auto-migrate:
 2. Approve inclusion/exclusion list.
 3. Execute copy-first migration batch.
 4. Convert or summarize non-Markdown source documents.
-5. Link attachments from Markdown records.
+5. Link artifacts from Markdown records.
 6. Verify in AI-OS interface with OneDrive fs root.
 7. Freeze and archive legacy branches after sign-off.
+
+## Cross-user linking model
+
+1. Keep repo links relative and user-agnostic:
+   - `knowledge/company -> ../../../../_local/onedrive-company/AI_OS/knowledge/company`
+   - `knowledge/inbox -> ../../../../_local/onedrive-company/AI_OS/knowledge/inbox`
+2. Each user configures local bridge symlink in their own repo root:
+   - `_local/onedrive-company -> <their local OneDrive shared-library path>`
+3. Do not commit absolute `/Users/<name>/...` paths.
+4. Keep `knowledge/personal/` local and never linked to company OneDrive.

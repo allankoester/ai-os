@@ -110,7 +110,7 @@ async function main() {
     ...process.env,
     STEADYMADE_RUNTIME: process.env.STEADYMADE_RUNTIME || 'dev',
     STEADYMADE_KNOWLEDGE_BACKEND: process.env.STEADYMADE_KNOWLEDGE_BACKEND || 'fs',
-    STEADYMADE_KNOWLEDGE_FS_ROOT: process.env.STEADYMADE_KNOWLEDGE_FS_ROOT || 'knowledge',
+    STEADYMADE_KNOWLEDGE_FS_ROOT: process.env.STEADYMADE_KNOWLEDGE_FS_ROOT || '../../../_local/onedrive-company/AI_OS/knowledge',
   };
 
   logHeader('Starting interface');

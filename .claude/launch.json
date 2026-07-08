@@ -4,8 +4,16 @@
     {
       "name": "ai-os-interface",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["interface/server.mjs"],
-      "port": 4011
+      "runtimeArgs": [
+        "interface/server.mjs"
+      ],
+      "env": {
+        "STEADYMADE_RUNTIME": "dev",
+        "STEADYMADE_KNOWLEDGE_BACKEND": "fs",
+        "STEADYMADE_KNOWLEDGE_FS_ROOT": "../../../_local/onedrive-company/AI_OS/knowledge"
+      },
+      "port": 4011,
+      "autoPort": true
     }
   ]
 }

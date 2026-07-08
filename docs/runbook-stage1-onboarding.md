@@ -65,7 +65,7 @@ Reproducible setup for one user on one machine. Target time: under 15 minutes.
    - `/personal-onboarding` — creates your private persona profile
      (`knowledge/personal/user-profile.md`) and your personal custom
      instructions (`CLAUDE.local.md`).
-   - `/company-onboarding` — only if `knowledge/company/operating-profile.md`
+   - `/company-onboarding` — only if `operating-profile.md` (AI_OS root)
      still contains TODO placeholders (first team member does this once;
      later runs enrich it).
 

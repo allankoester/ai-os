@@ -1,0 +1,208 @@
+{
+  "ops_count": 40,
+  "conflict_count": 0,
+  "missing_count": 0,
+  "operations": [
+    {
+      "action": "delete-file",
+      "path": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/.DS_Store"
+    },
+    {
+      "action": "delete-file",
+      "path": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/.DS_Store"
+    },
+    {
+      "action": "delete-file",
+      "path": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/technical_config/.DS_Store"
+    },
+    {
+      "action": "delete-file",
+      "path": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/technical_config/company/.DS_Store"
+    },
+    {
+      "action": "delete-file",
+      "path": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/.DS_Store"
+    },
+    {
+      "action": "delete-file",
+      "path": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/contracts/.DS_Store"
+    },
+    {
+      "action": "move",
+      "src": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/operating-profile.md",
+      "dst": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/operating-profile.md"
+    },
+    {
+      "action": "move-dir",
+      "src": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/steadymade Docs",
+      "dst": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/company_handbook_SSOT"
+    },
+    {
+      "action": "move",
+      "src": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/company_handbook_SSOT/steadymade – 3-Monats-LinkedIn-Kampagne.md",
+      "dst": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/marketing/campaigns/linkedin/3-monats-linkedin-kampagne.md"
+    },
+    {
+      "action": "move",
+      "src": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/company_handbook_SSOT/steadymade – Ideal Customer Profile (ICP).md",
+      "dst": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/strategy/ideal-customer-profile.md"
+    },
+    {
+      "action": "move",
+      "src": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/company_handbook_SSOT/steadymade – Marketing Strategy Handbook.md",
+      "dst": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/marketing/marketing-strategy-handbook.md"
+    },
+    {
+      "action": "move",
+      "src": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/company_handbook_SSOT/steadymade – Positionierung, Brand Story, Zielkunden & Personas.md",
+      "dst": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/strategy/positioning-brand-story-target-customers-personas.md"
+    },
+    {
+      "action": "delete-file",
+      "path": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/strategy/steadymade – SSOT 1. Strategy & Direction.md"
+    },
+    {
+      "action": "delete-file",
+      "path": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/strategy/steadymade – SSOT 2. Markt, ICP & Value Proposition.md"
+    },
+    {
+      "action": "delete-file",
+      "path": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/strategy/steadymade – SSOT 6. Security, Data & AI Governance.md"
+    },
+    {
+      "action": "delete-file",
+      "path": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/strategy/steadymade – Positionierung, Brand Story, Zielkunden & Personas.md"
+    },
+    {
+      "action": "move",
+      "src": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/strategy/02_Strategy/BAFA KMU Beratung/Website - Angebotsstatement.md",
+      "dst": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/strategy/bafa-kmu-beratung/Website - Angebotsstatement.md"
+    },
+    {
+      "action": "move",
+      "src": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/strategy/02_Strategy/BAFA KMU Beratung/Anmeldung - BAFA & Prüfung bei Beratunsgabschluss.md",
+      "dst": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/strategy/bafa-kmu-beratung/Anmeldung - BAFA & Prüfung bei Beratunsgabschluss.md"
+    },
+    {
+      "action": "move",
+      "src": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/strategy/02_Strategy/BAFA KMU Beratung/KI-Beratungsangebote für KMU (BAFA-konforme Pakete.md",
+      "dst": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/strategy/bafa-kmu-beratung/KI-Beratungsangebote für KMU (BAFA-konforme Pakete.md"
+    },
+    {
+      "action": "move",
+      "src": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/strategy/02_Strategy/BAFA KMU Beratung/Beratungs- und Angebotskonzept.md",
+      "dst": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/strategy/bafa-kmu-beratung/Beratungs- und Angebotskonzept.md"
+    },
+    {
+      "action": "delete-empty-dir",
+      "path": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/strategy/02_Strategy/BAFA KMU Beratung"
+    },
+    {
+      "action": "delete-empty-dir",
+      "path": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/strategy/02_Strategy"
+    },
+    {
+      "action": "move",
+      "src": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/strategy/04_Brand_&_Design/Design_Guide/Steadymade design.md",
+      "dst": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/creative/design-system/steadymade-design.md"
+    },
+    {
+      "action": "move",
+      "src": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/strategy/04_Brand_&_Design/Assets/_artifacts/Steadymade2 Intro Video.mp4",
+      "dst": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/creative/brand-assets/_artifacts/Steadymade2 Intro Video.mp4"
+    },
+    {
+      "action": "move",
+      "src": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/strategy/04_Brand_&_Design/Teams BG/_artifacts/steadymade teams BG.jpg",
+      "dst": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/creative/brand-assets/_artifacts/steadymade teams BG.jpg"
+    },
+    {
+      "action": "delete-empty-dir",
+      "path": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/strategy/04_Brand_&_Design/Assets/_artifacts"
+    },
+    {
+      "action": "delete-empty-dir",
+      "path": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/strategy/04_Brand_&_Design/Assets"
+    },
+    {
+      "action": "delete-empty-dir",
+      "path": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/strategy/04_Brand_&_Design/Teams BG/_artifacts"
+    },
+    {
+      "action": "delete-empty-dir",
+      "path": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/strategy/04_Brand_&_Design/Teams BG"
+    },
+    {
+      "action": "delete-empty-dir",
+      "path": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/strategy/04_Brand_&_Design/Design_Guide"
+    },
+    {
+      "action": "delete-empty-dir",
+      "path": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/strategy/04_Brand_&_Design"
+    },
+    {
+      "action": "move",
+      "src": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/strategy/01_Registration_&_Legal/_artifacts/SteadyMade & SMAPAS Signature.docx",
+      "dst": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/contracts/legal/company-registration/_artifacts/SteadyMade & SMAPAS Signature.docx"
+    },
+    {
+      "action": "delete-empty-dir",
+      "path": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/strategy/01_Registration_&_Legal/_artifacts"
+    },
+    {
+      "action": "delete-empty-dir",
+      "path": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/strategy/01_Registration_&_Legal"
+    },
+    {
+      "action": "move",
+      "src": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/contracts/design-system/legacy-design-system-source.md",
+      "dst": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/creative/design-system/legacy/legacy-design-system-source.md"
+    },
+    {
+      "action": "move",
+      "src": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/contracts/design-system/_artifacts",
+      "dst": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/creative/design-system/legacy/_artifacts"
+    },
+    {
+      "action": "delete-empty-dir",
+      "path": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/contracts/design-system"
+    },
+    {
+      "action": "delete-file",
+      "path": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/documents/.gitkeep"
+    },
+    {
+      "action": "delete-empty-dir",
+      "path": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/documents"
+    },
+    {
+      "action": "delete-file",
+      "path": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/strategy/.gitkeep"
+    }
+  ],
+  "conflicts": [],
+  "missing": [],
+  "postcheck": {
+    "ssot_folder": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/knowledge/company/company_handbook_SSOT",
+    "ssot_files": [
+      "steadymade – SSOT 1. Strategy & Direction.md",
+      "steadymade – SSOT 2. Markt, ICP & Value Proposition.md",
+      "steadymade – SSOT 3. Services & Pricing Model.md",
+      "steadymade – SSOT 4. Go-to-Market Playbook.md",
+      "steadymade – SSOT 5. Delivery & Operating Model.md",
+      "steadymade – SSOT 6. Security, Data & AI Governance.md"
+    ],
+    "strategy_files": [
+      "README.md",
+      "bafa-kmu-beratung/Anmeldung - BAFA & Prüfung bei Beratunsgabschluss.md",
+      "bafa-kmu-beratung/Beratungs- und Angebotskonzept.md",
+      "bafa-kmu-beratung/KI-Beratungsangebote für KMU (BAFA-konforme Pakete.md",
+      "bafa-kmu-beratung/Website - Angebotsstatement.md",
+      "ideal-customer-profile.md",
+      "positioning-brand-story-target-customers-personas.md"
+    ],
+    "operating_profile_location": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/operating-profile.md",
+    "documents_exists": false,
+    "contracts_design_system_exists": false
+  }
+}

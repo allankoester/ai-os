@@ -604,6 +604,35 @@ input, textarea, select { font-family: inherit; }
 }
 .kn-folders { background: #F4F6F4; }
 
+/* breadcrumb path of the current folder level */
+.kn-crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding: 0 12px 10px;
+}
+.kn-crumb {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  background: none;
+  border: none;
+  padding: 2px 1px;
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kn-crumb:hover { color: var(--headline); text-decoration: underline; }
+.kn-crumb.current { color: var(--headline); font-weight: 700; }
+.kn-crumb-sep { font-family: var(--font-mono); font-size: 10px; color: var(--muted); opacity: 0.5; }
+
+.kn-chev { font-family: var(--font-mono); color: var(--muted); margin-left: auto; padding-left: 8px; }
+.kn-up .kn-folder-name { color: var(--muted); }
+
 .kn-folder-btn {
   display: flex;
   flex-direction: column;

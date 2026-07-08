@@ -1,6 +1,6 @@
 # Operating-Profile-Template — Struktur und Leitfragen
 
-Zielstruktur von `knowledge/company/operating-profile.md`. Pro Abschnitt:
+Zielstruktur von `operating-profile.md` (AI_OS root). Pro Abschnitt:
 die Leitfragen für das Interview. TODO-Stellen ersetzen, Gerüst erhalten.
 
 ## Wer wir sind
@@ -17,7 +17,7 @@ die Leitfragen für das Interview. TODO-Stellen ersetzen, Gerüst erhalten.
 > Welche Kunden lehnen wir ab?
 
 Kurztabelle: Markt | ICP-Kurzform | typische Ansprechpartner. Verweis auf
-`knowledge/company/steadymade Docs/steadymade – SSOT 2. Markt, ICP & Value Proposition.md`.
+`knowledge/company/company_handbook_SSOT/steadymade – SSOT 2. Markt, ICP & Value Proposition.md`.
 
 ## Leistungen
 

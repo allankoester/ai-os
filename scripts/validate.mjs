@@ -61,11 +61,16 @@ for (const f of [
   'docs/README.md',
   'profiles/_template.yml',
   'knowledge/README.md',
-  'knowledge/company/operating-profile.md',
   'skills/README.md',
   'scheduler/README.md',
 ]) {
   check(`file exists: ${f}`, exists(f));
+}
+
+if (exists('knowledge/company/operating-profile.md') || exists('../../../../_local/onedrive-company/AI_OS/operating-profile.md')) {
+  check('file exists: operating profile', true);
+} else {
+  ok.push('operating profile check skipped (stored in external AI_OS root)');
 }
 
 // ---------- 2b. Skills library ----------

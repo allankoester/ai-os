@@ -13,6 +13,7 @@ const state = {
   selectedFolder: null,  // folder name selected on the map
   kn: {
     folder: null,        // active folder key in Knowledge view
+    level: '',           // folder level shown in the folder column ('' = root)
     doc: null,           // active doc path
     content: '',
     savedContent: '',
@@ -38,6 +39,8 @@ const VIEW_TITLES = {
 
 const agentById = (id) => AGENTS.find((a) => a.id === id);
 const deptById = (id) => DEPARTMENTS.find((d) => d.id === id);
+// an access entry covers the folder itself and every folder nested under it
+const agentAccess = (a, folder) => a.access.some((acc) => folder === acc || folder.startsWith(acc + '/'));
 
 // ---------------------------------------------------------------- workflows (editable)
 // data.js WORKFLOWS is the base model; user edits live in interface/workflows.json
@@ -67,7 +70,7 @@ async function saveFlowsCfg() {
 }
 
 // Preferred folder ordering for lists
-const FOLDER_ORDER = ['inbox', 'company/strategy', 'company/steadymade Docs', 'company/marketing', 'company/offers', 'company/documents', 'company/creative', 'company/clients', 'personal', 'archive'];
+const FOLDER_ORDER = ['inbox', 'company/company_handbook_SSOT', 'company/strategy', 'company/commercial', 'company/projects', 'company/marketing', 'company/contracts', 'company/references', 'personal', 'archive'];
 function sortedFolders() {
   return [...state.system.folders].sort((a, b) => {
     const ia = FOLDER_ORDER.indexOf(a.name), ib = FOLDER_ORDER.indexOf(b.name);
@@ -296,6 +299,22 @@ function renderCommand(el) {
 
 const mapState = { positions: {}, folderPositions: {}, observer: null };
 
+// the map shows only the top-level folders named in agent access lists;
+// each entry aggregates the docs of everything nested underneath it
+function agentFolders() {
+  const names = [...new Set(AGENTS.flatMap((a) => a.access))];
+  names.sort((a, b) => {
+    const ia = FOLDER_ORDER.indexOf(a), ib = FOLDER_ORDER.indexOf(b);
+    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+  });
+  return names.map((name) => ({
+    name,
+    docs: state.system.folders
+      .filter((f) => f.name === name || f.name.startsWith(name + '/'))
+      .flatMap((f) => f.docs),
+  }));
+}
+
 // The map sizes itself to the real container (fullscreen) instead of a fixed
 // viewBox — node sizes stay readable, the layout ellipse adapts. A
 // ResizeObserver re-renders when the drawer opens/closes or the window resizes.
@@ -324,7 +343,7 @@ function drawMap(el) {
   const s = Math.min(Math.max(Math.min(W / 1250, H / 780), 0.7), 1.45);
   const cx = W / 2, cy = H / 2;
   const agents = AGENTS.filter((a) => a.id !== 'danny');
-  const folders = sortedFolders();
+  const folders = agentFolders();
 
   // ring agents grouped by department order
   const order = ['strategy', 'knowledge', 'marketing', 'sales', 'documents', 'creative', 'it'];
@@ -370,9 +389,10 @@ function drawMap(el) {
   // agent ↔ folder access edges (lit on selection)
   AGENTS.forEach((a) => {
     const p = mapState.positions[a.id];
-    a.access.forEach((fname) => {
-      const fp = mapState.folderPositions[fname];
-      if (fp) edges += edge(p.x, p.y, fp.x, fp.y, 'acc', `${a.id}>${fname}`);
+    folders.forEach((f) => {
+      if (!agentAccess(a, f.name)) return;
+      const fp = mapState.folderPositions[f.name];
+      edges += edge(p.x, p.y, fp.x, fp.y, 'acc', `${a.id}>${f.name}`);
     });
   });
 
@@ -389,11 +409,13 @@ function drawMap(el) {
 
   const folderNode = (f) => {
     const p = mapState.folderPositions[f.name];
-    const w = Math.max(120, f.name.length * 7.5 + 56), h = 46;
+    // long nested paths show only their last two segments; the drawer has the full path
+    const label = f.name.length > 30 ? '…/' + f.name.split('/').slice(-2).join('/') : f.name;
+    const w = Math.max(120, label.length * 7.5 + 56), h = 46;
     return `<g class="node node-folder" data-node-folder="${esc(f.name)}" transform="translate(${p.x - (w * s) / 2},${p.y - (h * s) / 2}) scale(${s})">
       <rect class="node-box" width="${w}" height="${h}" rx="20"/>
       <path d="M 17 ${h / 2 - 5} h 4 l 2 2 h 6 v 8 h -12 z" fill="none" stroke="var(--green-light)" stroke-width="1.2"/>
-      <text class="node-name" x="36" y="${h / 2 - 3}">${esc(f.name)}/</text>
+      <text class="node-name" x="36" y="${h / 2 - 3}">${esc(label)}/</text>
       <text class="node-role" x="36" y="${h / 2 + 13}">${f.docs.length} DOCS</text>
     </g>`;
   };
@@ -429,7 +451,7 @@ function drawMap(el) {
       <div class="legend-row"><span class="legend-swatch"></span> DANNY ROUTING</div>
       <div class="legend-row"><span class="legend-swatch green"></span> KNOWLEDGE ACCESS (SELECTED)</div>
       <div class="legend-row"><span class="legend-dot"></span> AGENT</div>
-      <div class="legend-row"><span class="legend-dot folder"></span> MARKDOWN FOLDER</div>
+      <div class="legend-row"><span class="legend-dot folder"></span> AGENT-CONNECTED FOLDER</div>
     </div>
   </div>`;
 
@@ -485,7 +507,7 @@ function applyAgentHighlight(id) {
     n.classList.toggle('dim', !connected.has(nid));
   });
   $$('.node-folder').forEach((n) => {
-    const lit = a.access.includes(n.dataset.nodeFolder);
+    const lit = agentAccess(a, n.dataset.nodeFolder);
     n.classList.toggle('lit', lit);
     n.classList.toggle('dim', !lit);
   });
@@ -500,7 +522,7 @@ function applyFolderHighlight(name) {
   clearHighlights();
   state.selectedFolder = name;
   state.selectedAgent = null;
-  const withAccess = AGENTS.filter((a) => a.access.includes(name)).map((a) => a.id);
+  const withAccess = AGENTS.filter((a) => agentAccess(a, name)).map((a) => a.id);
   $$('.edge').forEach((e) => {
     const eid = e.dataset.edge;
     if (eid.endsWith('>' + name)) { e.classList.add('lit'); e.style.opacity = ''; }
@@ -534,7 +556,7 @@ function closeDrawer() {
 
 function openAgentDrawer(id) {
   const a = agentById(id);
-  const restricted = state.system.folders.map((f) => f.name).filter((n) => !a.access.includes(n));
+  const restricted = agentFolders().map((f) => f.name).filter((n) => !agentAccess(a, n));
   const flows = FLOWS.filter((w) => w.chain.includes(a.id));
   const live = state.system.agents.find((x) => x.path === a.promptPath);
 
@@ -646,18 +668,20 @@ async function fillAgentPlugins(a) {
 }
 
 function openFolderDrawer(name) {
-  const f = state.system.folders.find((x) => x.name === name);
-  if (!f) return;
-  const withAccess = AGENTS.filter((a) => a.access.includes(name));
+  // aggregate the folder itself and everything nested under it, matching the map node
+  const docs = state.system.folders
+    .filter((x) => x.name === name || x.name.startsWith(name + '/'))
+    .flatMap((x) => x.docs);
+  const withAccess = AGENTS.filter((a) => agentAccess(a, name));
   const flows = FLOWS.filter((w) => w.chain.some((id) => withAccess.some((a) => a.id === id)));
-  const last = f.docs.length ? Math.max(...f.docs.map((d) => d.mtime)) : null;
+  const last = docs.length ? Math.max(...docs.map((d) => d.mtime)) : null;
 
   openDrawer(`
     <div class="drawer-head">
       <button class="drawer-close">✕</button>
       <div class="drawer-dept">KNOWLEDGE FOLDER</div>
       <div class="drawer-name">${esc(name)}/</div>
-      <div class="drawer-role">${f.docs.length} Markdown document${f.docs.length === 1 ? '' : 's'}${last ? ' · last modified ' + timeAgo(last) : ''}</div>
+      <div class="drawer-role">${docs.length} Markdown document${docs.length === 1 ? '' : 's'} incl. subfolders${last ? ' · last modified ' + timeAgo(last) : ''}</div>
     </div>
     <div class="drawer-body">
       <div class="drawer-section">
@@ -666,7 +690,7 @@ function openFolderDrawer(name) {
       </div>
       <div class="drawer-section">
         <div class="section-title">Documents</div>
-        ${f.docs.map((doc) => `
+        ${docs.map((doc) => `
           <button class="list-row" data-open="${esc(doc.path)}">
             <span class="badge ${statusBadgeClass(docMeta(doc.path).status)}">${docMeta(doc.path).status.toUpperCase()}</span>
             <span class="list-title">${esc(doc.title)}</span>
@@ -699,21 +723,59 @@ function knFolderList() {
   return list;
 }
 
+// Hierarchical view over the flat folder list. Folder keys are paths
+// ("company/marketing/03_Social_Media"); the folder column shows one level at
+// a time (Finder-style drill-down) with a breadcrumb to jump back up.
+function knParent(key) {
+  const i = key.lastIndexOf('/');
+  return i === -1 ? '' : key.slice(0, i);
+}
+
+// direct children of a level: real subfolders (incl. pure container dirs that
+// only exist as path prefixes) + the system pseudo-folders at root
+function knChildren(level) {
+  const prefix = level ? level + '/' : '';
+  const map = new Map();
+  for (const f of knFolderList()) {
+    if (f.kind === 'system') {
+      if (!level) map.set(f.key, { key: f.key, label: f.label, kind: 'system', docs: f.docs.length, subDocs: 0, subs: new Set(), hasEntry: true });
+      continue;
+    }
+    if (!f.key.startsWith(prefix) || f.key === level) continue;
+    const seg = f.key.slice(prefix.length).split('/')[0];
+    const childKey = prefix + seg;
+    let node = map.get(childKey);
+    if (!node) {
+      node = { key: childKey, label: seg + '/', kind: 'knowledge', docs: 0, subDocs: 0, subs: new Set(), hasEntry: false };
+      map.set(childKey, node);
+    }
+    if (f.key === childKey) { node.docs = f.docs.length; node.hasEntry = true; }
+    else { node.subs.add(f.key.slice(childKey.length + 1).split('/')[0]); node.subDocs += f.docs.length; }
+  }
+  return [...map.values()];
+}
+
 function renderKnowledge(el) {
   el.innerHTML = `<div class="kn-layout">
     <div class="kn-folders" id="kn-folders"></div>
     <div class="kn-docs" id="kn-docs"></div>
     <div class="kn-editor" id="kn-editor"></div>
   </div>`;
-  if (!state.kn.folder) state.kn.folder = knFolderList()[0].key;
+  if (!state.kn.folder) {
+    const first = knChildren('')[0];
+    if (first) { state.kn.folder = first.key; state.kn.level = ''; }
+  }
   paintKnFolders();
   paintKnDocs();
   paintKnEditor();
 }
 
+// select a folder by key from anywhere (map drawer, agent drawer, editor):
+// the folder column jumps to the level that shows it
 function selectKnFolder(key) {
   state.kn.folder = key;
   state.kn.doc = null;
+  state.kn.level = knChildren(key).length ? key : knParent(key);
   if (state.view !== 'knowledge') setView('knowledge');
   else { paintKnFolders(); paintKnDocs(); paintKnEditor(); }
 }
@@ -721,14 +783,39 @@ function selectKnFolder(key) {
 function paintKnFolders() {
   const el = $('#kn-folders');
   if (!el) return;
-  el.innerHTML = `<div class="section-title" style="padding:0 12px">Folders</div>` +
-    knFolderList().map((f) => `
-      <button class="kn-folder-btn ${state.kn.folder === f.key ? 'active' : ''}" data-key="${esc(f.key)}">
-        <span class="kn-folder-name"><span style="color:${f.kind === 'system' ? 'var(--muted)' : 'var(--green-light)'};font-family:var(--font-mono)">${f.kind === 'system' ? '·' : '▸'}</span> ${esc(f.label)}</span>
-        <span class="kn-folder-meta">${f.docs.length} DOCS</span>
-      </button>`).join('');
-  $$('.kn-folder-btn', el).forEach((b) => b.addEventListener('click', () => {
-    state.kn.folder = b.dataset.key; state.kn.doc = null;
+  const level = state.kn.level || '';
+  const segs = level ? level.split('/') : [];
+  const crumbs = [`<button class="kn-crumb ${level ? '' : 'current'}" data-level="">knowledge</button>`]
+    .concat(segs.map((s, i) => `<button class="kn-crumb ${i === segs.length - 1 ? 'current' : ''}" data-level="${esc(segs.slice(0, i + 1).join('/'))}">${esc(s)}</button>`))
+    .join('<span class="kn-crumb-sep">/</span>');
+  const children = knChildren(level);
+
+  el.innerHTML = `
+    <div class="section-title" style="padding:0 12px">Folders</div>
+    <div class="kn-crumbs">${crumbs}</div>
+    ${level ? `
+      <button class="kn-folder-btn kn-up" data-up>
+        <span class="kn-folder-name"><span style="font-family:var(--font-mono);color:var(--muted)">‹</span> ..</span>
+        <span class="kn-folder-meta">UP ONE LEVEL</span>
+      </button>` : ''}
+    ${children.map((c) => `
+      <button class="kn-folder-btn ${state.kn.folder === c.key ? 'active' : ''}" data-key="${esc(c.key)}" ${c.subs.size ? 'data-children="1"' : ''}>
+        <span class="kn-folder-name"><span style="color:${c.kind === 'system' ? 'var(--muted)' : 'var(--green-light)'};font-family:var(--font-mono)">${c.kind === 'system' ? '·' : '▸'}</span> ${esc(c.label)}${c.subs.size ? '<span class="kn-chev">›</span>' : ''}</span>
+        <span class="kn-folder-meta">${c.docs + c.subDocs} DOCS${c.subs.size ? ' · ' + c.subs.size + ' FOLDERS' : ''}</span>
+      </button>`).join('') || '<div class="stat-note" style="padding:0 12px">No subfolders.</div>'}`;
+
+  $$('.kn-crumb', el).forEach((b) => b.addEventListener('click', () => {
+    state.kn.level = b.dataset.level;
+    paintKnFolders();
+  }));
+  $('[data-up]', el)?.addEventListener('click', () => {
+    state.kn.level = knParent(level);
+    paintKnFolders();
+  });
+  $$('.kn-folder-btn[data-key]', el).forEach((b) => b.addEventListener('click', () => {
+    state.kn.folder = b.dataset.key;
+    state.kn.doc = null;
+    if (b.dataset.children) state.kn.level = b.dataset.key; // drill in: clicked folder becomes the level
     paintKnFolders(); paintKnDocs(); paintKnEditor();
   }));
 }
@@ -737,6 +824,12 @@ function paintKnDocs() {
   const el = $('#kn-docs');
   if (!el) return;
   const folder = knFolderList().find((f) => f.key === state.kn.folder);
+  if (!folder) {
+    // container folder without direct documents (exists only as a path prefix)
+    el.innerHTML = `<div class="section-title" style="padding:0 12px">${esc((state.kn.folder || '—') + '/')}</div>
+      <div class="stat-note" style="padding:0 12px">No documents at this level — open a subfolder.</div>`;
+    return;
+  }
   el.innerHTML = `<div class="section-title" style="padding:0 12px">${esc(folder.label)}</div>` +
     (folder.docs.length ? folder.docs.map((d) => `
       <button class="kn-doc-btn ${state.kn.doc === d.path ? 'active' : ''}" data-path="${esc(d.path)}">
@@ -762,7 +855,10 @@ async function loadDoc(path, mode) {
 function openInEditor(path, mode = 'preview') {
   // figure out which folder pane the doc belongs to
   const folder = knFolderList().find((f) => f.docs.some((d) => d.path === path));
-  state.kn.folder = folder ? folder.key : state.kn.folder;
+  if (folder) {
+    state.kn.folder = folder.key;
+    state.kn.level = knChildren(folder.key).length ? folder.key : knParent(folder.key);
+  }
   state.kn.doc = null;
   closeDrawer();
   setView('knowledge');
@@ -909,6 +1005,7 @@ async function addKnowledge() {
   if (res.ok) {
     state.system = await (await fetch('/api/system')).json();
     state.kn.folder = folder;
+    state.kn.level = knParent(folder);
     setView('knowledge');
     loadDoc(path, 'edit');
     toast('CREATED ' + path.toUpperCase());
@@ -2103,7 +2200,7 @@ function paintGuardrailsCard(card, data) {
       </div>
       ${addOpen ? `
       <div class="gr-add-row">
-        <input class="filter-input" id="gr-add-path" type="text" placeholder="folder path, e.g. knowledge/company/clients/acme" style="flex:1;min-width:220px">
+        <input class="filter-input" id="gr-add-path" type="text" placeholder="folder path, e.g. knowledge/company/commercial/clients/acme" style="flex:1;min-width:220px">
         <select class="filter-input" id="gr-add-level">
           ${['ask', 'read', 'deny', 'write'].map((l) => `<option value="${l}">${levelLabel[l]}</option>`).join('')}
         </select>

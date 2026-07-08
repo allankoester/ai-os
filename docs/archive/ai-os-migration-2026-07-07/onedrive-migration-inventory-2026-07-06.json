@@ -1,8 +1,8 @@
 {
-  "generated_on": "2026-07-06",
+  "generated_on": "2026-07-07",
   "source_root": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General",
-  "target_root_recommendation": "SteadyMade.ai - General/AI_OS_Knowledge",
-  "scope_note": "AI_OS_Knowledge target scaffold and system folders are excluded from this legacy-source inventory.",
+  "target_root_recommendation": "SteadyMade.ai - General/AI_OS",
+  "scope_note": "AI_OS target folders and system folders are excluded from this legacy-source inventory.",
   "summary": {
     "file_count": 199,
     "extensions": {
@@ -35,9 +35,9 @@
       ".whiteboard": 1
     },
     "classifications": {
-      "migrate_as_attachment_with_index": 56,
+      "migrate_as_attachment_with_index": 55,
+      "manual_review": 41,
       "migrate_markdown_source": 40,
-      "manual_review": 40,
       "exclude_system": 32,
       "review_sensitive": 14,
       "triage_inbox": 14,
@@ -50,13 +50,17 @@
       ".trash/",
       ".DS_Store",
       ".849C9593-D756-4E56-8D6E-42412F2A707B",
-      "AI_OS_Knowledge/"
+      "AI_OS_Knowledge/",
+      "AI_OS/"
     ],
     "review_sensitive": [
       "04_Finance_&_Legal/",
       "02_Sales_&_Pipeline/02_Opportunities/",
       "Microsoft Planner/",
       "98_XChange/"
+    ],
+    "manual_review_paths": [
+      "03_Projects/01_Active/NDR Newsletter.zip"
     ],
     "attachment_only": [
       ".pdf",
@@ -98,7 +102,7 @@
       "path": "01_Strategy_&_Company/.DS_Store",
       "top_folder": "01_Strategy_&_Company",
       "extension": "[no_ext]",
-      "size_bytes": 12292,
+      "size_bytes": 14340,
       "classification": "exclude_system"
     },
     {
@@ -147,7 +151,7 @@
       "path": "01_Strategy_&_Company/04_Brand_&_Design/.DS_Store",
       "top_folder": "01_Strategy_&_Company",
       "extension": "[no_ext]",
-      "size_bytes": 10244,
+      "size_bytes": 12292,
       "classification": "exclude_system"
     },
     {
@@ -372,7 +376,7 @@
       "top_folder": "03_Projects",
       "extension": ".zip",
       "size_bytes": 1490493,
-      "classification": "migrate_as_attachment_with_index"
+      "classification": "manual_review"
     },
     {
       "path": "03_Projects/README.md",

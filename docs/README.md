@@ -3,6 +3,7 @@
 ## Canonical Docs
 
 - `docs/status-and-roadmap.md`
+- `docs/ai-os-migration-status.md`
 - `docs/guide-how-to-start.md`
 - `docs/runbook-stage1-onboarding.md`
 - `docs/runbook-team-operations.md`
@@ -21,6 +22,7 @@
 - `docs/archive/danny-orchestrator-system-prompt.md`
 - `docs/archive/cockpit-integration-project-plan.md`
 - `docs/archive/openclaw-runtime-integration-spec.md`
+- `docs/archive/ai-os-migration-2026-07-07/` — archived migration support docs, inventory and report
 
 ## Naming Convention
 

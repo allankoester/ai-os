@@ -83,10 +83,10 @@ local learning data and are not committed.
 
 ### Company Operating Profile
 
-`knowledge/company/operating-profile.md` is the central company custom
+`operating-profile.md` (AI_OS root) is the central company custom
 instruction — read it as first company context. It is filled and maintained
 via the `/company-onboarding` skill; SSOT documents under
-`knowledge/company/steadymade Docs/` stay canonical.
+`knowledge/company/company_handbook_SSOT/` stay canonical.
 
 ### Onboarding skills
 

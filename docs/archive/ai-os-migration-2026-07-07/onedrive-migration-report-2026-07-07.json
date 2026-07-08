@@ -1,0 +1,17 @@
+{
+  "date": "2026-07-07",
+  "target_root": "/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS",
+  "summary": {
+    "knowledge_files_total": 128,
+    "legacy_backup_files": 98,
+    "repo_backup_files": 26,
+    "previous_scaffold_backup_files": 12
+  },
+  "explicit_exclusions_applied": [
+    "03_Projects/01_Active/NDR Newsletter.zip"
+  ],
+  "repo_linking": {
+    "company_symlink": "../../../../_local/onedrive-company/AI_OS/knowledge/company",
+    "inbox_symlink": "../../../../_local/onedrive-company/AI_OS/knowledge/inbox"
+  }
+}

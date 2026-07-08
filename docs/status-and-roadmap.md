@@ -10,7 +10,7 @@ the same change set.
 
 ## Last Verified Snapshot
 
-- Date: 2026-07-06
+- Date: 2026-07-07
 - Validation: `node scripts/validate.mjs` (passed)
 - Scope verified: docs, interface, scheduler, knowledge contract, scripts
 
@@ -43,14 +43,14 @@ the same change set.
 - Onboarding and team operations runbooks are implemented in docs
 - Validation checks enforce key Stage 1/2 contracts via `scripts/validate.mjs`
 - OneDrive knowledge audit and migration planning (Phases 1-3) are implemented:
-  - audit: `docs/audit-knowledge-onedrive-2026-07-06.md`
-  - structure recommendation: `docs/ai-os-knowledge-structure-recommendation-2026-07-06.md`
-  - development plan: `docs/ai-os-development-plan-2026-07-06.md`
-  - migration plan: `docs/ai-os-migration-plan-2026-07-06.md`
-  - dry-run inventory: `docs/onedrive-migration-inventory-2026-07-06.json`
-- Canonical OneDrive root scaffold created:
-  - `SteadyMade.ai - General/AI_OS_Knowledge/`
-  - subfolders: `company/`, `team/`, `inbox/`, `archive/`, `_attachments/`
+  - lead status doc: `docs/ai-os-migration-status.md`
+  - support archive: `docs/archive/ai-os-migration-2026-07-07/`
+- OneDrive migration execution completed (copy-first, with backups):
+  - report: `docs/archive/ai-os-migration-2026-07-07/onedrive-migration-report-2026-07-07.json`
+  - canonical root: `SteadyMade.ai - General/AI_OS/`
+  - top-level: `knowledge/`, `technical_config/`, `tools/`, `apps/`, `archive/`, `_artifacts/`
+  - backup mirrors: `AI_OS/archive/legacy-onedrive-backup-2026-07-07/`, `AI_OS/archive/repo-local-knowledge-backup-2026-07-07/`
+  - repo-local links: `knowledge/company` and `knowledge/inbox` now symlink to OneDrive `AI_OS/knowledge/...`
 
 ### Skills and agent model
 
@@ -93,8 +93,8 @@ Roadmap baseline references:
 - Phase 1 (docs and decision lock): implemented
 - Phase 2 (OneDrive root scaffold and path alignment): implemented
 - Phase 3 (dry-run migration inventory): implemented
-- Phase 4 (copy-first migration execution): planned
-- Phase 5 (canonical switch and stabilization): planned
+- Phase 4 (copy-first migration execution): implemented
+- Phase 5 (canonical switch and stabilization): implemented baseline
 
 ### Planned runtime shift for Stage 4
 
@@ -151,11 +151,13 @@ Examples:
   - `interface/meta.json`
   - `interface/workflows.json`
 
-### Knowledge SSOT note
+### Knowledge canonical-source note
 
-`knowledge/company/steadymade Docs/` is currently the SSOT master area for
-overlapping Steadymade SSOT files; domain folders should reference instead of
-duplicate.
+`knowledge/company/` resolves to the OneDrive canonical root
+`AI_OS/knowledge/company/`. SSOT is a governance principle for canonical
+documents, not a folder name. Fixed baseline docs should be normalized into
+`knowledge/company/company_handbook/`; duplicated legacy strategy/SSOT copies
+still need a manual cleanup pass.
 
 ## Recommended Next Implementation Steps
 
@@ -171,8 +173,9 @@ duplicate.
 7. Run scheduler parity tests against the current JSON behavior.
 8. Add basic health/usage diagnostics for scheduler runs.
 9. Update the Stage 4 readiness checklist after the SQLite harness is stable.
-10. Execute OneDrive migration Phase 4 with approved exception list.
-11. Run OneDrive canonical switch verification (Phase 5).
+10. Complete manual-review/review-sensitive migration tranche (`manual_review`, `review_sensitive`, `triage_inbox`).
+11. Finalize Graph backend root alignment and cross-user onboarding runbook updates.
+12. Normalize company handbook and reduce duplicated legacy strategy/SSOT copies.
 
 ## Update Rules
 

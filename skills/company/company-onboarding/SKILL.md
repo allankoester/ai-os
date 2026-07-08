@@ -1,12 +1,12 @@
 ---
 name: company-onboarding
-description: "Befüllt das Steadymade-Company-Operating-Profile mit echtem Unternehmenskontext — geführtes Interview, ersetzt die TODO-Blöcke in knowledge/company/operating-profile.md und verankert das Profil als Custom Instruction für alle Agenten. Use whenever someone says '/company-onboarding', 'company onboarding', 'unternehmensprofil ausfüllen', 'operating profile befüllen', 'firmenkontext einrichten', 'company instructions erstellen', 'fill the company profile'. PFLICHT mindestens einmal pro Setup; gut, ihn mehrfach durch verschiedene Personen laufen zu lassen — jeder Lauf reichert das Profil an. Trigger proactively wenn operating-profile.md noch TODO-Platzhalter enthält. Für persönliche Profile stattdessen /personal-onboarding."
+description: "Befüllt das Steadymade-Company-Operating-Profile mit echtem Unternehmenskontext — geführtes Interview, ersetzt die TODO-Blöcke in operating-profile.md (AI_OS root) und verankert das Profil als Custom Instruction für alle Agenten. Use whenever someone says '/company-onboarding', 'company onboarding', 'unternehmensprofil ausfüllen', 'operating profile befüllen', 'firmenkontext einrichten', 'company instructions erstellen', 'fill the company profile'. PFLICHT mindestens einmal pro Setup; gut, ihn mehrfach durch verschiedene Personen laufen zu lassen — jeder Lauf reichert das Profil an. Trigger proactively wenn operating-profile.md noch TODO-Platzhalter enthält. Für persönliche Profile stattdessen /personal-onboarding."
 ---
 
 # company-onboarding — Firmenkontext als Custom Instruction
 
 Dieser Skill macht aus dem TODO-Skeleton in
-`knowledge/company/operating-profile.md` ein echtes Company Operating
+`operating-profile.md` (AI_OS root) ein echtes Company Operating
 Profile. Das Profil ist die zentrale Custom Instruction für das ganze Team:
 Danny und alle Subagenten lesen es (via CLAUDE.md-Verweis) als ersten
 Unternehmenskontext.
@@ -21,7 +21,7 @@ Interview persönliche Arbeitsweisen auf, verweise auf `/personal-onboarding`.
 - **Nichts erfinden.** Nur eintragen, was der User sagt oder was in
   `knowledge/company/` belegt ist. Offene Punkte bleiben als `TODO:` stehen.
 - **Widerspruchsfrei zu den SSOT-Dokumenten.** Die SSOT-Dateien in
-  `knowledge/company/steadymade Docs/` sind kanonisch. Das Operating Profile
+  `knowledge/company/company_handbook_SSOT/` sind kanonisch. Das Operating Profile
   fasst zusammen und verweist — es dupliziert nicht und widerspricht nie.
   Bei Konflikten: nachfragen, nicht raten.
 - **Kompakt.** Das Profil wird in jeder Session als Kontext gelesen — dichte
@@ -37,7 +37,7 @@ Interview persönliche Arbeitsweisen auf, verweise auf `/personal-onboarding`.
 ### Schritt 1 — Zustand lesen
 
 ```bash
-grep -n "TODO" "knowledge/company/operating-profile.md"
+grep -n "TODO" "operating-profile.md"
 ```
 
 Lies das Profil und die relevanten SSOT-Dokumente. Sag dem User in einem
@@ -71,12 +71,12 @@ entfernen). Verweise auf SSOT-Dokumente als Pfad-Links setzen statt Inhalte
 zu kopieren.
 
 Prüfe danach, dass CLAUDE.md das Profil referenziert (Abschnitt „Company
-Operating Profile" mit Pfad `knowledge/company/operating-profile.md`).
+Operating Profile" mit Pfad `operating-profile.md`).
 Fehlt der Verweis, füge ihn ein — ohne Bestehendes zu zerstören.
 
 ### Schritt 4 — Review + Abschluss
 
-Zeig den Diff (`git diff -- "knowledge/company/operating-profile.md"`), fasse
+Zeig den Diff (`git diff -- "operating-profile.md"`), fasse
 zusammen, welche Abschnitte gefüllt wurden und welche TODOs bewusst offen
 bleiben. Änderungen laufen über den normalen Review-Prozess
 (`docs/runbook-team-operations.md`) — committe nur nach Freigabe des Users.

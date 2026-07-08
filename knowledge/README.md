@@ -5,15 +5,16 @@ This folder follows the staged AI-OS folder contract from
 
 ```
 knowledge/
-├── company/     Shared Steadymade knowledge — versioned in git, synced in Stage 2
+├── company/     Shared Steadymade knowledge — canonical in OneDrive (`AI_OS/knowledge/company`) via local symlink
 ├── personal/    Private per-user knowledge — NEVER committed, stays on this machine
 └── inbox/       Unsorted intake — new material lands here before Mara classifies it
 ```
 
 ## Separation rule (enforced)
 
-1. **Company knowledge** lives only under `knowledge/company/`. It is committed to
-   git and may be shared with the team (Stage 2: OneDrive/shared folder sync).
+1. **Company knowledge** lives only under `knowledge/company/`. In this setup it is
+   linked to OneDrive canonical storage (`AI_OS/knowledge/company`) and shared with
+   the team.
 2. **Personal knowledge** lives only under `knowledge/personal/`. It is excluded
    via `.gitignore` and must never appear in commits, shared folders, task briefs
    sent to other users, or client-facing artifacts.
@@ -37,12 +38,12 @@ rename it to `knowledge/intake/`. For now, `knowledge/inbox/` stays canonical.
 
 | Folder | Content |
 | --- | --- |
-| `company/strategy/` | SSOT strategy, positioning, ICP |
-| `company/steadymade Docs/` | Brand / SSOT master documents |
-| `company/marketing/` | Voice guides, campaign knowledge |
-| `company/offers/` | Offer modules, pricing knowledge |
-| `company/documents/` | Document standards and templates |
-| `company/creative/` | Image prompt library, Kie.ai reference |
-| `company/clients/` | Client notes (check data sensitivity before adding) |
+| `company/company_handbook_SSOT/` | Canonical SSOT 1-6 baseline docs |
+| `company/strategy/` | Working strategy material and decision docs |
+| `company/commercial/` | Opportunities, clients, offers, proposals, pricing, sales material |
+| `company/projects/` | Delivery records: internal, active, inactive |
+| `company/marketing/` | Campaigns, content, channels, creative and brand assets |
+| `company/contracts/` | Contracts, registration, templates, signed documents |
+| `company/references/` | External research, partner references, tool snapshots |
 
 Naming conventions are defined in `docs/policy-knowledge-sync.md`.

@@ -423,7 +423,7 @@ async function handleApi(req, res, url) {
       { id: 'claude-md', label: 'CLAUDE.md (shared instructions)', path: 'CLAUDE.md', hint: 'core project instructions' },
       { id: 'claude-local', label: 'CLAUDE.local.md (personal instructions)', path: 'CLAUDE.local.md', hint: 'run /personal-onboarding' },
       { id: 'user-profile', label: 'knowledge/personal/user-profile.md (persona profile)', path: 'knowledge/personal/user-profile.md', hint: 'run /personal-onboarding' },
-      { id: 'operating-profile', label: 'knowledge/company/operating-profile.md (company profile)', path: 'knowledge/company/operating-profile.md', hint: 'run /company-onboarding' },
+      { id: 'operating-profile', label: '../../../../_local/onedrive-company/AI_OS/operating-profile.md (company profile)', path: '../../../../_local/onedrive-company/AI_OS/operating-profile.md', hint: 'run /company-onboarding' },
       { id: 'skill-profile', label: '.skill-profile (active skills)', path: '.skill-profile', hint: 'created by the Skill Hub' },
       { id: 'settings', label: '.claude/settings.local.json (permissions)', path: '.claude/settings.local.json', hint: 'created when plugins/permissions are set' },
       { id: 'mcp', label: '.mcp.json (MCP servers)', path: '.mcp.json', hint: 'optional — enable an MCP plugin in Settings' },
