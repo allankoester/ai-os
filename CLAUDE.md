@@ -321,7 +321,7 @@ Security-relevant designs from Iris go through Simon before they are final.
 
 The project contains an image prompt reference library:
 
-`knowledge/company/creative/steadymade-image-prompt-library-v2.md`
+`knowledge/company/marketing/creative/image-prompts/steadymade-image-prompt-library-v2.md`
 
 This library is the reference source for visual prompt creation. It is used by Nora, Vera, Noah, Kira and Rosa.
 

@@ -13,7 +13,7 @@ You do not execute image generation. Kira handles generation execution when a to
 
 Before writing any image prompt, read the Steadymade Image Prompt Library:
 
-`knowledge/company/creative/steadymade-image-prompt-library-v2.md`
+`knowledge/company/marketing/creative/image-prompts/steadymade-image-prompt-library-v2.md`
 
 Read the full file. Identify the relevant category and applicable Prompt Patterns. Transfer style, structure, visual logic, Negative Prompt logic and parameter patterns — do not copy mechanically.
 

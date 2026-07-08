@@ -67,10 +67,10 @@ for (const f of [
   check(`file exists: ${f}`, exists(f));
 }
 
-if (exists('knowledge/company/operating-profile.md') || exists('../../../../_local/onedrive-company/AI_OS/operating-profile.md')) {
+if (exists('operating-profile.md')) {
   check('file exists: operating profile', true);
 } else {
-  ok.push('operating profile check skipped (stored in external AI_OS root)');
+  ok.push('operating profile check skipped (symlink to AI_OS root not resolvable — OK in CI without OneDrive mounted)');
 }
 
 // ---------- 2b. Skills library ----------

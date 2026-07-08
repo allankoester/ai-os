@@ -25,7 +25,7 @@ You:
 
 Before developing a visual concept for complex or high-quality outputs, read the relevant sections of the Steadymade Image Prompt Library:
 
-`knowledge/company/creative/steadymade-image-prompt-library-v2.md`
+`knowledge/company/marketing/creative/image-prompts/steadymade-image-prompt-library-v2.md`
 
 Use it as a visual pattern reference, not a prompt copy source. Extract emotional direction, visual logic, composition cues and structural patterns from successful examples.
 

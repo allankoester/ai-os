@@ -23,6 +23,25 @@ knowledge/
    `company/<domain>/` or advises moving it to `personal/`, then the inbox copy
    is removed.
 
+## Personal knowledge: hub-local settings vs. the private vault
+
+`knowledge/personal/` holds two distinct things — `/personal-onboarding` keeps
+them separate and never conflates them:
+
+- **`user-profile.md`** — role description and working-style settings (see
+  `skills/company/personal-onboarding/`). This is the small, hub-local file
+  that Danny reads every session. It stays exactly where it is: inside this
+  repo's `knowledge/personal/`, gitignored, machine-local. It is *not* meant
+  to hold a broader private knowledge corpus.
+- **`vault/`** (optional) — a symlink to a private folder the user picks
+  themselves for their own notes, drafts, and working material beyond the
+  profile. It must resolve outside this git repo and outside the shared
+  OneDrive company root (`_local/onedrive-company`) — e.g. the user's own
+  private OneDrive (`_local/onedrive-private`, if set up) or any other local
+  folder. `knowledge/personal/*` in `.gitignore` already covers it, so no
+  separate ignore rule is needed. `/personal-onboarding` offers to create this
+  symlink; nothing requires it, and agents never assume it exists.
+
 ## What `inbox/` means
 
 `knowledge/inbox/` means temporary intake/staging for unsorted material.
