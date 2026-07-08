@@ -36,11 +36,30 @@ Reproducible setup for one user on one machine. Target time: under 15 minutes.
 
 4. **Initialize your private folders**
 
-   `knowledge/personal/` and `runs/` are already gitignored. Put private notes
-   only under `knowledge/personal/`. New unsorted material goes to
-   `knowledge/inbox/` and is classified with Mara.
+    `knowledge/personal/` and `runs/` are already gitignored. Put private notes
+    only under `knowledge/personal/`. New unsorted material goes to
+    `knowledge/inbox/` and is classified with Mara.
 
-5. **Start the operating interface**
+5. **Verify OneDrive links for shared knowledge**
+
+   Stage 1/2 expects a local symlink bridge to the shared OneDrive root:
+
+   - `_local/onedrive-company` -> your local `SteadyMade.ai - General` folder
+   - `knowledge/company` -> `_local/onedrive-company/AI_OS/knowledge/company`
+   - `knowledge/inbox` -> `_local/onedrive-company/AI_OS/knowledge/inbox`
+   - `operating-profile.md` -> `_local/onedrive-company/AI_OS/operating-profile.md`
+
+   Validate:
+
+   ```bash
+   node scripts/start.mjs --check-only
+   node scripts/validate.mjs
+   ```
+
+   If this machine has no OneDrive mount (for CI or temporary local-only work),
+   keep shared-knowledge edits disabled until links are restored.
+
+6. **Start the operating interface**
 
    ```bash
    node scripts/start.mjs
@@ -50,7 +69,7 @@ Reproducible setup for one user on one machine. Target time: under 15 minutes.
    macOS double-click wrapper: `./scripts/start-mac.command`  
    Windows double-click wrapper: `scripts\\start-windows.cmd`
 
-6. **Validate the installation**
+7. **Validate the installation**
 
    ```bash
    node scripts/validate.mjs
@@ -58,7 +77,7 @@ Reproducible setup for one user on one machine. Target time: under 15 minutes.
 
    All checks must pass.
 
-7. **Run the onboarding interviews**
+8. **Run the onboarding interviews**
 
    In Claude Code (this project):
 
@@ -71,7 +90,7 @@ Reproducible setup for one user on one machine. Target time: under 15 minutes.
 
    Both skills are pre-activated. Manage skills in the interface → Skill Hub.
 
-8. **Create your first backup**
+9. **Create your first backup**
 
    ```bash
    scripts/backup.sh backup
@@ -84,7 +103,7 @@ Ask Danny (main conversation):
 > "Classify this request and show me the task brief you would send: draft a
 > short LinkedIn post about measurable AI pilots."
 
-Expected: Danny classifies `marketing_content_workflow`, produces a task brief
+Expected: Danny classifies `marketing_content`, produces a task brief
 per `templates/task-brief.md`, and does not mark anything approved.
 
 ## Daily operating rules

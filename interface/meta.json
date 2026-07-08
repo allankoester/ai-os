@@ -1,8 +1,94 @@
 {
   "docs": {
+    "knowledge/company/company_handbook_SSOT/steadymade – SSOT 1. Strategy & Direction.md": {
+      "status": "approved",
+      "scope": "Both",
+      "knowledge_type": "canonical",
+      "market_scope": "both",
+      "source_type": "approved_document",
+      "owner": "Steadymade founders",
+      "last_reviewed": "2026-07-08"
+    },
+    "knowledge/company/company_handbook_SSOT/steadymade – SSOT 2. Markt, ICP & Value Proposition.md": {
+      "status": "approved",
+      "scope": "Both",
+      "knowledge_type": "canonical",
+      "market_scope": "both",
+      "source_type": "approved_document",
+      "owner": "Steadymade founders",
+      "last_reviewed": "2026-07-08"
+    },
+    "knowledge/company/company_handbook_SSOT/steadymade – SSOT 3. Services & Pricing Model.md": {
+      "status": "approved",
+      "scope": "Both",
+      "knowledge_type": "canonical",
+      "market_scope": "both",
+      "source_type": "approved_document",
+      "owner": "Steadymade founders",
+      "last_reviewed": "2026-07-08"
+    },
+    "knowledge/company/company_handbook_SSOT/steadymade – SSOT 4. Go-to-Market Playbook.md": {
+      "status": "approved",
+      "scope": "Both",
+      "knowledge_type": "canonical",
+      "market_scope": "both",
+      "source_type": "approved_document",
+      "owner": "Steadymade founders",
+      "last_reviewed": "2026-07-08"
+    },
+    "knowledge/company/company_handbook_SSOT/steadymade – SSOT 5. Delivery & Operating Model.md": {
+      "status": "approved",
+      "scope": "Both",
+      "knowledge_type": "canonical",
+      "market_scope": "both",
+      "source_type": "approved_document",
+      "owner": "Steadymade founders",
+      "last_reviewed": "2026-07-08"
+    },
+    "knowledge/company/company_handbook_SSOT/steadymade – SSOT 6. Security, Data & AI Governance.md": {
+      "status": "approved",
+      "scope": "Both",
+      "knowledge_type": "canonical",
+      "market_scope": "both",
+      "source_type": "approved_document",
+      "owner": "Steadymade founders",
+      "last_reviewed": "2026-07-08"
+    },
     "knowledge/company/marketing/Steadymade Social Media Voice Guide.md": {
       "status": "draft",
-      "scope": "Unknown"
+      "scope": "Unknown",
+      "knowledge_type": "draft",
+      "market_scope": "unknown",
+      "source_type": "generated_draft",
+      "owner": "Marketing",
+      "last_reviewed": "2026-07-08"
+    },
+    "knowledge/company/marketing/creative/image-prompts/steadymade-image-prompt-library-v2.md": {
+      "status": "approved",
+      "scope": "Both",
+      "knowledge_type": "reference",
+      "market_scope": "both",
+      "source_type": "approved_document",
+      "owner": "Creative Production",
+      "last_reviewed": "2026-07-08"
+    },
+    "knowledge/company/marketing/creative/image-prompts/kie-ai-api-reference.md": {
+      "status": "needs_review",
+      "scope": "Both",
+      "knowledge_type": "reference",
+      "market_scope": "both",
+      "source_type": "external_reference",
+      "owner": "Creative Production",
+      "last_reviewed": "2026-07-08"
+    },
+    "knowledge/company/marketing/creative/image-prompts/image-prompt-library.md": {
+      "status": "needs_review",
+      "scope": "Both",
+      "knowledge_type": "reference",
+      "market_scope": "both",
+      "source_type": "generated_draft",
+      "owner": "Creative Production",
+      "last_reviewed": "2026-07-08"
     }
   }
 }

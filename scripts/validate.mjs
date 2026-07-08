@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const errors = [];
 const ok = [];
+const warnings = [];
 
 const rel = (p) => path.relative(ROOT, p);
 const exists = (p) => fs.existsSync(path.join(ROOT, p));
@@ -18,6 +19,11 @@ const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
 function check(label, condition, detail = '') {
   if (condition) ok.push(label);
   else errors.push(`${label}${detail ? ` — ${detail}` : ''}`);
+}
+
+function warn(label, condition, detail = '') {
+  if (condition) ok.push(label);
+  else warnings.push(`${label}${detail ? ` — ${detail}` : ''}`);
 }
 
 // ---------- 1. Folder contract ----------
@@ -73,6 +79,28 @@ if (exists('operating-profile.md')) {
   ok.push('operating profile check skipped (symlink to AI_OS root not resolvable — OK in CI without OneDrive mounted)');
 }
 
+for (const p of ['knowledge/company', 'knowledge/inbox', 'operating-profile.md']) {
+  const abs = path.join(ROOT, p);
+  if (!fs.existsSync(abs)) {
+    warn(`${p} path exists`, false, 'missing (expected on user machines with OneDrive bridge)');
+    continue;
+  }
+  let isLink = false;
+  try { isLink = fs.lstatSync(abs).isSymbolicLink(); } catch { /* missing path */ }
+  warn(`${p} uses symlink bridge to OneDrive (recommended in Stage 2)`, isLink);
+}
+
+if (exists('.gitignore')) {
+  const gitignore = read('.gitignore');
+  check('.gitignore excludes .claude/settings.local.json', /(^|\n)\.claude\/settings\.local\.json(\n|$)/.test(gitignore));
+}
+
+if (exists('.claude/settings.local.json')) {
+  const localSettings = read('.claude/settings.local.json');
+  check('settings.local has no home-wide read grant', !/Read\(\/\/Users\/[^/)]+\/\*\*\)/.test(localSettings));
+  check('settings.local has no unrelated KI-OS read grant', !/Read\(\/\/Users\/[^/)]+\/KI-OS\/\*\*\)/.test(localSettings));
+}
+
 // ---------- 2b. Skills library ----------
 const companySkillsDir = path.join(ROOT, 'skills', 'company');
 check('folder exists: skills/company/', fs.existsSync(companySkillsDir));
@@ -120,10 +148,21 @@ for (const f of agentFiles) {
 }
 
 // no stale pre-contract knowledge paths in instructions
-const OLD_PATH = /knowledge\/(?!company\/|personal\/|inbox\/|README)[A-Za-z]/;
+const OLD_PATH = /`knowledge\/(?!company(?:\/|\b)|personal(?:\/|\b)|inbox(?:\/|\b)|team(?:\/|\b)|README)[^`]+`/;
 for (const f of ['CLAUDE.md', ...agentFiles.map((a) => `.claude/agents/${a}`)]) {
   if (!exists(f)) continue;
   check(`no stale knowledge paths in ${f}`, !OLD_PATH.test(read(f)));
+}
+
+for (const f of agentFiles.map((a) => `.claude/agents/${a}`)) {
+  if (!exists(f)) continue;
+  const text = read(f);
+  check(`no unmanaged ~/.claude/skills refs in ${f}`, !/~\/\.claude\/skills\//.test(text));
+}
+
+if (exists('.claude/agents/kira-image-generation-agent.md')) {
+  const kira = read('.claude/agents/kira-image-generation-agent.md');
+  check('kira does not assume API key availability', !/The Kie\.ai API key is available/.test(kira));
 }
 
 // ---------- 4. Interface model consistency ----------
@@ -137,6 +176,58 @@ for (const m of dataJs.matchAll(/access:\s*\[([^\]]*)\]/g)) {
 }
 for (const key of accessKeys) {
   check(`data.js access folder exists on disk: knowledge/${key}`, exists(path.join('knowledge', key)));
+}
+
+function parseWorkflowListFromDoc(file) {
+  if (!exists(file)) return [];
+  const text = read(file);
+  const out = new Set();
+  const known = ['strategy_review', 'knowledge_retrieval', 'knowledge_intake', 'setup_profile', 'marketing_content', 'proposal', 'document', 'creative_image', 'calendar_planning', 'security_audit', 'dev_spec', 'multi_department'];
+  for (const m of text.matchAll(/`([a-z_]+)`/g)) {
+    const id = m[1];
+    if (known.includes(id)) {
+      out.add(id);
+    }
+  }
+  const normalized = text.replace(/[<>]/g, ' ');
+  for (const token of normalized.split(/[^a-z_]+/)) {
+    if (known.includes(token)) out.add(token);
+  }
+  return [...out];
+}
+
+const canonicalWorkflowIds = ['strategy_review', 'knowledge_retrieval', 'knowledge_intake', 'setup_profile', 'marketing_content', 'proposal', 'document', 'creative_image', 'calendar_planning', 'security_audit', 'dev_spec', 'multi_department'];
+const dataWorkflowIds = [...dataJs.matchAll(/id:\s*'([a-z_]+)'/g)].map((m) => m[1]);
+for (const id of canonicalWorkflowIds) {
+  check(`workflow exists in interface/public/data.js: ${id}`, dataWorkflowIds.includes(id));
+}
+for (const id of parseWorkflowListFromDoc('CLAUDE.md')) {
+  check(`workflow in CLAUDE.md is canonical: ${id}`, canonicalWorkflowIds.includes(id));
+}
+for (const id of parseWorkflowListFromDoc('templates/task-brief.md')) {
+  check(`workflow in templates/task-brief.md is canonical: ${id}`, canonicalWorkflowIds.includes(id));
+}
+for (const id of parseWorkflowListFromDoc('runs/run-log-template.md')) {
+  check(`workflow in runs/run-log-template.md is canonical: ${id}`, canonicalWorkflowIds.includes(id));
+}
+
+if (exists('interface/meta.json')) {
+  let meta = { docs: {} };
+  try { meta = JSON.parse(read('interface/meta.json')); } catch { errors.push('interface/meta.json: invalid JSON'); }
+  const docsMeta = meta.docs || {};
+  const allowedStatuses = new Set(['approved', 'draft', 'candidate', 'needs_review', 'approved_candidate', 'conflict', 'deprecated']);
+  for (const [docPath, record] of Object.entries(docsMeta)) {
+    check(`meta path exists: ${docPath}`, exists(docPath));
+    check(`meta status valid: ${docPath}`, allowedStatuses.has(record.status), `status=${record.status}`);
+  }
+  const ssotDir = path.join(ROOT, 'knowledge/company/company_handbook_SSOT');
+  if (fs.existsSync(ssotDir)) {
+    const ssotFiles = fs.readdirSync(ssotDir).filter((f) => f.endsWith('.md'))
+      .map((f) => `knowledge/company/company_handbook_SSOT/${f}`);
+    for (const f of ssotFiles) {
+      check(`SSOT metadata exists: ${f}`, Boolean(docsMeta[f]));
+    }
+  }
 }
 
 // ---------- 5. Skills profiles ----------
@@ -179,6 +270,10 @@ for (const f of profileFiles) {
 
 // ---------- report ----------
 console.log(`Checks passed: ${ok.length}`);
+if (warnings.length) {
+  console.log(`\nWARNINGS (${warnings.length}):`);
+  for (const w of warnings) console.log(`  ! ${w}`);
+}
 if (errors.length) {
   console.error(`\nFAILED (${errors.length}):`);
   for (const e of errors) console.error(`  ✗ ${e}`);

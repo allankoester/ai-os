@@ -104,7 +104,7 @@ node scripts/start.mjs --check-only
 
 Umsetzung von Stage 1 (persönliches lokales AI-OS) und Stage 2 (kleines Team) aus `docs/reference/ai-os-comparison-and-staged-concept.md`:
 
-- `knowledge/company/` — geteiltes Firmenwissen (in git)
+- `knowledge/company/` — geteiltes Firmenwissen (kanonisch in OneDrive `AI_OS/knowledge/company`, im Repo per Symlink)
 - `knowledge/personal/` — privates Wissen (nie in git, siehe `.gitignore`)
 - `knowledge/inbox/` — unsortierter Eingang, wird von Mara klassifiziert
 - `templates/` — Task Brief, Approval-Checkliste, Qualitäts-Rubrik

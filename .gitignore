@@ -24,6 +24,7 @@ interface/plugins.json
 
 # Guardrails configuration is per-machine (materialized into settings.local.json)
 interface/guardrails.json
+.claude/settings.local.json
 
 # Workflow edits (overrides / custom / deleted) are machine-local state
 interface/workflows.json

@@ -2,7 +2,7 @@
 
 - **Date:** YYYY-MM-DD
 - **User:** <user>
-- **Workflow type:** <strategy_review / marketing_content / proposal / document / image_generation / knowledge / setup / calendar / multi_department>
+- **Workflow type:** <strategy_review / knowledge_retrieval / knowledge_intake / setup_profile / marketing_content / proposal / document / creative_image / calendar_planning / security_audit / dev_spec / multi_department>
 - **Status:** <idea / briefing / draft / review / strategy_check / approval_required / approved / final / archived>
 
 ## Request

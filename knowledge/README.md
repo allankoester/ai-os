@@ -66,3 +66,9 @@ rename it to `knowledge/intake/`. For now, `knowledge/inbox/` stays canonical.
 | `company/references/` | External research, partner references, tool snapshots |
 
 Naming conventions are defined in `docs/policy-knowledge-sync.md`.
+
+## External AI_OS relation
+
+The external OneDrive root `AI_OS/knowledge/team/` exists as shared operating
+material, but it is not part of the Stage 1/2 in-repo knowledge contract unless
+explicitly linked and documented in this repo.

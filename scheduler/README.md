@@ -21,10 +21,9 @@ scheduler/
   defined agent chain and gates.
 - A job runs `claude -p "<prompt>"` headless in the project root, so
   CLAUDE.md, subagents and active skills all apply. Optional per job: a
-  specific subagent, a timeout (1–120 min), and permission bypass for
-  unattended writes.
+  specific subagent and a timeout (1–120 min).
 - Jobs only run **while the interface server is running** (Stage 1/2 is
-  local-first — always-on execution is Stage 3, VM runtime).
+  local-first — always-on execution is Stage 4, VM runtime).
 - Run logs are per-user learning data, same privacy rule as `runs/`.
 
 ## Approval rule

@@ -88,7 +88,7 @@ function docMeta(path) {
 
 function statusBadgeClass(status) {
   if (status === 'approved') return 'badge-green';
-  if (status === 'needs review' || status === 'conflict') return 'badge-apricot';
+  if (status === 'needs_review' || status === 'needs review' || status === 'conflict') return 'badge-apricot';
   return 'badge-gray';
 }
 
@@ -211,7 +211,7 @@ function renderSearch(q) {
 function renderCommand(el) {
   const docs = allDocs();
   const statuses = docs.map((d) => docMeta(d.path).status);
-  const needsReview = statuses.filter((s) => s === 'needs review' || s === 'conflict').length;
+  const needsReview = statuses.filter((s) => s === 'needs_review' || s === 'needs review' || s === 'conflict').length;
   const approved = statuses.filter((s) => s === 'approved').length;
   const recent = [...docs].sort((a, b) => b.mtime - a.mtime).slice(0, 7);
 
@@ -541,6 +541,160 @@ function clearHighlights() {
   $$('.edge').forEach((e) => { e.classList.remove('lit', 'dim'); e.style.opacity = e.classList.contains('acc') ? 0.10 : ''; });
 }
 
+const LEVEL_RANK = { deny: 0, read: 1, ask: 2, write: 3 };
+const LEVEL_LABEL = { deny: 'DENY', read: 'READ', ask: 'ASK', write: 'WRITE' };
+
+function folderRulesMap(status) {
+  const out = {};
+  for (const f of status.folders || []) if (f.level) out[f.folder] = f.level;
+  return out;
+}
+
+function globalLevelForFolder(folder, rules) {
+  let best = null;
+  for (const [k, level] of Object.entries(rules || {})) {
+    if (folder === k || folder.startsWith(k + '/')) {
+      if (!best || k.length > best.key.length) best = { key: k, level };
+    }
+  }
+  return best ? best.level : 'write';
+}
+
+function effectiveLevel(global, override) {
+  if (!override) return global;
+  return LEVEL_RANK[override] < LEVEL_RANK[global] ? override : global;
+}
+
+function allowedOverrides(global) {
+  return ['deny', 'read', 'ask', 'write'].filter((l) => LEVEL_RANK[l] <= LEVEL_RANK[global]);
+}
+
+async function fillAgentContextAccess(a) {
+  const summary = $('#agent-access-summary');
+  const panel = $('#agent-access-editor');
+  const toggle = $('[data-act="cfg-access"]');
+  if (!summary || !panel || !toggle) return;
+
+  let status;
+  try { status = await apiJson('/api/guardrails'); }
+  catch { summary.textContent = 'Guardrails unavailable.'; return; }
+
+  let open = false;
+  let dirty = false;
+  let agentRules = { ...(status.agents?.[a.id] || {}) };
+  const globalRules = folderRulesMap(status);
+  const defaultCoverage = new Set((a.access || []).map((acc) => {
+    if (acc.startsWith('company/') || acc === 'inbox' || acc === 'personal') return `knowledge/${acc}`;
+    return acc;
+  }));
+  let entries = [...new Set([
+    ...Object.keys(agentRules),
+    ...(status.folders || []).filter((f) => f.level).map((f) => f.folder),
+    ...[...defaultCoverage],
+  ])].sort((x, y) => x.localeCompare(y));
+
+  const updateSummary = () => {
+    const count = Object.keys(agentRules).length;
+    summary.innerHTML = count
+      ? `${count} override${count === 1 ? '' : 's'} defined. Global guardrails still set the maximum access.`
+      : 'No per-agent overrides. This agent currently inherits global guardrails.';
+  };
+
+  const renderPanel = () => {
+    if (!open) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
+    panel.style.display = 'block';
+    panel.innerHTML = `
+      <div class="gr-add-row" style="margin-bottom:8px">
+        <input class="filter-input" id="ag-add-path" type="text" placeholder="add subfolder, e.g. knowledge/company/commercial/opportunities/ndr" style="flex:1;min-width:220px">
+        <button class="chip" data-ag-add>ADD</button>
+      </div>
+      ${entries.map((folder) => {
+        const global = globalLevelForFolder(folder, globalRules);
+        const override = agentRules[folder] || '';
+        const effective = effectiveLevel(global, override || null);
+        const opts = allowedOverrides(global);
+        const disabled = global === 'deny';
+        const custom = !defaultCoverage.has(folder);
+        return `<div class="gr-row">
+          <span class="gr-folder" style="min-width:220px">${esc(folder)}/</span>
+          <span class="list-meta" style="min-width:88px">GLOBAL ${LEVEL_LABEL[global]}</span>
+          <select class="filter-input" data-ag-folder="${esc(folder)}" ${disabled ? 'disabled' : ''} style="min-width:130px">
+            <option value="">inherit</option>
+            ${opts.map((l) => `<option value="${l}" ${override === l ? 'selected' : ''}>${LEVEL_LABEL[l]}</option>`).join('')}
+          </select>
+          <span class="list-meta" style="min-width:88px">EFFECTIVE ${LEVEL_LABEL[effective]}</span>
+          ${custom ? `<button class="chip" data-ag-remove="${esc(folder)}" style="color:var(--apricot-deep)">REMOVE</button>` : ''}
+        </div>`;
+      }).join('')}
+      <div style="display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap">
+        <button class="btn btn-primary btn-small" data-ag-save ${dirty ? '' : 'disabled'}>Save Context Access</button>
+        <span class="stat-note">Agent permissions inherit global guardrails and cannot exceed them.</span>
+      </div>`;
+
+    $('[data-ag-add]', panel)?.addEventListener('click', () => {
+      const raw = ($('#ag-add-path', panel)?.value || '').trim().replace(/\\/g, '/').replace(/^\.?\//, '').replace(/\/+$/, '');
+      if (!raw) return toast('ENTER A SUBFOLDER PATH', true);
+      if (raw.includes('..') || raw.startsWith('/')) return toast('INVALID PATH', true);
+      if (!entries.includes(raw)) entries.push(raw);
+      entries.sort((x, y) => x.localeCompare(y));
+      dirty = true;
+      renderPanel();
+    });
+
+    $$('[data-ag-folder]', panel).forEach((sel) => sel.addEventListener('change', () => {
+      const folder = sel.dataset.agFolder;
+      if (sel.value) agentRules[folder] = sel.value;
+      else delete agentRules[folder];
+      dirty = true;
+      renderPanel();
+    }));
+
+    $$('[data-ag-remove]', panel).forEach((b) => b.addEventListener('click', () => {
+      const folder = b.dataset.agRemove;
+      entries = entries.filter((f) => f !== folder);
+      delete agentRules[folder];
+      dirty = true;
+      renderPanel();
+    }));
+
+    $('[data-ag-save]', panel)?.addEventListener('click', async () => {
+      const agents = JSON.parse(JSON.stringify(status.agents || {}));
+      if (Object.keys(agentRules).length) agents[a.id] = agentRules;
+      else delete agents[a.id];
+      try {
+        const result = await apiJson('/api/guardrails', {
+          method: 'PUT',
+          body: JSON.stringify({ folders: globalRules, agents }),
+        });
+        status = result.status;
+        Object.keys(globalRules).forEach((k) => delete globalRules[k]);
+        Object.assign(globalRules, folderRulesMap(status));
+        agentRules = { ...(status.agents?.[a.id] || {}) };
+        entries = [...new Set([
+          ...Object.keys(agentRules),
+          ...(status.folders || []).filter((f) => f.level).map((f) => f.folder),
+          ...[...defaultCoverage],
+        ])].sort((x, y) => x.localeCompare(y));
+        dirty = false;
+        updateSummary();
+        renderPanel();
+        toast(`${a.name.toUpperCase()} CONTEXT ACCESS SAVED`);
+      } catch (e) {
+        toast(e.message.toUpperCase(), true);
+      }
+    });
+  };
+
+  toggle.addEventListener('click', () => {
+    open = !open;
+    toggle.textContent = open ? 'Close' : 'Configure';
+    renderPanel();
+  });
+
+  updateSummary();
+  renderPanel();
+}
+
 // ---------------------------------------------------------------- Drawer
 
 function openDrawer(html) {
@@ -582,8 +736,16 @@ function openAgentDrawer(id) {
         <ul>${a.inputs.map((r) => `<li>IN — ${esc(r)}</li>`).join('')}${a.outputs.map((r) => `<li>OUT — ${esc(r)}</li>`).join('')}</ul>
       </div>
       <div class="drawer-section">
-        <div class="section-title">Knowledge Access</div>
+        <div class="section-title">Default Context Coverage</div>
         <div class="tag-row">${a.access.map((f) => `<button class="chip" data-folder="${esc(f)}">${esc(f)}/</button>`).join('')}</div>
+      </div>
+      <div class="drawer-section">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <div class="section-title" style="margin:0;flex:1">Context Access Policy</div>
+          <button class="chip" data-act="cfg-access">Configure</button>
+        </div>
+        <div id="agent-access-summary" class="stat-note" style="white-space:normal">Loading guardrails…</div>
+        <div id="agent-access-editor" style="display:none;margin-top:8px"></div>
       </div>
       ${restricted.length ? `<div class="drawer-section">
         <div class="section-title">Restricted</div>
@@ -626,6 +788,7 @@ function openAgentDrawer(id) {
     toast('TASK BRIEF COPIED — PASTE INTO CLAUDE (LIVE AGENT EXECUTION PENDING)', true);
   });
   if (a.promptPath.startsWith('.claude/agents/')) fillAgentPlugins(a);
+  fillAgentContextAccess(a);
 }
 
 // Plugins section in the agent drawer: assign plugins that are enabled in
@@ -1261,7 +1424,7 @@ function paintScheduler() {
           <span class="badge ${j.enabled ? 'badge-green' : 'badge-gray'}">${j.enabled ? 'ON' : j.scheduleType === 'once' && j.lastRun ? 'DONE' : 'OFF'}</span>
           <span class="list-title">${esc(j.name)}${j.running ? ' <span class="badge badge-apricot">RUNNING</span>' : ''}</span>
           <span class="list-meta mono-label">${j.scheduleType === 'once' ? 'once · ' + fmtWhen(j.runAt) : esc(j.schedule)}</span>
-          <span class="list-meta">${esc(j.workflow ? j.workflow.replace(/_workflow$/, '') : '')}${j.workflow ? ' · ' : ''}${esc(j.agent || 'danny (main)')}</span>
+          <span class="list-meta">${esc(j.workflow || '')}${j.workflow ? ' · ' : ''}${esc(j.agent || 'danny (main)')}</span>
           <span class="list-meta">next: ${j.nextRun ? fmtWhen(j.nextRun) : j.enabled ? '—' : 'paused'}</span>
           <span class="list-meta">${j.lastRun ? 'last: ' + esc(j.lastRun.status) : 'never ran'}</span>
           <span style="display:flex;gap:6px">
@@ -1398,7 +1561,8 @@ function toLocalDatetimeValue(ts) {
 }
 
 function openJobDrawer(job) {
-  const j = job || { name: '', agent: '', workflow: '', prompt: '', scheduleType: 'cron', schedule: '0 7 * * 1', runAt: null, enabled: true, timeoutMinutes: 15, bypassPermissions: false };
+  const j = job || { name: '', agent: '', workflow: '', prompt: '', scheduleType: 'cron', schedule: '0 7 * * 1', runAt: null, enabled: true, timeoutMinutes: 15 };
+  const workflowId = String(j.workflow || '').replace(/_workflow$/, '');
   openDrawer(`
     <div class="drawer-head">
       <button class="drawer-close">✕</button>
@@ -1411,7 +1575,7 @@ function openJobDrawer(job) {
       <div class="form-field"><label>Workflow (optional — sets the agent chain and gates)</label>
         <select id="jf-workflow">
           <option value="">— no specific workflow —</option>
-          ${FLOWS.map((w) => `<option value="${esc(w.id)}_workflow" ${j.workflow === w.id + '_workflow' ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}
+          ${FLOWS.map((w) => `<option value="${esc(w.id)}" ${workflowId === w.id ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}
         </select>
       </div>
       <div class="form-field"><label>Agent</label>
@@ -1443,7 +1607,6 @@ function openJobDrawer(job) {
       </div>
       <div class="form-field"><label>Timeout (minutes)</label><input id="jf-timeout" type="number" min="1" max="120" value="${esc(j.timeoutMinutes)}"></div>
       <div class="form-field form-check"><label><input id="jf-enabled" type="checkbox" ${j.enabled ? 'checked' : ''}> Enabled</label></div>
-      <div class="form-field form-check"><label><input id="jf-bypass" type="checkbox" ${j.bypassPermissions ? 'checked' : ''}> Bypass tool permissions (unattended writes — use with care)</label></div>
       <button class="btn btn-primary" id="jf-save">${job ? 'Save Changes' : 'Create Job'}</button>
     </div>`);
 
@@ -1532,7 +1695,6 @@ function openJobDrawer(job) {
       runAt: once ? new Date($('#jf-runat').value).getTime() : null,
       timeoutMinutes: Number($('#jf-timeout').value),
       enabled: $('#jf-enabled').checked,
-      bypassPermissions: $('#jf-bypass').checked,
     });
     try {
       if (job) await apiJson(`/api/scheduler/jobs/${job.id}`, { method: 'PUT', body });
@@ -2188,6 +2350,7 @@ function paintGuardrailsCard(card, data) {
     card.innerHTML = `
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap">
         <div class="section-title" style="flex:1;margin:0">Guardrails — Folder Permissions</div>
+        <button class="chip" data-gr-baseline>APPLY SECURE BASELINE</button>
         <button class="chip" data-gr-add>${addOpen ? 'CANCEL' : 'ADD FOLDER'}</button>
         ${dirty ? '<button class="btn btn-primary btn-small" data-gr-save>Save &amp; Apply</button>' : `<span class="list-meta">${data.updatedAt ? 'applied ' + timeAgo(data.updatedAt) : 'no custom rules yet'}</span>`}
       </div>
@@ -2222,11 +2385,16 @@ function paintGuardrailsCard(card, data) {
         </div>`;
       }).join('')}
       <div class="stat-note" style="margin-top:10px;white-space:normal">
-        Recommended baseline: <code>knowledge/company → ask</code>, <code>knowledge/personal → read</code>,
-        <code>.claude → read</code>, <code>docs → write</code>. The most specific folder rule wins.
+        Recommended baseline is available through <strong>APPLY SECURE BASELINE</strong>. The most specific folder rule wins.
         ADD FOLDER covers paths the list does not show (e.g. a single client folder); setting a listed folder
         back to DEFAULT removes its rule on save.
       </div>`;
+
+    $('[data-gr-baseline]', card)?.addEventListener('click', () => {
+      for (const [folder, level] of Object.entries(data.recommendedBaseline || {})) pending[folder] = level;
+      dirty = true;
+      render();
+    });
 
     $$('[data-gr]', card).forEach((b) => b.addEventListener('click', () => {
       pending[b.dataset.gr] = b.dataset.level || null;

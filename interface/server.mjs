@@ -24,6 +24,8 @@ const PUBLIC = path.join(__dirname, 'public');
 const META_FILE = path.join(__dirname, 'meta.json'); // sidecar metadata (status, scope) — keeps real docs untouched
 const FLOWS_FILE = path.join(__dirname, 'workflows.json'); // user workflow edits: overrides / custom / deleted (machine-local)
 const PORT = process.env.PORT || 4011;
+const HOST = process.env.HOST || '127.0.0.1';
+const API_TOKEN = process.env.STEADYMADE_INTERFACE_TOKEN || '';
 const KNOWLEDGE_PATH_PREFIX = 'knowledge/';
 
 const scheduler = createScheduler({ rootDir: ROOT });
@@ -196,6 +198,13 @@ async function handleApi(req, res, url) {
     res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify(obj));
   };
+
+  const mutating = req.method !== 'GET';
+  if (mutating && API_TOKEN) {
+    const auth = req.headers['x-steadymade-token'] || req.headers.authorization || '';
+    const bearer = String(auth).replace(/^Bearer\s+/i, '');
+    if (bearer !== API_TOKEN) return send(401, { error: 'unauthorized' });
+  }
 
   if (url.pathname === '/api/system' && req.method === 'GET') {
     return send(200, await getSystem());
@@ -395,7 +404,7 @@ async function handleApi(req, res, url) {
 
   if (url.pathname === '/api/guardrails' && req.method === 'PUT') {
     const body = await readBody(req);
-    const result = await guardrails.save(body.folders);
+    const result = await guardrails.save(body);
     return send(result.errors ? 400 : 200, result);
   }
 
@@ -494,11 +503,12 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`Steadymade AI OS interface → http://localhost:${PORT}`);
+server.listen(PORT, HOST, () => {
+  console.log(`Steadymade AI OS interface → http://${HOST === '127.0.0.1' ? 'localhost' : HOST}:${PORT}`);
   console.log(`Reading project files from: ${ROOT}`);
   console.log(`Knowledge backend: ${knowledgeStorage.kind} (${knowledgeStorage.root})`);
   console.log(`Runtime mode: ${knowledgeConfig.runtime}`);
+  if (API_TOKEN) console.log('API auth: enabled for mutating /api/* calls via x-steadymade-token or Authorization: Bearer <token>');
   const claudeBin = resolveClaudeBin();
   console.log(claudeBin
     ? `Scheduler: claude CLI at ${claudeBin}`

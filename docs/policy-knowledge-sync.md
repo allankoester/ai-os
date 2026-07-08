@@ -125,8 +125,8 @@ Deprecated legacy structures must not be recreated:
 
 ## Conflict handling
 
-- git-synced knowledge: conflicts are resolved in PR review.
-- OneDrive sync: ownership by folder/domain to reduce edit collisions.
+- Shared company knowledge is OneDrive-canonical: ownership by folder/domain to reduce edit collisions.
+- Software/instructions/templates are git-managed and resolved through PR review.
 - On conflict: canonical source wins; loser path becomes intake for Mara review.
 
 ## Change flow

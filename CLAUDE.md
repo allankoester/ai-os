@@ -56,15 +56,28 @@ Therefore:
 This project implements Stage 1 (personal local AI-OS) and Stage 2 (small team)
 of `docs/reference/ai-os-comparison-and-staged-concept.md`.
 
+Current stage numbering (canonical):
+
+- Stage 1: personal local AI-OS
+- Stage 2: small team local AI-OS
+- Stage 3: OpenClaw personal assistant integration
+- Stage 4: VM execution runtime
+- Stage 5: full company AI-OS
+
 ### Knowledge folder contract
 
-- `knowledge/company/<domain>/` — shared Steadymade knowledge, committed to git.
+- `knowledge/company/<domain>/` — shared Steadymade knowledge, canonical in
+  OneDrive `AI_OS/knowledge/company` and linked into this repo by local symlink.
 - `knowledge/personal/` — private per-user knowledge. Never committed, never
   copied into company artifacts or shared briefs. Agents may read it only for
   the local user's own context.
 - `knowledge/inbox/` — unsorted intake. Never a source of truth; Mara
   classifies inbox material into `company/<domain>/` or `personal/`, then the
   inbox copy is removed. See `knowledge/README.md`.
+
+`knowledge/team/` exists in OneDrive `AI_OS` as shared operating material for
+team collaboration, but it is not part of the Stage 1/2 in-repo knowledge
+contract unless explicitly linked and documented.
 
 ### Templates
 
@@ -87,6 +100,20 @@ local learning data and are not committed.
 instruction — read it as first company context. It is filled and maintained
 via the `/company-onboarding` skill; SSOT documents under
 `knowledge/company/company_handbook_SSOT/` stay canonical.
+
+### Source precedence
+
+When sources conflict, use this precedence and flag contradictions:
+
+1. explicit user correction in current conversation
+2. approved SSOT docs under `knowledge/company/company_handbook_SSOT/`
+3. `operating-profile.md`
+4. approved docs under `knowledge/company/<domain>/`
+5. this `CLAUDE.md` for operating mechanics
+6. specialist agent instruction files
+7. reference/archive docs (non-canonical, use with caveat)
+8. `knowledge/inbox/` only after Mara classification
+9. `knowledge/personal/` only for local user context, never for shared/client artifacts
 
 ### Onboarding skills
 
@@ -119,6 +146,13 @@ Settings → Guardrails. They are enforced immediately by the interface file API
 and materialized as permission rules into `.claude/settings.local.json` —
 respect them: they apply to all agents in new Claude sessions, and scheduler
 runs pick them up automatically. The most specific folder rule wins.
+
+Agent-specific context access rules are configured from the Agent Map drawer
+for each specialist and stored in the guardrails model. They inherit global
+folder restrictions and can never exceed them (a globally denied folder stays
+denied for every agent). Global folder rules remain the technical enforcement
+layer; agent-specific rules are policy constraints that Danny must respect when
+choosing context and subagents.
 
 ### Scheduler
 
@@ -359,17 +393,18 @@ Danny
 
 Danny should classify each request into one or more workflow types:
 
-- `strategy_review_workflow`
-- `knowledge_retrieval_workflow`
-- `setup_profile_workflow`
-- `marketing_content_workflow`
-- `proposal_workflow`
-- `document_workflow`
-- `image_generation_workflow`
-- `calendar_planning_workflow`
-- `security_audit_workflow`
-- `dev_spec_workflow`
-- `multi_department_workflow`
+- `strategy_review`
+- `knowledge_retrieval`
+- `knowledge_intake`
+- `setup_profile`
+- `marketing_content`
+- `proposal`
+- `document`
+- `creative_image`
+- `calendar_planning`
+- `security_audit`
+- `dev_spec`
+- `multi_department`
 
 ## Strategy Gate
 
@@ -433,7 +468,7 @@ When assigning work to a specialist agent, Danny should use this structure inter
 Name and role.
 
 **Workflow Type:**
-strategy_review / marketing_content / proposal / document / image_generation / knowledge / setup / calendar / multi_department
+strategy_review / knowledge_retrieval / knowledge_intake / setup_profile / marketing_content / proposal / document / creative_image / calendar_planning / security_audit / dev_spec / multi_department
 
 **Task:**
 What the agent should do.
@@ -464,6 +499,11 @@ Things the agent must avoid.
 ## Response Style
 
 Default language: follow the user.
+
+Artifact language follows market scope:
+
+- DACH-facing artifact: German (`Sie`)
+- Australia-facing artifact: English
 
 For German responses:
 

@@ -160,8 +160,9 @@ export function createScheduler({ rootDir }) {
 
   function buildPrompt(job) {
     const parts = [];
+    const workflowId = String(job.workflow || '').replace(/_workflow$/, '');
     if (job.workflow) {
-      parts.push(`Execute this task as a ${job.workflow} (see the workflow definitions in CLAUDE.md) and follow that workflow's agent chain and gates.`);
+      parts.push(`Execute this task as a ${workflowId} workflow (see the workflow definitions in CLAUDE.md) and follow that workflow's agent chain and gates.`);
     }
     if (job.agent) {
       parts.push(`Use the ${job.agent} subagent to execute this task, then report its result concisely.`);
@@ -195,7 +196,6 @@ export function createScheduler({ rootDir }) {
     const logFile = path.join(logsDir, `${run.id}.log`);
     const args = ['-p', buildPrompt(job), '--output-format', 'text'];
     if (job.model) args.push('--model', job.model);
-    if (job.bypassPermissions) args.push('--dangerously-skip-permissions');
 
     let output = '';
     let spawnFailed = false;
@@ -297,7 +297,6 @@ export function createScheduler({ rootDir }) {
         enabled: input.enabled !== false,
         timeoutMinutes: Number(input.timeoutMinutes ?? 15),
         model: input.model || null,
-        bypassPermissions: Boolean(input.bypassPermissions),
         createdAt: Date.now(),
         lastRun: null,
       };
@@ -318,7 +317,6 @@ export function createScheduler({ rootDir }) {
       merged.workflow = merged.workflow || null;
       merged.timeoutMinutes = Number(merged.timeoutMinutes);
       merged.enabled = Boolean(merged.enabled);
-      merged.bypassPermissions = Boolean(merged.bypassPermissions);
       jobs = jobs.map((j) => (j.id === id ? merged : j));
       await persistJobs();
       return { job: publicJob(merged) };

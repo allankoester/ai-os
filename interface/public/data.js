@@ -24,7 +24,7 @@ const AGENTS = [
     promptPath: 'CLAUDE.md',
     status: 'active',
     access: ['inbox', 'company/strategy', 'company/company_handbook_SSOT', 'company/commercial', 'company/marketing'],
-    workflows: ['strategy_review', 'marketing_content', 'proposal', 'document', 'creative_image', 'knowledge_intake'],
+    workflows: ['strategy_review', 'knowledge_retrieval', 'knowledge_intake', 'setup_profile', 'marketing_content', 'proposal', 'document', 'creative_image', 'calendar_planning', 'security_audit', 'dev_spec', 'multi_department'],
     responsibilities: ['Understand user intent', 'Classify the workflow', 'Route to specialist agents', 'Create concise task briefs', 'Apply strategy gates', 'Synthesize final results'],
     inputs: ['User requests', 'Agent outputs', 'Operating profile'],
     outputs: ['Task briefs', 'Synthesized answers', 'Approval requests'],
@@ -36,7 +36,7 @@ const AGENTS = [
     promptPath: '.claude/agents/atlas-strategic-advisor.md',
     status: 'active',
     access: ['company/strategy', 'company/company_handbook_SSOT', 'company/commercial', 'company/marketing'],
-    workflows: ['strategy_review', 'proposal', 'knowledge_intake'],
+    workflows: ['strategy_review', 'proposal', 'knowledge_retrieval', 'knowledge_intake', 'multi_department'],
     responsibilities: ['Strategy gate decisions', 'Positioning and target customers', 'Offer architecture', 'Market fit DACH + Australia', 'Major claims review'],
     inputs: ['Ideas, offers, claims', 'Drafts with strategic weight'],
     outputs: ['Strategic Fit rating', 'Risk rating', 'Go / Revise / Stop'],
@@ -48,7 +48,7 @@ const AGENTS = [
     promptPath: '.claude/agents/nora-knowledge-agent.md',
     status: 'active',
     access: ['inbox', 'company/strategy', 'company/company_handbook_SSOT', 'company/commercial', 'company/marketing'],
-    workflows: ['strategy_review', 'marketing_content', 'proposal', 'document', 'creative_image', 'knowledge_intake'],
+    workflows: ['strategy_review', 'knowledge_retrieval', 'marketing_content', 'proposal', 'document', 'creative_image', 'security_audit', 'dev_spec', 'multi_department'],
     responsibilities: ['Source-grounded retrieval', 'Context packaging for other agents', 'Brand rules and service descriptions', 'Prompt library access'],
     inputs: ['Retrieval briefs from Danny'],
     outputs: ['Context packages', 'Source references'],
@@ -72,7 +72,7 @@ const AGENTS = [
     promptPath: '.claude/agents/ada-marketing-strategy.md',
     status: 'active',
     access: ['company/strategy', 'company/company_handbook_SSOT', 'company/marketing', 'company/commercial'],
-    workflows: ['marketing_content'],
+    workflows: ['calendar_planning'],
     responsibilities: ['Campaign architecture', 'Content pillars', 'LinkedIn angles', 'Messaging frameworks', 'Audience mapping'],
     inputs: ['Campaign goals', 'Strategy context'],
     outputs: ['Campaign concepts', 'Content plans'],
@@ -227,9 +227,24 @@ const WORKFLOWS = [
     chain: ['danny', 'nora', 'vera', 'noah', 'kira', 'rosa', 'approval'],
   },
   {
+    id: 'knowledge_retrieval', name: 'Knowledge Retrieval',
+    desc: 'Source-grounded retrieval and context packaging for downstream tasks.',
+    chain: ['danny', 'nora', 'danny', 'user'],
+  },
+  {
     id: 'knowledge_intake', name: 'Knowledge Intake',
     desc: 'New material classified, curated and routed into docs.',
     chain: ['danny', 'mara', 'nora', 'atlas', 'docs'],
+  },
+  {
+    id: 'setup_profile', name: 'Setup Profile',
+    desc: 'Company or personal onboarding and profile updates.',
+    chain: ['danny', 'mara', 'nora', 'danny', 'user'],
+  },
+  {
+    id: 'calendar_planning', name: 'Calendar Planning',
+    desc: 'Editorial planning and publication cadence for approved content.',
+    chain: ['danny', 'nora', 'ada', 'jonas', 'user'],
   },
   {
     id: 'security_audit', name: 'Security Audit',
@@ -241,6 +256,11 @@ const WORKFLOWS = [
     desc: 'Development specification incl. architecture design and security review.',
     chain: ['danny', 'nora', 'iris', 'simon', 'rosa', 'approval'],
   },
+  {
+    id: 'multi_department', name: 'Multi-Department',
+    desc: 'Cross-department orchestration across strategy, knowledge, and delivery.',
+    chain: ['danny', 'nora', 'atlas', 'rosa', 'user'],
+  },
 ];
 
 // terminal pseudo-steps used in workflow chains
@@ -250,5 +270,5 @@ const TERMINALS = {
   docs: { name: 'Update Docs', role: 'Knowledge write' },
 };
 
-const DOC_STATUSES = ['approved', 'draft', 'needs review', 'conflict', 'deprecated'];
+const DOC_STATUSES = ['approved', 'draft', 'candidate', 'needs_review', 'approved_candidate', 'conflict', 'deprecated'];
 const MARKET_SCOPES = ['DACH', 'Australia', 'Both', 'Unknown'];

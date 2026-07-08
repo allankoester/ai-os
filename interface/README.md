@@ -11,6 +11,8 @@ node interface/server.mjs
 # → http://localhost:4011
 ```
 
+The server binds to `127.0.0.1` by default (local machine only).
+
 No dependencies, no build step. Requires Node 18+.
 
 ## Knowledge backends (dev vs prod)
@@ -31,6 +33,9 @@ STEADYMADE_RUNTIME=dev
 
 # fs | graph
 STEADYMADE_KNOWLEDGE_BACKEND=fs
+
+# optional API auth token for mutating endpoints (POST/PUT/DELETE)
+STEADYMADE_INTERFACE_TOKEN=
 
 # fs backend root (absolute or path relative to apps/internal/steadymade-ai-os)
 STEADYMADE_KNOWLEDGE_FS_ROOT=knowledge
@@ -96,6 +101,22 @@ changed remotely, writes return HTTP `409`.
 | Plugins | Real for MCP/permissions — writes `.mcp.json` and `.claude/settings.local.json`; external tools are config-only (API `/api/plugins`) |
 | Profile editors | Real — Settings edits `knowledge/personal/user-profile.md`, `CLAUDE.local.md`, `CLAUDE.md` on disk |
 | "Ask Nora / Mara / Atlas", "Run test task" | Prototype — copies a task brief to the clipboard; interactive chat execution pending |
+
+## Guardrails
+
+Guardrails are configured in two places:
+
+1. **Global folder permissions** (`write`, `ask`, `read`, `deny`) — enforced by
+   Settings → Guardrails, enforced by the interface file API, and materialized
+   into `.claude/settings.local.json`.
+2. **Agent-specific context access** — configured per specialist from Agent Map
+   → agent drawer → Context Access. Stored in `interface/guardrails.json` as
+   routing policy for which folders each specialist may use.
+
+Agent-specific rules always inherit the global maximum. They cannot exceed
+global permissions, and a globally denied folder stays denied for every agent.
+
+Use **Apply Secure Baseline** in Settings after onboarding a machine.
 
 ## Files
 

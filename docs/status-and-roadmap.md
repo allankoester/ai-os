@@ -10,7 +10,7 @@ the same change set.
 
 ## Last Verified Snapshot
 
-- Date: 2026-07-07
+- Date: 2026-07-08
 - Validation: `node scripts/validate.mjs` (passed)
 - Scope verified: docs, interface, scheduler, knowledge contract, scripts
 
@@ -156,7 +156,7 @@ Examples:
 `knowledge/company/` resolves to the OneDrive canonical root
 `AI_OS/knowledge/company/`. SSOT is a governance principle for canonical
 documents, not a folder name. Fixed baseline docs should be normalized into
-`knowledge/company/company_handbook/`; duplicated legacy strategy/SSOT copies
+`knowledge/company/company_handbook_SSOT/`; duplicated legacy strategy/SSOT copies
 still need a manual cleanup pass.
 
 ## Recommended Next Implementation Steps

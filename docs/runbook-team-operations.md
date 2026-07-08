@@ -9,7 +9,7 @@ Everything under version control follows one simple flow:
 
 1. Branch from `main` (or work in a fork of the folder for small doc edits).
 2. Make the change: agents (`.claude/agents/`), instructions (`CLAUDE.md`),
-   templates, profiles, interface code, company knowledge.
+   templates, profiles, interface code, scripts, docs.
 3. Run `node scripts/validate.mjs` — must pass.
 4. If the change affects implementation status, runtime behavior, stage/phase
    progress, or folder contracts, update
@@ -23,6 +23,20 @@ Everything under version control follows one simple flow:
 
 Versioning rule: never edit another user's profile or a canonical SSOT doc
 without review.
+
+## Shared knowledge edits (OneDrive canonical)
+
+`knowledge/company/` is canonical in OneDrive (`AI_OS/knowledge/company`) and
+linked into the repo by symlink. Treat it as shared content, not as software
+source code.
+
+1. Propose structural or strategic changes in a short doc note/PR if they impact
+   policy, taxonomy, or workflows.
+2. Apply content edits in the canonical path.
+3. Run `node scripts/validate.mjs` locally after changes.
+4. If a knowledge change affects implementation rules, update docs in this repo
+   (`docs/status-and-roadmap.md`, `docs/policy-knowledge-sync.md`, `CLAUDE.md`) in
+   the same change set.
 
 ## Incident and support playbook
 

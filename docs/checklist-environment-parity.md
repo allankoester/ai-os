@@ -1,7 +1,7 @@
 # Environment Parity Checklist
 
 Run per user machine. All boxes must be checked on **every** team machine
-before moving execution to a VM (Stage 3).
+before moving execution to a VM (Stage 4).
 
 Machine: ____________  User: ____________  Date: __________
 
@@ -21,7 +21,7 @@ Machine: ____________  User: ____________  Date: __________
 
 ## Knowledge
 
-- [ ] `knowledge/company/` matches canonical source (git or OneDrive root, per sync policy)
+- [ ] `knowledge/company/` resolves to canonical OneDrive source (`AI_OS/knowledge/company`) via local symlink
 - [ ] `knowledge/personal/` is untracked (`git status` shows nothing from it)
 - [ ] Same `STEADYMADE_KNOWLEDGE_BACKEND` / FS root convention as documented
 

@@ -25,8 +25,24 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 export const LEVELS = ['write', 'ask', 'read', 'deny'];
+const LEVEL_RANK = { deny: 0, read: 1, ask: 2, write: 3 };
 
 const SKIP_DIRS = new Set(['.git', 'node_modules', '.playwright-mcp', '.obsidian', 'backups']);
+
+const RECOMMENDED_BASELINE = {
+  'knowledge/company': 'ask',
+  'knowledge/inbox': 'ask',
+  'knowledge/personal': 'read',
+  'docs': 'ask',
+  'runs': 'read',
+  'scheduler': 'ask',
+  'backups': 'deny',
+  '.claude': 'ask',
+  'interface': 'ask',
+  'scripts': 'read',
+  'skills/company': 'ask',
+  'skills/personal': 'read',
+};
 
 export function createGuardrails({ rootDir }) {
   const configFile = path.join(rootDir, 'interface', 'guardrails.json');
@@ -38,7 +54,39 @@ export function createGuardrails({ rootDir }) {
 
   function readConfig() {
     const c = readJson(configFile, {});
-    return { folders: c.folders || {}, managedRules: c.managedRules || [], updatedAt: c.updatedAt || null };
+    return {
+      folders: c.folders || {},
+      agents: c.agents || {},
+      managedRules: c.managedRules || [],
+      updatedAt: c.updatedAt || null,
+    };
+  }
+
+  function normalizeFolder(folder) {
+    return String(folder || '').replace(/\\/g, '/').replace(/^\.?\//, '').replace(/\/+$/, '');
+  }
+
+  function isSafeFolderPath(folder) {
+    const norm = normalizeFolder(folder);
+    if (!norm) return false;
+    if (norm.includes('..') || path.isAbsolute(norm)) return false;
+    return true;
+  }
+
+  function globalLevelFor(folder, folders) {
+    const hit = levelFor(folder + '/x', folders);
+    return hit ? hit.level : 'write';
+  }
+
+  function clampToGlobal(globalLevel, requestedLevel) {
+    if (!requestedLevel || !LEVEL_RANK[requestedLevel]) return null;
+    if (LEVEL_RANK[requestedLevel] > LEVEL_RANK[globalLevel]) return globalLevel;
+    return requestedLevel;
+  }
+
+  function effectiveLevel(globalLevel, overrideLevel) {
+    if (!overrideLevel) return globalLevel;
+    return LEVEL_RANK[overrideLevel] < LEVEL_RANK[globalLevel] ? overrideLevel : globalLevel;
   }
 
   // ---------- folder candidates ----------
@@ -48,10 +96,25 @@ export function createGuardrails({ rootDir }) {
     const push = (rel) => { if (!folders.includes(rel)) folders.push(rel); };
     const listDirs = (relBase) => {
       try {
-        return fs.readdirSync(path.join(rootDir, relBase || '.'), { withFileTypes: true })
-          .filter((d) => d.isDirectory() && !d.name.startsWith('.') && !SKIP_DIRS.has(d.name))
-          .map((d) => (relBase ? `${relBase}/${d.name}` : d.name))
-          .sort();
+        const base = path.join(rootDir, relBase || '.');
+        const entries = fs.readdirSync(base, { withFileTypes: true });
+        const out = [];
+        for (const d of entries) {
+          if (d.name.startsWith('.') || SKIP_DIRS.has(d.name)) continue;
+          const abs = path.join(base, d.name);
+          if (d.isDirectory()) {
+            out.push(relBase ? `${relBase}/${d.name}` : d.name);
+            continue;
+          }
+          if (d.isSymbolicLink()) {
+            try {
+              if (fs.statSync(abs).isDirectory()) out.push(relBase ? `${relBase}/${d.name}` : d.name);
+            } catch {
+              // broken symlink or inaccessible target: ignore
+            }
+          }
+        }
+        return out.sort();
       } catch { return []; }
     };
     for (const top of listDirs('')) {
@@ -137,7 +200,24 @@ export function createGuardrails({ rootDir }) {
       }));
       return {
         folders,
+        agents: config.agents,
+        agentFolderKeys: all,
+        agentEffective: Object.fromEntries(
+          Object.entries(config.agents || {}).map(([agent, rules]) => [
+            agent,
+            Object.fromEntries(
+              [...new Set([...all, ...Object.keys(rules || {})])].map((folder) => {
+                const global = globalLevelFor(folder, config.folders);
+                const override = rules?.[folder] || null;
+                const effective = effectiveLevel(global, override);
+                return [folder, { global, override, effective, blockedByGlobalDeny: global === 'deny' }];
+              }),
+            ),
+          ]),
+        ),
         levels: LEVELS,
+        levelRank: LEVEL_RANK,
+        recommendedBaseline: RECOMMENDED_BASELINE,
         updatedAt: config.updatedAt,
         managedRules: config.managedRules,
         settingsFile: '.claude/settings.local.json',
@@ -145,17 +225,39 @@ export function createGuardrails({ rootDir }) {
       };
     },
 
-    async save(foldersInput) {
+    async save(input) {
+      const current = readConfig();
+      const foldersInput = input?.folders ?? input ?? current.folders;
+      const agentsInput = input?.agents ?? current.agents;
       if (typeof foldersInput !== 'object' || !foldersInput) return { errors: ['folders object required'] };
       const folders = {};
       for (const [folder, level] of Object.entries(foldersInput)) {
         if (!level) continue; // unset
         if (!LEVELS.includes(level)) return { errors: [`invalid level "${level}" for ${folder}`] };
-        if (folder.includes('..') || path.isAbsolute(folder)) return { errors: [`invalid folder path: ${folder}`] };
-        folders[folder.replace(/\\/g, '/').replace(/\/+$/, '')] = level;
+        if (!isSafeFolderPath(folder)) return { errors: [`invalid folder path: ${folder}`] };
+        folders[normalizeFolder(folder)] = level;
       }
-      const config = readConfig();
+      if (typeof agentsInput !== 'object' || !agentsInput) return { errors: ['agents object required'] };
+      const agents = {};
+      for (const [agent, rules] of Object.entries(agentsInput)) {
+        if (!/^[a-z0-9_-]+$/.test(agent)) return { errors: [`invalid agent id: ${agent}`] };
+        if (typeof rules !== 'object' || !rules) continue;
+        const clean = {};
+        for (const [folder, level] of Object.entries(rules)) {
+          if (!level) continue;
+          if (!LEVELS.includes(level)) return { errors: [`invalid level "${level}" for ${agent}:${folder}`] };
+          if (!isSafeFolderPath(folder)) return { errors: [`invalid agent folder path: ${folder}`] };
+          const normFolder = normalizeFolder(folder);
+          const global = globalLevelFor(normFolder, folders);
+          if (global === 'deny') continue;
+          const clamped = clampToGlobal(global, level);
+          if (clamped && clamped !== global) clean[normFolder] = clamped;
+        }
+        if (Object.keys(clean).length) agents[agent] = clean;
+      }
+      const config = current;
       config.folders = folders;
+      config.agents = agents;
       config.updatedAt = Date.now();
       await materialize(config);
       await fsp.writeFile(configFile, JSON.stringify(config, null, 2), 'utf8');

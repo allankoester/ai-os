@@ -52,9 +52,9 @@ You:
 
 ## Email Marketing Reference
 
-When writing newsletters, email campaigns, or any email copy, read the Email Marketing Bible skill file first:
+When writing newsletters, email campaigns, or any email copy, use the Email Marketing Bible only when it is an approved active skill in `.claude/skills/` or `skills/company/`.
 
-`~/.claude/skills/email-marketing-bible/SKILL.md`
+Do not assume any local global skill path exists.
 
 Use it for: subject line best practices, copywriting frameworks (PAS, AIDA, BAB, 1-3-1), CTA structure, flow copy (welcome series, win-back), and tone guidance from the curated email designs. Apply the principles — do not copy examples directly.
 

@@ -7,7 +7,7 @@ This document compares two AI-OS implementations:
 - Steadymade AI-OS in `apps/internal/steadymade-ai-os`
 - Cockpit AI-OS in `apps/research/.temp/Cockpit AI-OS/cockpit`
 
-It then defines a staged implementation model (Stage 1 to Stage 4), quality gates between stages, and provider strategy options.
+It then defines a staged implementation model (Stage 1 to Stage 5), quality gates between stages, and provider strategy options.
 
 ## Executive verdict
 
@@ -141,7 +141,42 @@ Both systems already share practical AI-OS patterns:
 - Shared skill profile model working and documented
 - Operational runbook for incidents and support created
 
-## Stage 3 - VM execution AI-OS with user workspaces
+## Stage 3 - OpenClaw personal assistant integration
+
+### Scope
+
+- Introduce an assistant layer for day-to-day personal execution
+- Keep Stage 1/2 local-first runtime model
+- Governed retrieval into assistant context
+- Preserve boundaries between company and personal knowledge
+
+### Required capabilities
+
+- Assistant workspace and memory boundary rules
+- Governed retrieval/search access to company knowledge
+- Explicit no-copy rules from personal/inbox into shared artifacts
+- Approval and quality gates still enforced before external outputs
+
+### Benefits
+
+- Better daily execution support for individuals
+- Safer retrieval pattern before VM runtime migration
+- Clearer policy boundaries for personal assistant usage
+
+### Limitations
+
+- Adds one more governance layer to maintain
+- Requires clear memory and retrieval policies
+- Still depends on local execution reliability
+
+### Quality gate to Stage 4
+
+- Assistant memory/retrieval boundaries documented and validated
+- Source precedence and citation rules consistently applied
+- Personal/company boundary leaks tested and blocked
+- Stage 4 VM scope frozen and approved
+
+## Stage 4 - VM execution AI-OS with user workspaces
 
 ### Scope
 
@@ -155,9 +190,7 @@ Both systems already share practical AI-OS patterns:
 - Runtime service (scheduler + executor + run history)
 - Per-user isolation and per-user data stores
 - Health status and relogin/noVNC support
-- Clear boundary between:
-  - private user skills/knowledge
-  - company managed skills/knowledge
+- Clear boundary between private user skills/knowledge and company-managed skills/knowledge
 
 ### Benefits
 
@@ -172,18 +205,18 @@ Both systems already share practical AI-OS patterns:
 - Identity, secrets, and permissions management overhead
 - More formal incident handling required
 
-### Quality gate to Stage 4
+### Quality gate to Stage 5
 
 - RBAC and access boundaries verified
 - Audit trail for runs and key actions available
 - Security and backup policies tested
 - Service-level expectations and on-call/runbook responsibilities defined
 
-## Stage 4 - Full company AI-OS
+## Stage 5 - Full company AI-OS
 
 ### Scope
 
-- Build on Stage 3 runtime foundation
+- Build on Stage 4 runtime foundation
 - Integrate business systems (CRM, ERP, Dev, M365, internal data systems)
 - Governed company-wide operating layer
 
@@ -217,8 +250,9 @@ Both systems already share practical AI-OS patterns:
 | Transition | Technical gate | Knowledge gate | Security gate | Ops gate |
 | --- | --- | --- | --- | --- |
 | Stage 1 -> 2 | Reproducible setup on 2+ machines | Company/personal taxonomy stable | Local data boundaries defined | Backup/restore and rollback tested |
-| Stage 2 -> 3 | Runtime services stable in test VM | Shared knowledge sync conflict policy active | Per-user identity and secret model documented | Scheduler reliability and incident runbook validated |
-| Stage 3 -> 4 | Connector framework and APIs validated | Data classification mapped to integrations | RBAC, audit, and approval controls enforced | SLOs, cost controls, and governance cadences active |
+| Stage 2 -> 3 | Assistant layer boundary model documented | Shared knowledge sync conflict policy active | Personal/company memory separation documented | Onboarding and retrieval runbook validated |
+| Stage 3 -> 4 | Runtime services stable in test VM | Source precedence/citation rules enforced | Per-user identity and secret model documented | Scheduler reliability and incident runbook validated |
+| Stage 4 -> 5 | Connector framework and APIs validated | Data classification mapped to integrations | RBAC, audit, and approval controls enforced | SLOs, cost controls, and governance cadences active |
 
 ## Provider strategy investigation
 
@@ -275,7 +309,8 @@ Use a staged provider strategy:
 
 1. Stage 1 and Stage 2: Claude-first
 2. Stage 2 onward: define provider-neutral manifests in parallel
-3. Stage 3: adopt Cockpit-like runtime operations while keeping Claude as default provider
-4. Stage 4: integrate M365 and enterprise systems through controlled adapters, not as the only runtime model
+3. Stage 3: integrate assistant layer with governed retrieval and memory boundaries
+4. Stage 4: adopt Cockpit-like runtime operations while keeping Claude as default provider
+5. Stage 5: integrate M365 and enterprise systems through controlled adapters, not as the only runtime model
 
 This keeps delivery speed high now while preventing lock-in debt later.
