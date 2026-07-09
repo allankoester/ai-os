@@ -147,6 +147,20 @@ select#model { border: none; background: none; color: var(--muted); font-size: 1
   color: var(--muted);
 }
 
+.incog {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--fm);
+  font-size: 10px;
+  letter-spacing: .06em;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+.incog input { accent-color: var(--text); margin: 0; }
+.incog.on { color: var(--text); font-weight: 600; }
+
 .layout { flex: 1; display: flex; min-height: 0; }
 .main-col { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 

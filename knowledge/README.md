@@ -53,6 +53,23 @@ them separate and never conflates them:
 If the name remains ambiguous for the team, a future dedicated migration can
 rename it to `knowledge/intake/`. For now, `knowledge/inbox/` stays canonical.
 
+## Conversational knowledge lifecycle
+
+Conversation content (chat, brainstorming) is **raw + personal by default**
+and follows this maturity ladder — it never skips steps silently:
+
+1. **Raw** — captured in `memory/daily/YYYY-MM-DD.md` (observations, parked
+   ideas under `## Parked`). Machine-local, citable only as unvalidated.
+2. **Promoted draft** — `/promote-knowledge`: Mara cleans and structures the
+   item into `knowledge/company/<domain>/`, registered in the interface
+   metadata with `status: draft`, `source_type: conversation`.
+3. **Approved** — after explicit user approval the status becomes
+   `approved`; only then is it regular company knowledge.
+
+Incognito chat turns are never captured at all (no daily note, no history).
+`company_handbook_SSOT/` is not a promotion target — SSOT changes go through
+the onboarding/SSOT process.
+
 ## Company domains
 
 | Folder | Content |

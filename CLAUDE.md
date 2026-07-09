@@ -130,6 +130,15 @@ Rules for Danny (and for specialists via Danny's task briefs):
   daily note: `- YYYY-MM-DD #feedback | what was wrong | why | how to apply`.
   The weekly `memory-consolidation` skill aggregates these into improvement
   proposals (drafts only — instruction changes always need user approval).
+- Conversational content is **raw and personal by default**: nothing said in
+  a chat becomes company knowledge automatically. "Park this" → entry under a
+  `## Parked` heading in today's daily note. Raw daily-note or parked
+  material may be cited only as explicitly unvalidated (source precedence
+  7-9). The only path from conversation into `knowledge/company/` is the
+  `/promote-knowledge` flow (Mara cleans → `meta.json` `status: draft`,
+  `source_type: conversation` → user approves → `approved`).
+- Incognito turns (marked in the chat runtime) leave no trace: no memory
+  writes, no daily notes, no run logs, no history.
 - Memory flush: at the end of every significant task, and before a long
   session ends, persist notable context to the daily note.
 - Company shared memory

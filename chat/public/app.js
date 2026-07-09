@@ -9,11 +9,13 @@ const agentSel = document.getElementById('agent');
 const newBtn = document.getElementById('newChat');
 const convListEl = document.getElementById('convList');
 const convSearchEl = document.getElementById('convSearch');
+const incogEl = document.getElementById('incognito');
 
 const CONV_KEY = 'steadymade_chat_conversation';
 
 const state = {
   conversationId: null,
+  incognitoSessionId: null, // in-memory only — never persisted
   running: false,
   abort: null,
   sessions: [],
@@ -256,6 +258,11 @@ async function loadSessions() {
 
 async function loadConversation(id) {
   if (state.running && state.abort) state.abort.abort();
+  if (incogEl.checked) {
+    incogEl.checked = false;
+    incogEl.parentElement.classList.remove('on');
+    state.incognitoSessionId = null;
+  }
   try {
     const { session, events } = await apiJson(`/api/session?id=${encodeURIComponent(id)}`);
     state.conversationId = id;
@@ -363,7 +370,13 @@ async function send() {
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+      body: JSON.stringify(incogEl.checked ? {
+        message: text,
+        sessionId: state.incognitoSessionId,
+        incognito: true,
+        model: modelSel.value,
+        agent: agentSel.value,
+      } : {
         message: text,
         conversationId: state.conversationId,
         model: modelSel.value,
@@ -414,7 +427,12 @@ async function send() {
         }
         break;
       case 'init':
-        sessEl.textContent = `Conversation ${String(state.conversationId || '').slice(0, 8)}${d.model ? ` · ${d.model}` : ''}`;
+        if (d.incognito) {
+          state.incognitoSessionId = d.session_id || state.incognitoSessionId;
+          sessEl.textContent = `Incognito${d.model ? ` · ${d.model}` : ''}`;
+        } else {
+          sessEl.textContent = `Conversation ${String(state.conversationId || '').slice(0, 8)}${d.model ? ` · ${d.model}` : ''}`;
+        }
         break;
       case 'delta':
         if (!gotDelta) {
@@ -457,12 +475,33 @@ async function send() {
 function resetConversation() {
   if (state.abort) state.abort.abort();
   state.conversationId = null;
+  state.incognitoSessionId = null;
+  if (incogEl.checked) {
+    incogEl.checked = false;
+    incogEl.parentElement.classList.remove('on');
+  }
   localStorage.removeItem(CONV_KEY);
   sessEl.textContent = '';
   showWelcome();
   statusEl.textContent = 'ready';
   renderConvList(state.sessions);
 }
+
+incogEl.addEventListener('change', () => {
+  incogEl.parentElement.classList.toggle('on', incogEl.checked);
+  if (state.abort) state.abort.abort();
+  state.incognitoSessionId = null;
+  if (incogEl.checked) {
+    state.conversationId = null;
+    sessEl.textContent = 'Incognito — leaves no trace';
+    showWelcome();
+    renderConvList(state.sessions);
+  } else {
+    sessEl.textContent = '';
+    showWelcome();
+  }
+  statusEl.textContent = 'ready';
+});
 
 sendBtn.addEventListener('click', () => {
   if (state.running && state.abort) {

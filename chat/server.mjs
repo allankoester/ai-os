@@ -245,11 +245,15 @@ function handleChat(req, res) {
     const model = typeof payload.model === 'string' ? payload.model.trim() : '';
     const selectedAgent = AGENT_MAP[payload.agent] ? payload.agent : 'danny';
     const mode = selectedAgent === 'danny' ? 'danny' : 'via_danny_specialist';
+    // Incognito turns leave no trace: no history, no index entry, no memory
+    // writes (instructed below). Multi-turn continuity works in-memory via
+    // the legacy sessionId field, which the UI never persists.
+    const incognito = Boolean(payload.incognito);
 
     // Resolve the resume chain server-side: the index maps the stable
     // conversation id to the latest session id.
     const sessionsIndex = readSessions();
-    let convId = requestedConvId && sessionsIndex[requestedConvId] ? requestedConvId : '';
+    let convId = !incognito && requestedConvId && sessionsIndex[requestedConvId] ? requestedConvId : '';
     const resumeId = convId ? sessionsIndex[convId].currentSessionId : legacySessionId;
     const userEntry = { t: 'user', ts: new Date().toISOString(), text: message, agent: selectedAgent };
     if (convId) appendHistory(convId, userEntry);
@@ -266,8 +270,11 @@ function handleChat(req, res) {
       'X-Accel-Buffering': 'no',
     });
 
+    const routedMessage = incognito
+      ? `[Incognito turn] Do not write memory files, daily notes, or run logs for this turn, and do not store anything about this exchange anywhere.\n\n${routeMessage(message, selectedAgent)}`
+      : routeMessage(message, selectedAgent);
     const args = [
-      '-p', routeMessage(message, selectedAgent),
+      '-p', routedMessage,
       '--output-format', 'stream-json',
       '--include-partial-messages',
       '--verbose',
@@ -324,6 +331,7 @@ function handleChat(req, res) {
         cache_read_input_tokens: override.cache_read_input_tokens ?? meta.cache_read_input_tokens,
         total_tokens: override.total_tokens ?? meta.total_tokens,
         is_error: Boolean(override.is_error ?? meta.is_error),
+        incognito: incognito || undefined,
       });
     };
 
@@ -379,7 +387,7 @@ function handleChat(req, res) {
       if (ev.type === 'system' && ev.subtype === 'init') {
         meta.session_id = ev.session_id || meta.session_id;
         meta.model = ev.model || meta.model;
-        if (!convId && ev.session_id) {
+        if (!convId && ev.session_id && !incognito) {
           // first turn of a new conversation — the first session id becomes
           // the stable conversation id
           convId = ev.session_id;
@@ -397,8 +405,8 @@ function handleChat(req, res) {
           writeSessions(s);
           appendHistory(convId, userEntry);
         }
-        sse(res, 'conversation', { id: convId });
-        sse(res, 'init', { session_id: ev.session_id, model: ev.model });
+        if (convId) sse(res, 'conversation', { id: convId });
+        sse(res, 'init', { session_id: ev.session_id, model: ev.model, incognito });
         return;
       }
 

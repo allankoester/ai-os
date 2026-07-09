@@ -68,9 +68,9 @@ State legend: `pending` · `in_progress` · `blocked (<why>)` · `done`
 | 1 | Memory contract wiring ⚠ | G1 | done | 5559c32 |
 | 2 | Chat history & sessions | G2 | done | 54ab164 |
 | 3 | Learning loop v1 | G3 | done | 600c3d9 |
-| 4 | Skill version contract | G5 | done | (next hash, see status) |
-| 5 | Raw→clean promotion pipeline + incognito | G4 | in_progress | — |
-| 6 | Hardening & polish (optional) | G6/misc | pending | — |
+| 4 | Skill version contract | G5 | done | 8033052 |
+| 5 | Raw→clean promotion pipeline + incognito | G4 | done | (next hash, see status) |
+| 6 | Hardening & polish (optional) | G6/misc | pending — pick items with Allan | — |
 
 Dependencies: 1 → 3 → 5 (memory before learning before promotion). 2 and 4 are
 independent and can be reordered if blocked. 5's incognito subtasks depend
@@ -470,12 +470,12 @@ an explicit, approved act; no-trace mode exists.
 
 **Tasks:**
 
-- [ ] 5.1 `CLAUDE.md`: add the default rule to the Memory section (3-4
+- [x] 5.1 `CLAUDE.md`: add the default rule to the Memory section (3-4
       lines): conversational content is **raw + personal** by default; "park
       this" → `## Parked` block in today's daily note; raw/daily material may
       only be cited as unvalidated (consistent with source precedence 7-9);
       the only path to company knowledge is `/promote-knowledge`.
-- [ ] 5.2 Create `skills/company/promote-knowledge/SKILL.md` (version per
+- [x] 5.2 Create `skills/company/promote-knowledge/SKILL.md` (version per
       Phase 4): guided flow —
       1. identify source item (daily-note entry / parked idea / inbox file /
          chat excerpt),
@@ -491,15 +491,15 @@ an explicit, approved act; no-trace mode exists.
       Guardrail note: writing into `knowledge/company/` happens via
       Mara/normal session permissions with user present — never from
       scheduled/headless runs.
-- [ ] 5.3 Incognito mode (chat): UI toggle → `incognito: true` in POST body →
+- [x] 5.3 Incognito mode (chat): UI toggle → `incognito: true` in POST body →
       server: no history persistence, no sessions.json entry, usage log entry
       keeps only cost fields + `incognito: true`; server appends one line to
       the routed message: "Incognito turn: do not write memory, notes, or run
       logs for this turn."; frontend does not persist the conversation id.
-- [ ] 5.4 `knowledge/README.md`: short "Conversational knowledge lifecycle"
+- [x] 5.4 `knowledge/README.md`: short "Conversational knowledge lifecycle"
       subsection: raw (daily note) → parked → promoted draft → approved;
       incognito = never captured.
-- [ ] 5.5 Verification (below).
+- [x] 5.5 Verification (below).
 
 **Acceptance criteria + verification:**
 
@@ -514,11 +514,26 @@ an explicit, approved act; no-trace mode exists.
 
 **Status:**
 ```
-state: pending
-started: —
-completed: —
-commit: —
-notes: —
+state: done
+started: 2026-07-09
+completed: 2026-07-09
+commit: recorded in phase map
+notes:
+- VERIFIED: "Park this idea" via chat → ## Parked entry in today's daily
+  note. Incognito turn (with an explicit "remember durably" instruction!) →
+  no conversation event, no history file, no sessions.json entry, no daily-
+  note write; usage log kept cost data with incognito:true. Promotion E2E:
+  cleaned draft written to knowledge/company/commercial/, registered via
+  PUT /api/meta with status draft + source_type conversation (validate
+  accepted the entry), approval flipped status to approved. All test
+  artifacts (draft file, meta entry, daily note, history) removed after.
+- promote-knowledge skill v0.1.0 created + activated (symlink); interactive-
+  only by design — knowledge/company stays ask-gated so headless runs can
+  never promote.
+- Incognito multi-turn continuity uses the legacy sessionId field held only
+  in page memory (never localStorage).
+- PUT /api/meta replaces the whole file — the skill instructs read-merge-
+  write; noted for a future PATCH-style endpoint (Phase 6 candidate).
 ```
 
 ---
