@@ -6,7 +6,7 @@ Dieses Ideal Customer Profile (ICP) basiert auf der steadymade.ai Brand Story un
 
 ## 1. Unternehmensübersicht & Value Proposition
 
-**steadymade.ai ist die AI Full-Service Agency für den Mittelstand — für KI-Lösungen, die sicher, messbar und nachhaltig sind.**
+**steadymade.ai ist die AI Full-Service Agency für den Mittelstand — für KI-Lösungen, die sicher, messbar und skalierbar sind.**
 
 steadymade.ai hilft Organisationen, KI ohne tiefes technisches Inhouse-Wissen zu adoptieren: durch Klarheit, einsatzfähige Piloten in 4–6 Wochen und nachhaltig eingebettete Lösungen — mit DSGVO-Konformität by Design, EU-AI-Act-Bereitschaft und vollständigem Team-Enablement.
 
@@ -160,7 +160,7 @@ Ein Prospect gilt als hochpotentiell, wenn er zeigt:
 
 **Der ideale steadymade.ai-Kunde ist ein KMU mit 10–250 Mitarbeitern im DACH-Raum — aus Medien, Kultur, Dienstleistung, Handel, Produktion oder Kreativwirtschaft — mit hohem operativem Aufkommen, Compliance-Anforderungen und dem Wunsch nach schnellen, messbaren KI-Ergebnissen ohne Vendor-Lock-in.**
 
-Dieser Kunde schätzt Klarheit, Compliance, Tempo und Niedrigrisiko-Piloten, die echten Geschäftsimpact innerhalb von 4–6 Wochen nachweisen. Er will keine Folienschleuder. Er will keine Blackbox. Er will KI, die im Alltag funktioniert — sicher, messbar, nachhaltig.
+Dieser Kunde schätzt Klarheit, Compliance, Tempo und Niedrigrisiko-Piloten, die echten Geschäftsimpact innerhalb von 4–6 Wochen nachweisen. Er will keine Folienschleuder. Er will keine Blackbox. Er will KI, die im Alltag funktioniert — sicher, messbar, skalierbar.
 
 | Merkmal | Inhalt |
 |---|---|

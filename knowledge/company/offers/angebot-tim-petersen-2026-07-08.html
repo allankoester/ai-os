@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Angebot SM-2026-002 — Tim Petersen, Gebr. Heinemann</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  --g600: #148A3F; --g800: #0A4D23; --g50: #E8FBF0;
+  --a600: #C46A38; --a50: #FFF0E8;
+  --d900: #0B2218; --d800: #1A3328;
+  --white: #FAFBFA; --n50: #F2F4F2; --n100: #E4E7E4;
+  --n300: #9DA19D; --n500: #6E736E; --n700: #474B47; --n900: #1C1F1D;
+  --fd: 'Space Grotesk', sans-serif;
+  --fb: 'Plus Jakarta Sans', sans-serif;
+  --fm: 'JetBrains Mono', monospace;
+}
+@page { size: A4; margin: 22mm 20mm 20mm; }
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body {
+  font-family: var(--fb);
+  font-size: 10pt;
+  color: var(--n700);
+  background: var(--white);
+  line-height: 1.65;
+  max-width: 176mm;
+  margin: 0 auto;
+  padding: 24mm 0 20mm;
+}
+.doc-header {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  padding-bottom: 18px; margin-bottom: 32px;
+}
+.doc-logo {
+  font-family: var(--fd); font-weight: 700; font-size: 15pt;
+  color: var(--n900); letter-spacing: -0.02em;
+}
+.doc-logo .logo-dot { color: var(--g600); }
+.doc-logo .logo-ai  { color: var(--g600); font-weight: 500; }
+.doc-tagline {
+  font-family: var(--fm); font-size: 7pt; color: var(--n300);
+  letter-spacing: 0.07em; text-transform: uppercase; margin-top: 3px;
+}
+.doc-sender-line {
+  font-size: 7.5pt; color: var(--n300); margin-bottom: 14px;
+  border-bottom: 1px solid var(--n100); padding-bottom: 5px; width: fit-content;
+}
+.doc-recipient { font-size: 10pt; color: var(--n700); line-height: 1.6; }
+.doc-meta-row {
+  display: flex; justify-content: flex-end; gap: 28px;
+  margin: 24px 0 28px;
+}
+.doc-meta-item { text-align: right; }
+.doc-meta-label {
+  font-family: var(--fm); font-size: 7pt; color: var(--n300);
+  letter-spacing: 0.07em; text-transform: uppercase; display: block;
+}
+.doc-meta-value { font-size: 10pt; color: var(--n900); font-weight: 500; }
+.doc-subject {
+  font-family: var(--fd); font-size: 14pt; font-weight: 700;
+  color: var(--n900); letter-spacing: -0.02em; margin-bottom: 6px;
+}
+.doc-subject-bar {
+  width: 48px; height: 3px; background: var(--g600);
+  border-radius: 100px; margin-bottom: 22px;
+}
+.doc-body { color: var(--n700); }
+.doc-body p { margin-bottom: 8px; }
+.doc-body p:last-child { margin-bottom: 0; }
+.doc-body h2 {
+  font-family: var(--fd); font-size: 11pt; font-weight: 700;
+  color: var(--n900); letter-spacing: -0.02em; margin: 18px 0 5px;
+}
+.doc-body ul { padding-left: 18px; margin-bottom: 8px; }
+.doc-body li { margin-bottom: 3px; }
+.doc-table { width: 100%; border-collapse: collapse; margin: 10px 0 14px; font-size: 9.5pt; }
+.doc-table th {
+  font-family: var(--fm); font-size: 7.5pt; font-weight: 500;
+  letter-spacing: 0.07em; text-transform: uppercase; color: var(--n300);
+  text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--n100);
+}
+.doc-table td { padding: 8px 10px; border-bottom: 1px solid var(--n100); vertical-align: top; }
+.doc-table td.right, .doc-table th.right { text-align: right; }
+.doc-table td strong { color: var(--n900); }
+.doc-infobox {
+  background: var(--n50); border-left: 3px solid var(--a600);
+  padding: 12px 16px; margin: 18px 0; border-radius: 0 8px 8px 0;
+}
+.doc-infobox p { margin: 0; font-size: 9.5pt; }
+/* --- Kategorie-Header --- */
+.cat-kicker {
+  font-family: var(--fm); font-size: 7.5pt; font-weight: 500; color: var(--g600);
+  letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 3px;
+}
+.cat-title {
+  font-family: var(--fd); font-size: 13pt; font-weight: 700;
+  color: var(--n900); letter-spacing: -0.02em; margin-bottom: 4px;
+}
+.cat-sub { font-size: 9.5pt; color: var(--n500); margin-bottom: 14px; }
+.cat-head { margin-top: 26px; break-after: avoid; page-break-after: avoid; }
+/* --- Modul-Card --- */
+.module {
+  border: 1px solid var(--n100); border-radius: 12px;
+  padding: 18px 20px 14px; margin: 0 0 16px;
+  break-inside: avoid; page-break-inside: avoid;
+  background: #fff;
+}
+.module-kicker {
+  font-family: var(--fm); font-size: 7pt; font-weight: 500; color: var(--n300);
+  letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 2px;
+}
+.module-title {
+  font-family: var(--fd); font-size: 11.5pt; font-weight: 700;
+  color: var(--n900); letter-spacing: -0.02em; margin-bottom: 4px;
+}
+.module-bar { width: 32px; height: 3px; background: var(--g600); border-radius: 100px; margin-bottom: 10px; }
+.module p { font-size: 9.5pt; margin-bottom: 8px; }
+.mod-label {
+  font-family: var(--fm); font-size: 7.5pt; font-weight: 500; color: var(--g600);
+  letter-spacing: 0.07em; text-transform: uppercase; margin: 10px 0 3px;
+}
+.module ul { padding-left: 16px; margin-bottom: 6px; font-size: 9.5pt; }
+.module li { margin-bottom: 2px; }
+.mod-meta {
+  display: flex; gap: 36px; border-top: 1px solid var(--n100);
+  margin-top: 12px; padding-top: 10px;
+}
+.mod-meta-label {
+  font-family: var(--fm); font-size: 7pt; color: var(--n300);
+  letter-spacing: 0.07em; text-transform: uppercase; display: block;
+}
+.mod-meta-value { font-family: var(--fd); font-size: 10pt; font-weight: 700; color: var(--n900); }
+/* --- Signatur / Footer --- */
+.doc-signature { margin-top: 36px; }
+.doc-signature-greeting { margin-bottom: 28px; }
+.doc-signature-name {
+  font-family: var(--fd); font-weight: 700; font-size: 11pt; color: var(--n900);
+}
+.doc-signature-role {
+  font-family: var(--fm); font-size: 7.5pt; color: var(--n300);
+  letter-spacing: 0.07em; text-transform: uppercase; margin-top: 2px;
+}
+.doc-signature-contact {
+  font-size: 8.5pt; color: var(--n500); margin-top: 6px; line-height: 1.5;
+}
+.doc-footer {
+  margin-top: 24px; padding-top: 12px; border-top: 1px solid var(--n100);
+  display: flex; justify-content: space-between;
+  font-family: var(--fm); font-size: 7pt; color: var(--n300); letter-spacing: 0.05em;
+}
+.doc-end { break-inside: avoid; page-break-inside: avoid; }
+@media print {
+  html, body { background: #ffffff; padding: 0; margin: 0; }
+  .doc-header, .doc-recipient, .doc-signature, .doc-footer { break-inside: avoid; }
+  .doc-infobox { break-inside: avoid; }
+  .doc-table { break-inside: avoid; }
+  .doc-table tr { break-inside: avoid; }
+  .doc-body h2 { break-after: avoid; }
+  .module { break-inside: avoid; page-break-inside: avoid; }
+  .cat-head { break-after: avoid; page-break-after: avoid; }
+  .doc-pagebreak { break-before: page; }
+}
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="doc-header">
+  <div>
+    <div class="doc-logo">steadymade<span class="logo-dot">.</span><span class="logo-ai">ai</span></div>
+    <div class="doc-tagline">Secure. Measurable. Scalable.</div>
+  </div>
+</div>
+
+<!-- Absenderzeile + Empfänger -->
+<div class="doc-sender-line">steadymade.ai · Allan Köster · allan.koester@steadymade.ai</div>
+<div class="doc-recipient">
+  Tim Petersen<br>
+  Zentraler Ansprechpartner K.I.-Themen<br>
+  Gebr. Heinemann SE &amp; Co. KG<br>
+  Hamburg
+</div>
+
+<!-- Meta -->
+<div class="doc-meta-row">
+  <div class="doc-meta-item">
+    <span class="doc-meta-label">Angebotsnr.</span>
+    <span class="doc-meta-value">SM-2026-002</span>
+  </div>
+  <div class="doc-meta-item">
+    <span class="doc-meta-label">Datum</span>
+    <span class="doc-meta-value">08.07.2026</span>
+  </div>
+  <div class="doc-meta-item">
+    <span class="doc-meta-label">Gültig bis</span>
+    <span class="doc-meta-value">07.08.2026</span>
+  </div>
+</div>
+
+<!-- Betreff -->
+<div class="doc-subject">Modulkatalog KI-Initiativen — Klarheit, Befähigung, Umsetzung</div>
+<div class="doc-subject-bar"></div>
+
+<!-- Anschreiben -->
+<div class="doc-body">
+  <p>Sehr geehrter Herr Petersen,</p>
+  <p>vielen Dank für das offene Gespräch. Die Themen, die Sie beschrieben haben — fehlende Übersicht über parallele Initiativen, eine Community ohne Mandat, über 600 Agenten ohne zentrale Governance und die offene Frage der Messbarkeit — lassen sich in klar abgegrenzte Arbeitspakete übersetzen.</p>
+  <p>Gerade in einem global aufgestellten Handelsunternehmen wie Gebr. Heinemann, mit Distribution, Logistik und Retail auf mehreren Kontinenten, entscheidet Transparenz darüber, ob eine wachsende Agenten-Landschaft Wert schafft oder Doppelarbeit produziert. Die Module setzen dort an — und wir arbeiten wie Sie von Hamburg aus, mit kurzen Wegen.</p>
+  <p>Dieses Angebot ersetzt unser erstes Angebot (SM-2026-001) und erweitert es zu einem Katalog: <strong>sieben Module in drei Kategorien</strong>. Jedes Modul ist einzeln buchbar und liefert für sich ein abgeschlossenes Ergebnis. Sechs der sieben Module haben Festpreise; Modul&nbsp;7 rechnen wir nach Aufwand zum Tagessatz von 1.200&nbsp;€ ab.</p>
+  <ul>
+    <li><strong>Kategorie A — Klarheit:</strong> wissen, was läuft, was es bringt und wer es verantwortet.</li>
+    <li><strong>Kategorie B — Befähigung:</strong> aus Interesse wird Kompetenz, aus der Community ein wirksames Netzwerk.</li>
+    <li><strong>Kategorie C — Umsetzung:</strong> Use Cases mit KPIs, Piloten und produktive Agenten.</li>
+  </ul>
+
+  <h2>Katalog auf einen Blick</h2>
+  <table class="doc-table">
+    <thead>
+      <tr><th>#</th><th>Modul</th><th>Kategorie</th><th>Dauer</th><th class="right">Preis</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>1</td><td>Copilot- &amp; Community-Review</td><td>Klarheit</td><td>2–3 Tage Discovery, Ergebnisse nach 1–2 Wochen</td><td class="right"><strong>5.500&nbsp;€</strong></td></tr>
+      <tr><td>2</td><td>Agenten-Governance &amp; Servicekatalog</td><td>Klarheit</td><td>4–6 Wochen</td><td class="right"><strong>18.000&nbsp;€</strong></td></tr>
+      <tr><td>3</td><td>Agent Hackathon — Gruppentraining</td><td>Befähigung</td><td>1 Trainingstag inkl. Vor- &amp; Nachbereitung</td><td class="right"><strong>8.400&nbsp;€</strong> (S)<br><strong>19.200&nbsp;€</strong> (L)</td></tr>
+      <tr><td>4</td><td>Mentoring-Programm KI-Community</td><td>Befähigung</td><td>3–6 Monate, monatlich kündbar</td><td class="right"><strong>6.000&nbsp;€</strong> / Monat</td></tr>
+      <tr><td>5</td><td>Executive-Briefing KI-Strategie</td><td>Befähigung</td><td>½ Tag + Entscheidungsvorlage</td><td class="right"><strong>3.600&nbsp;€</strong></td></tr>
+      <tr><td>6</td><td>Copilot / „Cowork" Use-Case-Workshop</td><td>Umsetzung</td><td>2 Workshop-Tage; opt. Pilot 4–6 Wochen</td><td class="right"><strong>7.500&nbsp;€</strong><br>Pilot <strong>20.000&nbsp;€</strong></td></tr>
+      <tr><td>7</td><td>Agenten- &amp; Automationsentwicklung</td><td>Umsetzung</td><td>nach Aufwand</td><td class="right">Tagessatz <strong>1.200&nbsp;€</strong></td></tr>
+    </tbody>
+  </table>
+  <p style="font-size:8.5pt; color:var(--n500);">Alle Preise netto zzgl. gesetzlicher Umsatzsteuer.</p>
+</div>
+
+<div class="doc-pagebreak"></div>
+
+<!-- KATEGORIE A -->
+<div class="cat-head">
+  <div class="cat-kicker">Kategorie A</div>
+  <div class="cat-title">Klarheit</div>
+  <div class="cat-sub">Wissen, was läuft, was es bringt und wer es verantwortet.</div>
+</div>
+
+<div class="module">
+  <div class="module-kicker">Modul 1 — Klarheit</div>
+  <div class="module-title">Copilot- &amp; Community-Review</div>
+  <div class="module-bar"></div>
+  <p>Die KI-Community trifft sich alle zwei Wochen, hat aber kein Mandat, keine Freistellung der 15 Mitglieder und bislang wenig sichtbare Wirkung. Bevor in Mentoring oder neue Formate investiert wird, braucht es eine nüchterne Bestandsaufnahme: Was läuft, was bringt es, wo hakt es strukturell.</p>
+  <div class="mod-label">Leistungen</div>
+  <ul>
+    <li>Sichtung bestehender Copilot-Beratungsprojekte und Use Cases im Konzern</li>
+    <li>Analyse des aktuellen Community-Formats (Kadenz, Teilnahme, Themen, Output)</li>
+    <li>Kurzinterviews mit 3–5 Community-Mitgliedern und mit Ihnen</li>
+    <li>Bewertung: Wo entsteht messbarer Mehrwert, wo verpufft Zeit</li>
+  </ul>
+  <div class="mod-label">Ergebnis</div>
+  <ul>
+    <li>Kompakter Review-Report (Bestandsaufnahme + Befunde)</li>
+    <li>Priorisierte Liste konkreter Verbesserungspunkte für das Community-Format</li>
+    <li>Kurzpräsentation der Ergebnisse (max. 30 Minuten, für Sie und ggf. Abteilungsleitung)</li>
+  </ul>
+  <div class="mod-label">Erfolgskriterien</div>
+  <ul>
+    <li>Klare Aussage, ob das aktuelle Community-Format in seiner Form Wirkung erzielen kann</li>
+    <li>Umsetzbare Empfehlungen mit klarem Adressaten und nächstem Schritt</li>
+    <li>Der Report ist direkt an die Abteilungsleitung weitergebbar</li>
+  </ul>
+  <div class="mod-meta">
+    <div><span class="mod-meta-label">Dauer</span><span class="mod-meta-value">2–3 Tage Discovery, Ergebnisse nach 1–2 Wochen</span></div>
+    <div><span class="mod-meta-label">Festpreis</span><span class="mod-meta-value">5.500 €</span></div>
+  </div>
+</div>
+
+<div class="module">
+  <div class="module-kicker">Modul 2 — Klarheit</div>
+  <div class="module-title">Agenten-Governance &amp; Servicekatalog</div>
+  <div class="module-bar"></div>
+  <p>Rund 120 Agenten in Langdock und 500 in Copilot ohne zentrale Übersicht, Servicekatalog oder Governance erzeugen Doppelarbeit, Risiko und Intransparenz. Der Ansatz ist bewusst schlank: ein Setup, das Transparenz herstellt und im Tagesgeschäft handhabbar bleibt.</p>
+  <div class="mod-label">Leistungen</div>
+  <ul>
+    <li>Bestandsaufnahme der bestehenden Agenten in Langdock und Copilot</li>
+    <li>Design eines schlanken Servicekatalogs (Zweck, Owner, Kostenstelle, Status je Agent)</li>
+    <li>Praktisches Governance-Setup: Freigabeprozess für neue Agenten, Kriterien für Deaktivierung von Doppelungen</li>
+    <li>Basis-Monitoring-Konzept für Nutzung und Kosten je Agent</li>
+    <li>DSGVO-/EU-AI-Act-Grundcheck als Teil der Bestandsaufnahme</li>
+    <li>Optional erweiterbar um einen Tool- und Lizenzkatalog (KI-Tools, Lizenzen, laufende Proof-of-Concepts) auf derselben Struktur</li>
+  </ul>
+  <div class="mod-label">Ergebnis</div>
+  <ul>
+    <li>Servicekatalog als nutzbares Arbeitsdokument</li>
+    <li>Governance-Prozess-Dokumentation (Freigabe, Zuständigkeit, Deaktivierung)</li>
+    <li>Monitoring-Konzept mit konkreten Kennzahlen</li>
+    <li>Übergabe-Dokumentation, damit die Struktur ohne Steadymade weitergeführt werden kann</li>
+  </ul>
+  <div class="mod-label">Erfolgskriterien</div>
+  <ul>
+    <li>Erstmals vollständige Übersicht über aktive Agenten mit Verantwortlichkeit je Agent</li>
+    <li>Messbare Reduktion von Doppelagenten oder klar dokumentierte Konsolidierungsvorschläge</li>
+    <li>Kein Governance-Overhead ohne praktischen Nutzen: Der Prozess muss im Tagesgeschäft funktionieren</li>
+  </ul>
+  <div class="mod-meta">
+    <div><span class="mod-meta-label">Dauer</span><span class="mod-meta-value">4–6 Wochen</span></div>
+    <div><span class="mod-meta-label">Festpreis</span><span class="mod-meta-value">18.000 €</span></div>
+  </div>
+</div>
+
+<div class="doc-pagebreak"></div>
+
+<!-- KATEGORIE B -->
+<div class="cat-head">
+  <div class="cat-kicker">Kategorie B</div>
+  <div class="cat-title">Befähigung</div>
+  <div class="cat-sub">Aus Interesse wird Kompetenz, aus der Community ein wirksames Netzwerk.</div>
+</div>
+
+<div class="module">
+  <div class="module-kicker">Modul 3 — Befähigung</div>
+  <div class="module-title">Agent Hackathon: Gruppentraining für Führungskräfte &amp; Fachbereiche</div>
+  <div class="module-bar"></div>
+  <p>Multi-Agenten-Systeme versteht man am besten, indem man sie an eigenen Prozessen erlebt: Use Case verstehen, Agentenrollen definieren, Prompts testen, Ergebnisse bewerten — und nachvollziehen, wie Prompt-Änderungen den gesamten Ablauf verändern. Dieses Format haben wir zuletzt bei einem Führungskräfte-Hackathon der Hawesko-Gruppe eingesetzt — wie Gebr. Heinemann ein Hamburger Handelsunternehmen. Rund 75 Führungskräfte arbeiteten in parallelen Gruppen; in unserer Gruppe entstand der Prototyp einer Agenten-Kette für die Plausibilitätsprüfung in der Umsatz- und Aktionsplanung (Finance/Controlling). Übertragbar auf Bereiche wie Einkauf, Logistik, Retail, Controlling oder IT.</p>
+  <p>Für Ihren Kontext besonders relevant: Ein Hackathon macht KI-Initiativen im Unternehmen sichtbar, aktiviert Multiplikatoren, denen heute Mandat und sichtbare Erfolge fehlen — und hinterlässt dokumentierte Use-Case-Prototypen, mit denen intern weitergearbeitet werden kann.</p>
+  <div class="mod-label">Leistungen</div>
+  <ul>
+    <li>Use-Case-Auswahl und -Vorbereitung gemeinsam mit den Fachbereichen (vorab)</li>
+    <li>Konzeption der Gruppenarbeit entlang realer Prozesse der Teilnehmenden</li>
+    <li>Durchführung mit erfahrenen Trainer:innen — je nach Format 2 bis 4 parallel</li>
+    <li>Dokumentation der entstandenen Prototypen und Regelwerke</li>
+    <li>Follow-up-Empfehlung: Welche Prototypen tragen einen echten Business Case</li>
+  </ul>
+  <div class="mod-label">Formate &amp; Festpreise</div>
+  <ul>
+    <li><strong>Format S</strong> — bis 20 Teilnehmende, 2 Trainer:innen, 1 Trainingstag: <strong>8.400&nbsp;€</strong></li>
+    <li><strong>Format L</strong> — bis 80 Teilnehmende, 4 Trainer:innen, parallele Gruppen, 1 Trainingstag: <strong>19.200&nbsp;€</strong></li>
+  </ul>
+  <p style="font-size:9pt;">Beide Formate inklusive Konzeption, Use-Case-Vorbereitung mit den Fachbereichen, Durchführung, Dokumentation und Follow-up-Empfehlung. Mehrtägige Varianten und Wiederholungsformate für weitere Bereiche kalkulieren wir auf Basis des Tagessatzes von 1.200&nbsp;€ je Trainer:in.</p>
+  <div class="mod-label">Erfolgskriterien</div>
+  <ul>
+    <li>Jede Gruppe verlässt den Tag mit einem funktionierenden Agenten-Prototyp am eigenen Prozess</li>
+    <li>Teilnehmende können Agentenrollen, Übergaben und Grenzen selbst erklären</li>
+    <li>Dokumentierte Ergebnisse, die intern als Referenz und Startpunkt weiterverwendet werden können</li>
+  </ul>
+  <div class="mod-meta">
+    <div><span class="mod-meta-label">Dauer</span><span class="mod-meta-value">1 Trainingstag inkl. Vor- &amp; Nachbereitung</span></div>
+    <div><span class="mod-meta-label">Festpreis</span><span class="mod-meta-value">8.400 € (S) / 19.200 € (L)</span></div>
+  </div>
+</div>
+
+<div class="module">
+  <div class="module-kicker">Modul 4 — Befähigung</div>
+  <div class="module-title">Mentoring-Programm für die KI-Community</div>
+  <div class="module-bar"></div>
+  <p>15 Mitarbeitende ohne Freistellung und ohne Mandat werden nicht von allein zu einem wirksamen Multiplikatoren-Netzwerk. Ein strukturiertes Mentoring gibt den Mitgliedern konkrete Aufgaben, einen festen Rhythmus und sichtbare Ergebnisse.</p>
+  <div class="mod-label">Leistungen</div>
+  <ul>
+    <li>Monatliche Begleitung der Community-Treffen (Impulse, Struktur, Moderation)</li>
+    <li>Feste Arbeitsaufträge zwischen den Terminen (kleine Use-Case-Sprints)</li>
+    <li>Individuelles Kurz-Coaching für 2–3 besonders aktive Mitglieder als Champions</li>
+    <li>Laufende Abstimmung mit Ihnen zu Fortschritt und Hindernissen</li>
+  </ul>
+  <div class="mod-label">Ergebnis</div>
+  <ul>
+    <li>Monatlicher Fortschrittsbericht mit konkreten Ergebnissen der Community-Arbeit</li>
+    <li>Mindestens ein dokumentierter Use Case oder Mini-Pilot pro Monat aus der Community</li>
+    <li>Übergabefähige Struktur für die Fortführung nach Vertragsende</li>
+  </ul>
+  <div class="mod-label">Erfolgskriterien</div>
+  <ul>
+    <li>Messbare Aktivität: mindestens ein dokumentiertes Ergebnis pro Monat</li>
+    <li>Community-Mitglieder übernehmen eigene Aufgaben und liefern sichtbare Beiträge</li>
+    <li>Nach Vertragsende bleibt eine funktionierende Struktur ohne Abhängigkeit von Steadymade</li>
+  </ul>
+  <div class="mod-meta">
+    <div><span class="mod-meta-label">Dauer</span><span class="mod-meta-value">Retainer, 3–6 Monate, monatlich kündbar</span></div>
+    <div><span class="mod-meta-label">Festpreis</span><span class="mod-meta-value">6.000 € / Monat</span></div>
+  </div>
+</div>
+
+<div class="module">
+  <div class="module-kicker">Modul 5 — Befähigung</div>
+  <div class="module-title">Executive-Briefing: KI-Strategie &amp; Mandat</div>
+  <div class="module-bar"></div>
+  <p>Viele der beschriebenen Engpässe — fehlende Freistellung, fehlendes Mandat, Finanzierung über einzelne Kostenstellen — lassen sich nur auf Leitungsebene lösen. Dieses Modul bereitet diese Entscheidung vor.</p>
+  <div class="mod-label">Leistungen</div>
+  <ul>
+    <li>Vorbereitetes Briefing für Abteilungsleitung, IT-Lead und/oder Transformationsteam (½ Tag)</li>
+    <li>Einordnung der eigenen KI-Landschaft auf Entscheiderniveau: Agenten-Bestand, Community, Infrastruktur, Kosten</li>
+    <li>Marktüberblick: Was vergleichbare Unternehmen tun und was davon übertragbar ist</li>
+    <li>Entscheidungsvorlage: Mandat, Ressourcen, KPIs, nächste Schritte</li>
+  </ul>
+  <div class="mod-label">Ergebnis</div>
+  <ul>
+    <li>Durchgeführtes Briefing mit Diskussion</li>
+    <li>Schriftliche Entscheidungsvorlage (max. 5 Seiten), intern direkt verwendbar</li>
+  </ul>
+  <div class="mod-label">Erfolgskriterien</div>
+  <ul>
+    <li>Die Leitungsebene kann auf Basis der Vorlage über Mandat und Ressourcen entscheiden</li>
+    <li>Alle Inhalte beziehen sich auf Ihre Situation bei Gebr. Heinemann: Agenten-Bestand, Community, Infrastruktur, Kosten</li>
+  </ul>
+  <div class="mod-meta">
+    <div><span class="mod-meta-label">Dauer</span><span class="mod-meta-value">½ Tag Briefing + Vorbereitung und Entscheidungsvorlage</span></div>
+    <div><span class="mod-meta-label">Festpreis</span><span class="mod-meta-value">3.600 €</span></div>
+  </div>
+</div>
+
+<div class="doc-pagebreak"></div>
+
+<!-- KATEGORIE C -->
+<div class="cat-head">
+  <div class="cat-kicker">Kategorie C</div>
+  <div class="cat-title">Umsetzung</div>
+  <div class="cat-sub">Use Cases mit KPIs, Piloten und produktive Agenten.</div>
+</div>
+
+<div class="module">
+  <div class="module-kicker">Modul 6 — Umsetzung</div>
+  <div class="module-title">Microsoft Copilot / „Cowork" Use-Case-Workshop</div>
+  <div class="module-bar"></div>
+  <p>Der Konzern nutzt eine breite technische Infrastruktur (Vertex AI, LiteLLM-Gateway, Git-Automatisierung, AWS/GCP/Azure). Im Gespräch offen geblieben: Skills-Logik, Token-Optimierung und KPI-Bezug der Copilot-Nutzung. Der Fokus dieses Moduls liegt auf Use Cases mit messbarer Wirkung.</p>
+  <div class="mod-label">Leistungen</div>
+  <ul>
+    <li>Workshop zu relevanten Copilot/Cowork-Anwendungsfällen im Konzernkontext (2 Tage)</li>
+    <li>Bewertung von Skills-Design, Tokenoptimierung und Kostenstruktur</li>
+    <li>Definition von KPIs für die priorisierten Use Cases</li>
+    <li>Optional: Pilotumsetzung für den am höchsten priorisierten Use Case</li>
+  </ul>
+  <div class="mod-label">Ergebnis</div>
+  <ul>
+    <li>Priorisierte Use-Case-Liste mit Aufwand-Nutzen-Einschätzung</li>
+    <li>KPI-Vorschlag je Use Case</li>
+    <li>Workshop-Dokumentation als Entscheidungsgrundlage</li>
+    <li>Optional: funktionierender Pilot mit Erfolgsmessung</li>
+  </ul>
+  <div class="mod-label">Erfolgskriterien</div>
+  <ul>
+    <li>Mindestens ein Use Case mit klarem Business Case und definierten KPIs</li>
+    <li>Kein Go-Live-Vorschlag ohne messbare Erfolgskriterien</li>
+    <li>Entscheidungsvorlage für den internen Gebrauch</li>
+  </ul>
+  <div class="mod-meta">
+    <div><span class="mod-meta-label">Dauer</span><span class="mod-meta-value">2 Workshop-Tage; optionaler Pilot 4–6 Wochen</span></div>
+    <div><span class="mod-meta-label">Festpreis</span><span class="mod-meta-value">7.500 € · Pilot 20.000 €</span></div>
+  </div>
+</div>
+
+<div class="module">
+  <div class="module-kicker">Modul 7 — Umsetzung</div>
+  <div class="module-title">Agenten- &amp; Automationsentwicklung</div>
+  <div class="module-bar"></div>
+  <p>Wenn aus priorisierten Use Cases produktive Systeme werden sollen: Entwicklung einzelner Unternehmens-Agenten, Automationsstrecken und Integrationen — angedockt an Ihre bestehende Infrastruktur (LiteLLM-Gateway, Git-basierte Automatisierung, Vertex AI, Langdock, Copilot).</p>
+  <div class="mod-label">Leistungen</div>
+  <ul>
+    <li>Entwicklung von Agenten und Automationen nach definiertem Scope</li>
+    <li>Integration in bestehende Systeme und Berechtigungsstrukturen</li>
+    <li>Dokumentation und Übergabe, damit der Betrieb intern weiterlaufen kann</li>
+    <li>Schriftliche Aufwandsschätzung mit Abnahmekriterien vor jedem Vorhaben</li>
+  </ul>
+  <div class="mod-label">Konditionen</div>
+  <ul>
+    <li>Abrechnung nach Aufwand: <strong>Tagessatz 1.200&nbsp;€</strong></li>
+    <li>Bei größeren Vorhaben: Festpreis nach gemeinsamem Scoping</li>
+    <li>Skalierbar: bei Bedarf erweitern wir das Kernteam um zusätzliche Entwickler:innen (siehe Team &amp; Kapazität)</li>
+  </ul>
+  <div class="mod-label">Erfolgskriterien</div>
+  <ul>
+    <li>Kein Vorhaben ohne definierten Scope und Abnahmekriterien</li>
+    <li>Jedes System wird übergabefähig dokumentiert</li>
+  </ul>
+  <div class="mod-meta">
+    <div><span class="mod-meta-label">Abrechnung</span><span class="mod-meta-value">nach Aufwand</span></div>
+    <div><span class="mod-meta-label">Tagessatz</span><span class="mod-meta-value">1.200 €</span></div>
+  </div>
+</div>
+
+<div class="doc-pagebreak"></div>
+
+<!-- REFERENZEN -->
+<div class="doc-body">
+  <h2>Ausgewählte Referenzen</h2>
+  <ul>
+    <li><strong>Hawesko-Gruppe (Handel, Hamburg)</strong> — Führungskräfte-Hackathon zu agentischer KI mit rund 75 Führungskräften in parallelen Gruppen; in unserer Gruppe entstand der Prototyp einer Agenten-Kette zur Plausibilitätsprüfung in der Umsatz- und Aktionsplanung (Finance/Controlling), inkl. Regelwerk-Entwurf aus historischen Daten.</li>
+    <li><strong>Rechtsanwaltskanzlei</strong> — Konzeption und Entwicklung eines KI-Chatbots für den Kanzleialltag.</li>
+    <li><strong>Öffentlich-rechtliche Rundfunkanstalt</strong> — Entwicklung eines KI-gestützten Recherche-Workflows für Redaktionen.</li>
+    <li><strong>Immobilienunternehmen</strong> — Leadgenerierungs-Tool und Prozessautomationen.</li>
+  </ul>
+  <p>Weitere Projekte aus Medien, Verlagen, Kultur und Mittelstand nennen wir gern im Gespräch.</p>
+
+  <h2>Team &amp; Kapazität</h2>
+  <p>Die meisten Module liefert unser Kernteam persönlich — in der Regel zu zweit, mit klarer Verantwortung je Modul. Für Trainingsformate erweitern wir das Team um erfahrene Trainer:innen aus unserem Netzwerk. Für größere Umsetzungsvorhaben stehen eingespielte Entwicklerteams zur Verfügung — kurzfristig einsatzbereit, unter unserer fachlichen Leitung.</p>
+
+  <h2>Konditionen</h2>
+  <ul>
+    <li>Alle Preise netto zzgl. gesetzlicher Umsatzsteuer.</li>
+    <li>Module sind einzeln buchbar. Bei Kombination mehrerer Module stimmen wir Reihenfolge und Übergaben in einem gemeinsamen Fahrplan ab.</li>
+    <li>Jedes Ergebnis ist so dokumentiert, dass Sie ohne uns weiterarbeiten können — kein Lock-in.</li>
+    <li>Etwaige Reisekosten nach Aufwand und vorheriger Abstimmung.</li>
+    <li>Angebot gültig bis 07.08.2026.</li>
+  </ul>
+
+  <div class="doc-infobox">
+    <p>Unabhängig von diesem Angebot laden wir Sie herzlich zu unserem internen Community-Programm ein — ein kostenfreies, informelles Format, in dem wir unser Agenten-Tool zeigen und Fragen zur AI-First-Strategie beantworten.</p>
+  </div>
+
+  <p>Wir freuen uns über Ihre Rückmeldung und stehen für ein Scoping-Gespräch zu jedem Modul zur Verfügung.</p>
+</div>
+
+<!-- SIGNATUR -->
+<div class="doc-end">
+<div class="doc-signature">
+  <div class="doc-signature-greeting"><p>Mit freundlichen Grüßen</p></div>
+  <div class="doc-signature-name">Allan Köster</div>
+  <div class="doc-signature-role">Strategie, Entwicklung &amp; Compliance</div>
+  <div class="doc-signature-contact">
+    allan.koester@steadymade.ai<br>
+    steadymade.ai
+  </div>
+</div>
+
+<!-- FOOTER -->
+<div class="doc-footer">
+  <span>steadymade.ai · Allan Köster · allan.koester@steadymade.ai</span>
+  <span>SM-2026-002</span>
+</div>
+</div>
+
+</body>
+</html>

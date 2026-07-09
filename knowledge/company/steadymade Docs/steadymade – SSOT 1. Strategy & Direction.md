@@ -8,7 +8,7 @@ Die meisten KMU im deutschsprachigen Raum wissen längst, dass KI relevant ist. 
 
 steadymade.ai wurde gegründet, um genau diese Lücke zu schließen.
 
-Nicht als weiteres Beratungshaus. Nicht als Tool-Lieferant. Sondern als umsetzungsstarker Partner, der KI-Lösungen baut, die im Alltag funktionieren — sicher, messbar und nachhaltig.
+Nicht als weiteres Beratungshaus. Nicht als Tool-Lieferant. Sondern als umsetzungsstarker Partner, der KI-Lösungen baut, die im Alltag funktionieren — sicher, messbar und skalierbar.
 
 ---
 
@@ -65,10 +65,10 @@ steadymade.ai positioniert sich als **AI Full-Service Agency für den Mittelstan
 | **Messbarer Business Case** | Manchmal | ✗ | ✓ |
 | **Eigentum beim Kunden** | ✗ | ✗ | ✓ |
 
-**Mantra:** „Das ist unsere Steadymade."
-**Tagline:** Sicher. Messbar. Nachhaltig.
+**Claim:** „Sicher. Messbar. Skalierbar." *(EN: Secure. Measurable. Scalable.)*
+**Signatur:** Gebaut, um zu bleiben.
 
-Der Name *steadymade* ist kein Zufallsprodukt — er ist strategische Kommunikation. „Prio" ist das meistgenutzte Business-Wort im DACH-Raum. Wenn etwas Prio hat, wird es gemacht. Der Erfolg unserer Kunden ist bei uns Steadymade 1 — nicht Aufgabe Nummer fünf. Die drei i's verankern die drei Fundamente visuell und semantisch.
+Der Name *steadymade* ist kein Zufallsprodukt — er ist strategische Kommunikation. *steady* + *made*: verlässlich gebaute KI, die im Alltag trägt statt als Pilot zu enden. *steady* verankert Beständigkeit und Ruhe in einem hypegetriebenen Markt, *made* das Handwerk hinter jeder Lösung — gebaut, nicht nur versprochen. Die drei Fundamente — Sicherheit, Wirkung, Nachhaltigkeit — geben dem Versprechen seine Substanz.
 
 ---
 

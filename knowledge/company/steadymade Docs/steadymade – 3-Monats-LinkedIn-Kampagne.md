@@ -28,21 +28,19 @@
 ### Woche 1: Launch & Einführung
 
 **Post 1 — Unternehmensseite (Ankündigungs-Post)**
-> In jedem Unternehmen gibt es eine Prio-Liste.
+> Zu viele KI-Projekte enden im gleichen Muster.
 >
-> Was oben steht, wird gemacht. Was unten steht — irgendwann vielleicht.
->
-> Zu viele KI-Projekte landen auf dem falschen Ende dieser Liste. Als Experiment. Als Piloten, der nie live geht. Als Folie, die niemanden mehr interessiert.
+> Als Experiment. Als Pilot, der nie live geht. Als Folie, die niemanden mehr interessiert.
 >
 > Wir haben steadymade.ai gegründet, weil das nicht sein muss.
 >
-> Der Name ist das Versprechen: Ihr Projekt ist unsere Steadymade. Nicht Nummer fünf. Nummer eins.
+> Der Name ist das Versprechen: *steady* + *made* — KI, die verlässlich gebaut ist und im Alltag trägt. Kein Pilot, der versandet, sondern ein System, das in den Regelbetrieb geht und bleibt.
 >
 > Drei Gründer. Drei Kompetenzen. Drei Fundamente: Sicherheit. Wirkung. Nachhaltigkeit.
 >
-> Das ist unsere Steadymade.
+> Gebaut, um zu bleiben.
 >
-> #steadymadeai #KI #Mittelstand #DasIstUnsereSteadymade
+> #steadymadeai #KI #Mittelstand #GebautUmZuBleiben
 
 ---
 
@@ -473,26 +471,24 @@
 **Post 24 — Unternehmensseite (Abschluss-Kampagnen-Post)**
 > 3 Monate. Viele Posts. Drei Wörter, die geblieben sind:
 >
-> Sicher. Messbar. Nachhaltig.
+> Sicher. Messbar. Skalierbar.
 >
-> Und ein Satz, der alles zusammenfasst:
->
-> Ihr Projekt ist unsere Steadymade.
+> Und ein Name, der alles zusammenfasst: steadymade — verlässlich gebaut, gemacht, um zu bleiben.
 >
 > Nicht weil wir das auf eine Folie schreiben.
 > Weil wir Verträge mit klar definierten Ergebnissen machen.
 > Weil wir drei Gründer sind, die jedes Projekt persönlich tragen.
 > Weil wir nicht verschwinden, wenn der Launch vorbei ist.
 >
-> Wenn Sie wissen wollen, was Ihre KI-Steadymade ist — melden Sie sich.
+> Wenn Sie wissen wollen, was bei Ihnen wirklich bleiben soll — melden Sie sich.
 >
 > Erstes Gespräch: kostenlos, unverbindlich, konkret.
 >
 > → hello@steadymade.ai
 >
-> Das ist unsere Steadymade.
+> Gebaut, um zu bleiben.
 >
-> #steadymadeai #KI #Mittelstand #DasIstUnsereSteadymade
+> #steadymadeai #KI #Mittelstand #GebautUmZuBleiben
 
 ---
 

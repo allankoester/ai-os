@@ -22,30 +22,30 @@ Jeder Marketing-Touchpoint soll beim Empfänger das Gleiche auslösen: *„Das s
 
 ### Der Name als Botschaft
 
-**steadymade** = Priorität. Das ist kein Zufall — es ist das Herzstück unserer Markenkommunikation.
+**steadymade** = *steady* + *made*. Das ist kein Zufall — es ist das Herzstück unserer Markenkommunikation.
 
-Im DACH-Geschäftsalltag kennt jeder „Prio". Wenn etwas Prio hat, wird es gemacht. Wenn nicht, wird es verschoben. Wir machen daraus ein Versprechen: Das Projekt unserer Kunden ist unsere Steadymade — immer, ohne Ausnahme.
+Der Name beschreibt genau das, was wir liefern: verlässlich gebaute KI, die im Alltag trägt. *steady* steht für Beständigkeit und Ruhe in einem lauten, hypegetriebenen Markt; *made* für Handwerk statt Folien — gebaut, nicht nur versprochen. Unser Versprechen: das Projekt unserer Kunden endet nicht als Pilot, sondern geht in den Regelbetrieb — und bleibt.
 
-Die drei i's stehen für unsere drei Fundamente: Sicherheit, Wirkung, Nachhaltigkeit.
+Die drei Fundamente geben dem Namen Substanz: Sicherheit, Wirkung, Nachhaltigkeit.
 
-### Primäres Mantra
-**„Das ist unsere Steadymade."**
+### Primärer Claim
+**„Sicher. Messbar. Skalierbar."** *(EN: Secure. Measurable. Scalable.)*
 
-### Tagline
-**Sicher. Messbar. Nachhaltig.**
+### Signatur
+**Gebaut, um zu bleiben.**
 
 ### Claim-System (situativ einsetzen)
 
 | Situation | Claim |
 |---|---|
-| Allgemeine Positionierung | „Das ist unsere Steadymade." |
-| Kundenorientiert | „Ihr Erfolg. Das ist unsere Steadymade." |
-| Gegen Hype-Konkurrenz | „Kein Hype. Nur Steadymade." |
-| Vertrieb / Gesprächseinstieg | „Was hat bei Ihnen Steadymade?" |
-| Compliance-Kontext | „KI mit Steadymade 1." |
-| Drei Fundamente | „Drei Fundamente. Eine Steadymade." |
-| Website-Header | „Sicher. Messbar. Nachhaltig." |
-| Abschluss / Signatur | „Das ist unsere Steadymade." |
+| Allgemeine Positionierung | „Sicher. Messbar. Skalierbar." |
+| Kundenorientiert | „Ihr Erfolg — gebaut, um zu bleiben." |
+| Gegen Hype-Konkurrenz | „Kein Hype. Gebaut." |
+| Vertrieb / Gesprächseinstieg | „Worauf müssen Sie sich verlassen können?" |
+| Compliance-Kontext | „Sicher gebaut — von der ersten Zeile an." |
+| Drei Fundamente | „Drei Fundamente. Ein Standard." |
+| Website-Header | „Sicher. Messbar. Skalierbar." |
+| Abschluss / Signatur | „Gebaut, um zu bleiben." |
 
 ### Markenversprechen
 > *Wir liefern KI-Lösungen, die sicher, messbar und skalierbar sind — gebaut auf drei Fundamenten, getragen von einem Team, das von der Strategie über die Daten bis zum laufenden System alles aus einer Hand liefert.*
@@ -65,16 +65,15 @@ Die drei i's stehen für unsere drei Fundamente: Sicherheit, Wirkung, Nachhaltig
 - „ganzheitlicher Ansatz"
 
 **Bevorzugte Formulierungen:**
-- „Das ist unsere Steadymade."
-- „Sicher. Messbar. Nachhaltig."
-- „Kein Hype. Nur Steadymade."
+- „Sicher. Messbar. Skalierbar."
+- „Gebaut, um zu bleiben."
+- „Kein Hype. Gebaut."
 - „Gebaut für heute. Skalierbar für morgen."
-- „Keine Demos. Lösungen."
 - „Compliant by Design."
-- „Drei Fundamente. Eine Steadymade."
+- „Drei Fundamente. Ein Standard."
 - „KI, die im Alltag funktioniert."
 - „Pilot in 4–6 Wochen."
-- „Was hat bei Ihnen Steadymade?"
+- „Worauf müssen Sie sich verlassen können?"
 
 ### Sprache
 - Primär Deutsch (DACH-Markt)

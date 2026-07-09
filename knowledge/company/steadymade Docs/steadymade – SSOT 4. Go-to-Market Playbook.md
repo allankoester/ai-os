@@ -40,7 +40,7 @@ Das Go-to-Market-Modell basiert auf drei Überzeugungen:
 ### 4.3 Messaging-Framework
 
 #### Kernbotschaft
-**„KI-Lösungen, die nicht in der Pilotphase steckenbleiben — sicher, messbar, nachhaltig."**
+**„KI-Lösungen, die nicht in der Pilotphase steckenbleiben — sicher, messbar, skalierbar."**
 
 #### Messaging nach Schmerzpunkt
 

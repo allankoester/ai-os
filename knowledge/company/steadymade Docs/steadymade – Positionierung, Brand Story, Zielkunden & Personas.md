@@ -4,20 +4,20 @@
 
 ## 1. Positionierung
 
-### Claim & Mantra
+### Claim & Signatur
 
-**„Das ist unsere Steadymade."**
+**„Sicher. Messbar. Skalierbar."**
 
-Der Name sagt alles: *steadymade* ist Priorität — das meistgenutzte Business-Wort im DACH-Raum, geladen mit dem Versprechen, dass der Erfolg unserer Kunden bei uns nicht Aufgabe Nummer fünf ist. Er ist Aufgabe Nummer eins. Die drei i's stehen für unsere drei Fundamente: Sicherheit, Wirkung, Nachhaltigkeit.
+Der Name sagt, was wir liefern: *steady* + *made* — KI, die verlässlich gebaut ist und im Alltag trägt. Kein Pilot, der nach drei Monaten im Sande verläuft, sondern ein System, das in den Regelbetrieb geht, mitwächst und dem Kunden gehört. *steady* steht für Verlässlichkeit und Beständigkeit in einem lauten, hypegetriebenen Markt; *made* für Handwerk statt Folien — gebaut, nicht nur versprochen.
 
-**Tagline:** Sicher. Messbar. Nachhaltig.
+**Tagline:** Sicher. Messbar. Skalierbar. *(EN: Secure. Measurable. Scalable.)*
 
-**Weitere Claims aus dem Namen:**
-- „Ihr Erfolg. Das ist unsere Steadymade."
-- „Kein Hype. Nur Steadymade."
-- „Was hat bei Ihnen Steadymade?" *(Vertriebsfrage & LinkedIn-Hook)*
-- „KI mit Steadymade 1." *(für hochkritische Projekte & Compliance-Kontext)*
-- „Drei Fundamente. Eine Steadymade."
+**Weitere Claims:**
+- „Ihr Erfolg — gebaut, um zu bleiben."
+- „Kein Hype. Gebaut."
+- „Worauf müssen Sie sich verlassen können?" *(Vertriebsfrage & LinkedIn-Hook)*
+- „Sicher gebaut — von der ersten Zeile an." *(für hochkritische Projekte & Compliance-Kontext)*
+- „Drei Fundamente. Ein Standard."
 
 ### Positionierungsstatement
 steadymade.ai ist die AI Full-Service Agency für den deutschsprachigen Mittelstand. Wir bauen KI-Lösungen, die nicht in der Pilotphase steckenbleiben — sondern im Alltag funktionieren. Auf drei Fundamenten: Sicherheit, Wirkung, Nachhaltigkeit.
@@ -83,15 +83,15 @@ Zusammen ergibt das ein Team, das KI von allen Seiten denkt: strategisch, dateng
 
 ### Der Name ist das Versprechen
 
-**steadymade** — das ist kein konstruierter Agenturname. Es ist ein Versprechen.
+**steadymade** — das ist kein konstruierter Agenturname. Der Name beschreibt, was wir liefern: *steady* + *made*.
 
-In jedem Unternehmen gibt es eine Prio-Liste. Was oben steht, wird gemacht. Was unten steht, wird verschoben. Zu viele KI-Projekte landen auf dem falschen Ende dieser Liste: als nettes Experiment, das irgendwann mal bewertet wird.
+Zu viele KI-Projekte enden als nettes Experiment — ein Pilot, der nie live geht, eine Folie, die niemanden mehr interessiert. *steady* steht für das Gegenteil: verlässlich, beständig, ruhig in einem lauten Markt. *made* steht für Handwerk statt Versprechen — gebaut, dokumentiert, übergabefähig.
 
-Bei uns ist Ihr Projekt die Steadymade. Nicht weil wir das sagen. Weil wir Verträge mit klar definierten Ergebnissen machen. Weil wir keine 50 Projekte gleichzeitig führen. Weil wir drei Gründer sind, die jedes Projekt persönlich tragen.
+Zusammen heißt das: KI, die im Alltag trägt und bleibt. Nicht weil wir das sagen, sondern weil wir Verträge mit klar definierten Ergebnissen machen, keine 50 Projekte gleichzeitig führen und als drei Gründer jedes Projekt persönlich tragen.
 
-Die drei i's im Namen sind kein Zufall — sie stehen für unsere drei Fundamente: Sicherheit, Wirkung, Nachhaltigkeit. Und für die drei Köpfe dahinter.
+Drei Fundamente tragen jedes Projekt — Sicherheit, Wirkung, Nachhaltigkeit — getragen von drei Köpfen.
 
-**Das ist unsere Steadymade.**
+**Gebaut, um zu bleiben.**
 
 ---
 
@@ -285,7 +285,7 @@ Ein Team, das Kultureinrichtungen kennt — und KI nicht als Effizienzmaschine v
 | Element | Inhalt |
 |---|---|
 | **Name** | steadymade.ai |
-| **Claim** | Sicher. Messbar. Nachhaltig. |
+| **Claim** | Sicher. Messbar. Skalierbar. |
 | **Kategorie** | AI Full-Service Agency für den Mittelstand |
 | **Drei Fundamente** | Sicherheit · Wirkung · Nachhaltigkeit |
 | **Kernversprechen** | KI-Lösungen, die im Alltag funktionieren — aus einer Hand |
