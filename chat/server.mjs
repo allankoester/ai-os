@@ -318,7 +318,7 @@ function handleChat(req, res) {
       logged = true;
       appendUsageLog({
         timestamp: new Date().toISOString(),
-        session_id: override.session_id ?? meta.session_id,
+        session_id: incognito ? null : (override.session_id ?? meta.session_id),
         selected_agent: selectedAgent,
         mode,
         model: override.model ?? meta.model,
@@ -357,6 +357,11 @@ function handleChat(req, res) {
     });
 
     child.on('close', (code) => {
+      if (incognito && meta.session_id) {
+        // the no-trace promise includes the CLI's own transcript file
+        const slug = ROOT.replace(/[^a-zA-Z0-9]/g, '-');
+        fs.rm(path.join(os.homedir(), '.claude', 'projects', slug, `${meta.session_id}.jsonl`), { force: true }, () => {});
+      }
       if (convId && pendingAssistant) {
         appendHistory(convId, pendingAssistant);
         const s = readSessions();
@@ -526,7 +531,7 @@ http.createServer((req, res) => {
     return;
   }
   serveStatic(req, res);
-}).listen(PORT, () => {
+}).listen(PORT, '127.0.0.1', () => {
   console.log(`Steadymade AI OS Chat → http://localhost:${PORT}`);
   console.log(`claude binary: ${CLAUDE_BIN}`);
 });

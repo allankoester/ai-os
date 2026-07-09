@@ -31,8 +31,14 @@ Embedded chat runtime used by the interface Chat view.
   full-text search.
 - The memory rules for this runtime live in the appended system prompt
   (`DANNY_PROMPT`): durable facts go to `memory/daily/` tagged `#durable`;
-  direct edits to `memory/MEMORY.md` are blocked via `--disallowedTools`
-  (override with `CHAT_DISALLOWED_TOOLS`).
+  direct edits to `memory/MEMORY.md` are blocked via `--disallowedTools`.
+  **Warning:** setting `CHAT_DISALLOWED_TOOLS=''` disables the MEMORY.md
+  write-block (memory-poisoning defense) — leave it at the default.
+- Incognito turns: no history file, no index entry, no memory writes; the
+  usage log keeps cost numbers only (no session id) and the Claude Code
+  CLI's own transcript of the turn is deleted after the run.
+- The server binds `127.0.0.1` only — it must never be exposed to the LAN
+  (it drives Claude with project permissions and has no auth).
 
 ## Safety defaults
 

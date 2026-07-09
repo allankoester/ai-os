@@ -194,7 +194,10 @@ export function createScheduler({ rootDir }) {
     await persistRuns();
 
     const logFile = path.join(logsDir, `${run.id}.log`);
-    const args = ['-p', buildPrompt(job), '--output-format', 'text'];
+    const args = ['-p', buildPrompt(job), '--output-format', 'text',
+      // curated long-term memory is draft-only for unattended runs — same
+      // block as the chat runtime (Simon audit, phase 6)
+      '--disallowedTools', 'Write(./memory/MEMORY.md),Edit(./memory/MEMORY.md)'];
     if (job.model) args.push('--model', job.model);
 
     let output = '';

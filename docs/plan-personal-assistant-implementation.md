@@ -70,7 +70,7 @@ State legend: `pending` · `in_progress` · `blocked (<why>)` · `done`
 | 3 | Learning loop v1 | G3 | done | 600c3d9 |
 | 4 | Skill version contract | G5 | done | 8033052 |
 | 5 | Raw→clean promotion pipeline + incognito | G4 | done | 8ef7f7d |
-| 6 | Hardening & polish (optional) | G6/misc | pending — pick items with Allan | — |
+| 6 | Hardening & polish (6.1-6.4 done; 6.5 backlog) | G6/misc | done | (next hash, see status) |
 
 Dependencies: 1 → 3 → 5 (memory before learning before promotion). 2 and 4 are
 independent and can be reordered if blocked. 5's incognito subtasks depend
@@ -543,29 +543,65 @@ notes:
 **Goal:** mechanical robustness for the new layer. Each item independent —
 execute selectively with Allan.
 
-- [ ] 6.1 Hooks: `PreCompact` + `SessionEnd`/`Stop` hook in
-      `.claude/settings.local.json` (or settings.json if team-wide) reminding
-      the agent to flush durable context to memory files (OpenClaw
-      memory-flush equivalent, mechanical instead of instruction-only). Use
-      the update-config skill; keep hooks minimal.
-- [ ] 6.2 Simon full audit of the new surface: chat history files (privacy
-      class), guardrail rules, incognito guarantees, scheduler job
-      permissions. File findings as run log + fix list.
-- [ ] 6.3 `docs/status-and-roadmap.md`: add the personal-assistant layer to
-      the roadmap/status (docs/reference stays informative).
-- [ ] 6.4 Skill evals for `memory-consolidation` and `promote-knowledge` via
-      the skill-creator eval tooling (baseline before iterating on prompts).
+- [x] 6.1 Hooks — DEVIATION from spec: Claude Code hooks cannot force a model
+      "flush turn" (PreCompact/SessionEnd cannot inject model-visible
+      instructions), so the flush itself stays instruction-based
+      (DANNY_PROMPT + CLAUDE.md). Implemented the stronger mechanical piece
+      instead: `.claude/hooks/session-start-memory.mjs` + `SessionStart`
+      hook in **team-wide `.claude/settings.json`** (resolves the open
+      question below) with matcher `startup|resume|clear|compact` — memory
+      is auto-injected into every new session AND re-injected right after
+      compaction (the actual context-loss moment). VERIFIED: standalone JSON
+      output valid; a fresh chat session quoted a seeded marker with zero
+      tool calls.
+- [x] 6.2 Simon full audit of the new surface — Simon's agent definition was
+      upgraded first (quality-proofed v2: system-specific threat model,
+      severity calibration, CONFIRMED/PLAUSIBLE discipline,
+      verify-the-mitigation rule, read-only rule, merged-findings cap);
+      audit run with the upgraded agent; findings + verdict filed as
+      `runs/2026-07-09-phase6-security-audit.md`.
+- [x] 6.3 `docs/status-and-roadmap.md`: snapshot bumped to 2026-07-09,
+      personal-assistant layer section added, Stage-3/phase-3 rows updated
+      to "foundations implemented Claude-native".
+- [x] 6.4 Skill evals — DEVIATION: lightweight eval fixtures with dated
+      baseline results (`skills/company/<skill>/evals/EVALS.md`) instead of
+      the full skill-creator harness (disproportionate for two v0.1.0
+      skills; port the cases into the harness when skill prompts start
+      being iterated). memory-consolidation baseline: C1-C7 PASS (phase-3
+      run). promote-knowledge: mechanics cases PASS; Mara routing + decline
+      path complete on first real promotion.
 - [ ] 6.5 Backlog (explicitly deferred — do not start without a new decision):
       embeddings memory search, heartbeat-style proactive check-ins,
-      cross-machine memory sync, OpenClaw Stage-3 adoption decision.
+      cross-machine memory sync, OpenClaw Stage-3 adoption decision (module
+      map now in `docs/reference/openclaw-module-integration.md`), Skill Hub
+      "update available" badge, PATCH-style /api/meta, memory/ in
+      backup.sh targets, UI nav regrouping (UX review 2026-07-09), skill
+      install tree-hashing (Simon F6), append-only runs/ (Simon F7).
 
 **Status:**
 ```
-state: pending
-started: —
-completed: —
-commit: —
-notes: —
+state: done (6.1-6.4; 6.5 = standing backlog)
+started: 2026-07-09
+completed: 2026-07-09
+commit: recorded in phase map
+notes:
+- SIMON AUDIT (upgraded agent v2): verdict Revise → 5 findings FIXED same
+  day (chat server now binds 127.0.0.1 — was Critical; scheduler gets the
+  MEMORY.md disallowedTools block; hook injects memory prefixed as
+  untrusted data; incognito now purges the CLI transcript and drops
+  session_id from the usage log; .claude/hooks guardrail = read). 2 findings
+  accepted for Stage 1/2 and backlogged (skill-install tree hashing,
+  append-only records). Full disposition:
+  runs/2026-07-09-phase6-security-audit.md.
+- Verification: lsof shows 127.0.0.1 bindings for 4011+4012; incognito turn
+  left no transcript file and a session_id-null usage entry; hook E2E test
+  (marker quoted with zero tool calls) re-run before fixes.
+- Extra deliverables alongside phase 6: docs/guide-personal-assistant.md
+  (memory-layer usage guide) and
+  docs/reference/openclaw-module-integration.md (Stage-3 module map).
+- UX review of interface navigation delivered in chat 2026-07-09;
+  implementation deliberately NOT done (nav regrouping needs Allan's call —
+  backlogged in 6.5).
 ```
 
 ---

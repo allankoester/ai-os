@@ -10,9 +10,11 @@ the same change set.
 
 ## Last Verified Snapshot
 
-- Date: 2026-07-08
-- Validation: `node scripts/validate.mjs` (passed)
-- Scope verified: docs, interface, scheduler, knowledge contract, scripts
+- Date: 2026-07-09
+- Validation: `node scripts/validate.mjs` (passed, 243 checks)
+- Scope verified: docs, interface, scheduler, knowledge contract, scripts,
+  personal-assistant layer (memory, chat history, learning loop, skill
+  versioning, promotion pipeline)
 
 ## Verified Implementation Status
 
@@ -20,7 +22,10 @@ the same change set.
 
 - Stage 1 (personal local AI-OS): implemented and operational
 - Stage 2 (small team local AI-OS): implemented baseline contracts and runbooks
-- Stage 3 (OpenClaw personal assistant integration): planned
+- Stage 3 (personal assistant layer): **foundations implemented Claude-native
+  (2026-07-09)** — memory, chat history, learning loop, skill versioning,
+  raw→clean promotion; the OpenClaw adoption decision stays open (see
+  `docs/reference/openclaw-module-integration.md`)
 - Stage 4 (VM execution runtime): planned, not implemented as runtime default
 - Stage 5 (full company AI-OS): planned
 
@@ -51,6 +56,34 @@ the same change set.
   - top-level: `knowledge/`, `technical_config/`, `tools/`, `apps/`, `archive/`, `_artifacts/`
   - backup mirrors: `AI_OS/archive/legacy-onedrive-backup-2026-07-07/`, `AI_OS/archive/repo-local-knowledge-backup-2026-07-07/`
   - repo-local links: `knowledge/company` and `knowledge/inbox` now symlink to OneDrive `AI_OS/knowledge/...`
+
+### Personal assistant layer (implemented 2026-07-09)
+
+Execution record: `docs/plan-personal-assistant-implementation.md` (phases,
+verification evidence, commits); analysis:
+`docs/reference/personal-assistant-gap-analysis.md`.
+
+- **Memory**: two-layer machine-local memory (`memory/MEMORY.md` curated +
+  `memory/daily/` working notes, gitignored except README); guardrail-scoped
+  write access; session-start injection via `.claude/hooks/`
+  `session-start-memory.mjs` (also re-injects after compaction); chat runtime
+  blocks direct MEMORY.md edits (memory-poisoning defense) — durable facts
+  flow through `#durable` daily-note entries.
+- **Chat history**: product-owned transcripts (`chat/history/*.jsonl` +
+  `chat/sessions.json`, gitignored) with sidebar (restore/resume/rename/
+  archive/full-text search) and incognito mode (no-trace turns).
+- **Learning loop**: run logs live; `#feedback` capture in daily notes;
+  weekly `memory-consolidation` scheduler job (drafts only headless:
+  `memory/MEMORY.proposed.md`, feedback summaries + instruction proposals in
+  `runs/`).
+- **Skill versioning**: semver frontmatter mandatory for company skills
+  (validate-enforced), marketplace installs pinned to commit sha
+  (`.install.json`), `GET /api/marketplace/updates`, local-only git
+  snapshots for personal skill scopes.
+- **Raw→clean pipeline**: conversational content raw+personal by default;
+  `## Parked` capture; `promote-knowledge` skill is the only path into
+  `knowledge/company/` (Mara clean → `status: draft`,
+  `source_type: conversation` → user approval → `approved`).
 
 ### Skills and agent model
 
@@ -84,7 +117,7 @@ Roadmap baseline references:
 | 0 | Contracts and schemas | partial | Folder/state contracts exist in docs and code; canonical runtime schema still to formalize |
 | 1 | Local scheduler + run history | implemented (JSON) | Working scheduler exists; persistence currently JSON |
 | 2 | Skills operations and profile handling | implemented baseline | Skill hub, profile activation, and docs present |
-| 3 | OpenClaw personal assistant integration | planned | Personal assistant layer with governed access to company knowledge |
+| 3 | Personal assistant layer (OpenClaw-compatible) | foundations implemented | Memory/chat-history/learning/promotion implemented Claude-native 2026-07-09; memory files use OpenClaw semantics, adoption decision open |
 | 4 | VM execution runtime and common harness | planned | Runtime migration not active yet; target SQLite-backed scheduler harness |
 | 5 | Enterprise connectors/policy | planned | Not implemented |
 
