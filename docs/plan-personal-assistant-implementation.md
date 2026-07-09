@@ -70,7 +70,7 @@ State legend: `pending` · `in_progress` · `blocked (<why>)` · `done`
 | 3 | Learning loop v1 | G3 | done | 600c3d9 |
 | 4 | Skill version contract | G5 | done | 8033052 |
 | 5 | Raw→clean promotion pipeline + incognito | G4 | done | 8ef7f7d |
-| 6 | Hardening & polish (6.1-6.4 done; 6.5 backlog) | G6/misc | done | (next hash, see status) |
+| 6 | Hardening & polish (6.1-6.4 done; 6.5 backlog) | G6/misc | done | 0d3ece0 |
 
 Dependencies: 1 → 3 → 5 (memory before learning before promotion). 2 and 4 are
 independent and can be reordered if blocked. 5's incognito subtasks depend
