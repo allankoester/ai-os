@@ -66,9 +66,9 @@ State legend: `pending` · `in_progress` · `blocked (<why>)` · `done`
 | --- | --- | --- | --- | --- |
 | 0 | Baseline & safety net | — | done | 5559c32 |
 | 1 | Memory contract wiring ⚠ | G1 | done | 5559c32 |
-| 2 | Chat history & sessions | G2 | done | (next hash, see status) |
-| 3 | Learning loop v1 | G3 | in_progress | — |
-| 4 | Skill version contract | G5 | pending | — |
+| 2 | Chat history & sessions | G2 | done | 54ab164 |
+| 3 | Learning loop v1 | G3 | done | (next hash, see status) |
+| 4 | Skill version contract | G5 | in_progress | — |
 | 5 | Raw→clean promotion pipeline + incognito | G4 | pending | — |
 | 6 | Hardening & polish (optional) | G6/misc | pending | — |
 
@@ -319,15 +319,15 @@ into curated memory + improvement proposals.
 
 **Tasks:**
 
-- [ ] 3.1 Extend the `## Memory` section in `CLAUDE.md` with the feedback
+- [x] 3.1 Extend the `## Memory` section in `CLAUDE.md` with the feedback
       rule: every explicit user correction → dated `#feedback` entry in
       today's daily note (`- YYYY-MM-DD #feedback | what was wrong | why |
       how to apply`).
-- [ ] 3.2 Add one line to `DANNY_PROMPT` in `chat/server.mjs`: after
+- [x] 3.2 Add one line to `DANNY_PROMPT` in `chat/server.mjs`: after
       significant tasks (2+ agents or external artifact) write the run log
       per CLAUDE.md (`runs/YYYY-MM-DD-<slug>.md` from the template) — now
       possible thanks to Phase 1 guardrails.
-- [ ] 3.3 Create `skills/company/memory-consolidation/SKILL.md`:
+- [x] 3.3 Create `skills/company/memory-consolidation/SKILL.md`:
       - inputs: `knowledge/personal/memory/daily/*` older than 2 days,
         `MEMORY.md`, recent `runs/*.md`
       - actions: merge durable facts into `MEMORY.md` (dedupe, prune stale,
@@ -339,14 +339,14 @@ into curated memory + improvement proposals.
         append a `<!-- consolidated: YYYY-MM-DD -->` footer to processed
         daily notes
       - hard rules: never write company knowledge, never delete daily notes.
-- [ ] 3.4 Add weekly scheduler job (via `POST /api/scheduler/jobs` or
+- [x] 3.4 Add weekly scheduler job (via `POST /api/scheduler/jobs` or
       `scheduler/jobs.json`): prompt "Run the memory-consolidation skill and
       report what changed.", weekly (e.g. Fri 16:00), sane timeout,
       `bypassPermissions: false`. First inspect `buildPrompt(job)` in
       `interface/scheduler.mjs` to format the job correctly. Note the known
       constraint: jobs run only while the interface server runs (documented
       behavior, acceptable).
-- [ ] 3.5 Verification (below).
+- [x] 3.5 Verification (below).
 
 **Acceptance criteria + verification:**
 
@@ -361,11 +361,30 @@ into curated memory + improvement proposals.
 
 **Status:**
 ```
-state: pending
-started: —
-completed: —
-commit: —
-notes: —
+state: done
+started: 2026-07-09
+completed: 2026-07-09
+commit: recorded in phase map
+notes:
+- VERIFIED: weekly job c28bc036 created via POST /api/scheduler/jobs (Fri
+  16:00, 20min timeout); manual run-now completed status ok. Headless run
+  wrote memory/MEMORY.proposed.md ONLY (MEMORY.md untouched incl. seeded
+  duplicate — draft policy holds), merged/deduped facts into correct
+  sections, wrote runs/feedback-summary-2026-W28.md (structured what/why/
+  how) + runs/instruction-proposals-2026-07-09.md, footered daily notes,
+  knowledge/company untouched. Run-log test via chat: routed Rosa task →
+  runs/2026-07-09-test-runlog-p3.md written from template with workflow
+  classification. All seeded/test data removed afterwards.
+- DEVIATION (resolved open question): instruction proposals go to runs/,
+  not knowledge/inbox/ (inbox is ask-gated → headless writes impossible).
+- SIMON #2 folded in: skill's "Output mode" section mandates proposal-only
+  MEMORY.md changes for scheduled runs; applying requires the user.
+- BUGFIX during verification: the CLI can emit two result events per turn;
+  history now buffers the assistant entry and persists once on child exit
+  (chat/server.mjs), verified turns:1 / events user,assistant.
+- Skill activation: new company skills need a .claude/skills symlink; the
+  hub materializes on interface restart — created manually here
+  (ln -s ../../skills/company/memory-consolidation).
 ```
 
 ---
@@ -544,9 +563,10 @@ notes: —
 
 ## Open questions (resolve with Allan when reached)
 
-- Phase 3: consolidation cadence (weekly Friday default) and whether
-  instruction-change proposals should land in `knowledge/inbox/` (current
-  spec) or a dedicated `runs/proposals/` folder.
+- ~~Phase 3: proposals location~~ RESOLVED 2026-07-09: instruction proposals
+  land in `runs/instruction-proposals-YYYY-MM-DD.md` — `knowledge/inbox/` is
+  ask-gated and headless runs cannot answer permission prompts. Cadence stays
+  weekly Friday 16:00.
 - Phase 5: which domain folders are legal promotion targets for
   conversation-sourced knowledge (default: all `knowledge/company/<domain>/`
   except `company_handbook_SSOT/`, which stays onboarding/SSOT-process only).

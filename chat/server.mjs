@@ -304,6 +304,7 @@ function handleChat(req, res) {
     };
     let tokenUsage = {};
     let logged = false;
+    let pendingAssistant = null; // buffered until child exit — the CLI can emit more than one result event per turn
 
     const finalizeLog = (override = {}) => {
       if (logged) return;
@@ -348,6 +349,17 @@ function handleChat(req, res) {
     });
 
     child.on('close', (code) => {
+      if (convId && pendingAssistant) {
+        appendHistory(convId, pendingAssistant);
+        const s = readSessions();
+        if (s[convId]) {
+          s[convId].currentSessionId = pendingAssistant.meta.session_id || s[convId].currentSessionId;
+          s[convId].updatedAt = new Date().toISOString();
+          s[convId].turns = (s[convId].turns || 0) + 1;
+          s[convId].agent = selectedAgent;
+          writeSessions(s);
+        }
+      }
       finalizeLog({ is_error: code !== 0 && !meta.duration_ms, duration_ms: Date.now() - startedAt });
       sse(res, 'done', { code });
       res.end();
@@ -430,30 +442,20 @@ function handleChat(req, res) {
           ),
           is_error: Boolean(ev.is_error),
         };
-        if (convId) {
-          appendHistory(convId, {
-            t: 'assistant',
-            ts: new Date().toISOString(),
-            text,
-            meta: {
-              session_id: meta.session_id,
-              model: meta.model,
-              duration_ms: meta.duration_ms,
-              cost_usd: meta.cost_usd,
-              num_turns: meta.num_turns,
-              total_tokens: meta.total_tokens,
-              is_error: meta.is_error,
-            },
-          });
-          const s = readSessions();
-          if (s[convId]) {
-            s[convId].currentSessionId = meta.session_id || s[convId].currentSessionId;
-            s[convId].updatedAt = new Date().toISOString();
-            s[convId].turns = (s[convId].turns || 0) + 1;
-            s[convId].agent = selectedAgent;
-            writeSessions(s);
-          }
-        }
+        pendingAssistant = {
+          t: 'assistant',
+          ts: new Date().toISOString(),
+          text,
+          meta: {
+            session_id: meta.session_id,
+            model: meta.model,
+            duration_ms: meta.duration_ms,
+            cost_usd: meta.cost_usd,
+            num_turns: meta.num_turns,
+            total_tokens: meta.total_tokens,
+            is_error: meta.is_error,
+          },
+        };
         sse(res, 'result', {
           session_id: meta.session_id,
           model: meta.model,
