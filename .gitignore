@@ -8,6 +8,10 @@ runs/*
 !runs/README.md
 !runs/run-log-template.md
 
+# Personal agent memory is machine-local (contract doc stays tracked)
+memory/*
+!memory/README.md
+
 # Local backups
 backups/
 

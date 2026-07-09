@@ -77,9 +77,15 @@ explicitly linked and documented in this repo.
 
 - **Company shared memory:**
   `knowledge/company/company_handbook_SSOT/agent-memory.md`
-  (in this setup `knowledge/company/` is a symlink to shared OneDrive storage)
-- **Personal memory (private, gitignored):**
-  under `knowledge/personal/` (for example `knowledge/personal/memory.md`)
+  (in this setup `knowledge/company/` is a symlink to shared OneDrive storage).
+  Promotion-only: entries land here via Mara + explicit user approval, never
+  automatically.
+- **Personal memory (private, machine-local):** `memory/` at the workspace
+  root — `memory/MEMORY.md` (curated long-term) + `memory/daily/YYYY-MM-DD.md`
+  (working notes). Gitignored except its README. It deliberately lives
+  *outside* `knowledge/personal/` so guardrails can allow agent writes there
+  while `knowledge/personal/` stays write-blocked; the privacy contract is
+  identical. See `memory/README.md` and `CLAUDE.md` § Memory.
 - **Team shared memory:**
   use the shared OneDrive `AI_OS/knowledge/team/` location unless this repo
   explicitly adds and documents a linked `knowledge/team/` path.

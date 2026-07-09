@@ -2178,8 +2178,8 @@ async function renderUsage(el) {
 
 function renderMemory(el) {
   const companyPath = 'knowledge/company/company_handbook_SSOT/agent-memory.md';
-  const personalPath = 'knowledge/personal/memory.md';
-  const personalTemplate = '# Personal Agent Memory\n\nPrivate, per-user memory. This file is gitignored.\n\n- YYYY-MM-DD | source/owner | memory item\n';
+  const personalPath = 'memory/MEMORY.md';
+  const personalTemplate = '# MEMORY — curated long-term memory (local user)\n\nDurable facts, preferences and standing decisions. One dated line per entry\n(`- YYYY-MM-DD | fact`). Keep under ~200 lines.\n\n## Working preferences\n\n## Standing decisions\n\n## Active context\n';
   el.innerHTML = `<div class="view-pad simple-list" style="max-width:900px">
     <div class="card">
       <div class="section-title">Agent Memory</div>
@@ -2203,7 +2203,7 @@ function renderMemory(el) {
         <span class="list-meta">${esc(personalPath)} · gitignored</span>
         <button class="btn btn-small" id="mem-personal">Create / Open</button>
       </div>
-      <div class="stat-note" style="margin-top:8px;white-space:normal">For local user preferences and private working context only. Never copied into company artifacts.</div>
+      <div class="stat-note" style="margin-top:8px;white-space:normal">Curated long-term memory (MEMORY.md); working notes live in memory/daily/. Local user context only — never copied into company artifacts. See memory/README.md.</div>
     </div>
     <div class="card">
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">

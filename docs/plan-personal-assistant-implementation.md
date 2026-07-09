@@ -64,9 +64,9 @@ State legend: `pending` · `in_progress` · `blocked (<why>)` · `done`
 
 | Phase | Title | Gap | State | Commit |
 | --- | --- | --- | --- | --- |
-| 0 | Baseline & safety net | — | pending | — |
-| 1 | Memory contract wiring ⚠ | G1 | pending | — |
-| 2 | Chat history & sessions | G2 | pending | — |
+| 0 | Baseline & safety net | — | done | (with phase 1 commit) |
+| 1 | Memory contract wiring ⚠ | G1 | done | see below |
+| 2 | Chat history & sessions | G2 | in_progress | — |
 | 3 | Learning loop v1 | G3 | pending | — |
 | 4 | Skill version contract | G5 | pending | — |
 | 5 | Raw→clean promotion pipeline + incognito | G4 | pending | — |
@@ -84,14 +84,14 @@ on 2.
 
 **Tasks:**
 
-- [ ] 0.1 `git status` clean or only intended files; note branch (work happens
+- [x] 0.1 `git status` clean or only intended files; note branch (work happens
       on `main` per repo convention).
-- [ ] 0.2 Run `bash scripts/backup.sh` → confirm new archive in `backups/`.
-- [ ] 0.3 Run `node scripts/validate.mjs` → record baseline result.
-- [ ] 0.4 Confirm runtimes start: interface (port 4011) and chat
+- [x] 0.2 Run `bash scripts/backup.sh` → confirm new archive in `backups/`.
+- [x] 0.3 Run `node scripts/validate.mjs` → record baseline result.
+- [x] 0.4 Confirm runtimes start: interface (port 4011) and chat
       (`node chat/server.mjs`, port 4012, `GET /api/health` → ok). Stop them
       again if they weren't running.
-- [ ] 0.5 Locate the effective `.gitignore` entries for `knowledge/personal/`,
+- [x] 0.5 Locate the effective `.gitignore` entries for `knowledge/personal/`,
       `runs/`, `.skill-profile` (`git check-ignore -v knowledge/personal/user-profile.md runs/chat-usage.jsonl`)
       and note the gitignore file path here (needed by phases 1-2).
 
@@ -100,12 +100,21 @@ pre-existing and noted), both servers start, gitignore location known.
 
 **Status:**
 ```
-state: pending
-started: —
-completed: —
-commit: —
-notes: —
-```
+state: done
+started: 2026-07-09
+completed: 2026-07-09
+commit: recorded in phase map after commit
+notes:
+- validate.mjs: 233 checks passed (baseline green)
+- backup: backups/ai-os-backup-20260709-104347.tar.gz (13 files; targets = knowledge, runs, interface/meta.json)
+- interface (4011) and chat (4012) were ALREADY running — no start/stop needed;
+  chat claude binary resolves to Claude Code 2.1.202
+- gitignore = app-local ./.gitignore (knowledge/personal/*, runs/*, scheduler/*,
+  interface/guardrails.json, .claude/settings.local.json all machine-local)
+- IMPORTANT for resume: apps/internal/steadymade-ai-os is its OWN git repo
+  (root = app dir, branch main, remote origin, currently 1 ahead). The plan +
+  gap analysis were committed as 7ee03c7 outside this protocol (user/IDE side).
+
 
 ---
 
@@ -131,15 +140,15 @@ significant task, persist notable context before the session ends.
 
 **Tasks:**
 
-- [ ] 1.1 Inspect current permission surface: `interface/guardrails.json`,
+- [x] 1.1 Inspect current permission surface: `interface/guardrails.json`,
       `interface/guardrails.mjs` (how levels materialize into
       `.claude/settings.local.json`), and current `.claude/settings.local.json`.
       Record in Notes: exact rule syntax guardrails emits.
-- [ ] 1.2 Create local memory files (gitignored, machine-local):
+- [x] 1.2 Create local memory files (gitignored, machine-local):
       `knowledge/personal/memory/MEMORY.md` (header + sections: `## Working
       preferences`, `## Standing decisions`, `## Active context`, entry format
       `- YYYY-MM-DD | fact`) and `knowledge/personal/memory/daily/` (empty).
-- [ ] 1.3 Add write-level guardrail rules for `knowledge/personal/memory/**`
+- [x] 1.3 Add write-level guardrail rules for `knowledge/personal/memory/**`
       and `runs/**` via the guardrails model (edit `guardrails.json` or PUT
       `/api/guardrails`, whichever 1.1 showed is canonical), then confirm
       `.claude/settings.local.json` contains matching path-scoped
@@ -149,21 +158,21 @@ significant task, persist notable context before the session ends.
       (1.7) proves settings rules are not picked up in `-p` mode, fall back to
       path-scoped entries in `CHAT_ALLOWED_TOOLS` (e.g.
       `Write(knowledge/personal/memory/**)`) and document the fallback here.
-- [ ] 1.4 Add a `## Memory` section to `CLAUDE.md` (keep it ≤ ~25 lines):
+- [x] 1.4 Add a `## Memory` section to `CLAUDE.md` (keep it ≤ ~25 lines):
       read rule, write rules, flush rule, budget, company-memory =
       promotion-only, and "personal memory never enters shared/client
       artifacts" (restating the existing privacy contract).
-- [ ] 1.5 Update `knowledge/README.md` §"Agent memory locations" to document
+- [x] 1.5 Update `knowledge/README.md` §"Agent memory locations" to document
       the `memory/` structure (MEMORY.md + daily/) replacing the bare
       `memory.md` mention; update the interface Memory view paths in
       `interface/public/app.js` `renderMemory()` (`personalPath` →
       `knowledge/personal/memory/MEMORY.md`, template accordingly).
-- [ ] 1.6 ⚠ Security review: run a Simon (simon-security-audit) review of the
+- [x] 1.6 ⚠ Security review: run a Simon (simon-security-audit) review of the
       guardrail/permission diff (scope: can chat sessions now write anywhere
       they shouldn't; are `runs/**` writes safe given run logs may contain
       personal context). Paste verdict summary into Notes. Present diff to
       Allan for approval before commit.
-- [ ] 1.7 Live verification (commands under Acceptance).
+- [x] 1.7 Live verification (commands under Acceptance).
 
 **Acceptance criteria + verification:**
 
@@ -180,12 +189,34 @@ significant task, persist notable context before the session ends.
 
 **Status:**
 ```
-state: pending
-started: —
-completed: —
-commit: —
-approval: not yet requested
-notes: —
+state: done
+started: 2026-07-09
+completed: 2026-07-09
+commit: recorded in phase map
+approval: Allan approved plan + execution 2026-07-09 ("plan approve implement the plan"); Simon review ran (verdict: Revise), mitigations implemented before commit — see notes.
+notes:
+- DEVIATION (see decisions log): memory lives at top-level ./memory/, not
+  knowledge/personal/memory/ (deny-rule precedence). runs guardrail read→write.
+- Guardrails applied via PUT /api/guardrails; settings.local.json now allows
+  Read/Edit/Write(./memory/**) and (./runs/**); knowledge/personal write-deny intact.
+- SIMON FINDINGS: (1) High — memory poisoning via WebFetch→MEMORY.md.
+  Mitigated: chat spawns with --disallowedTools "Write(./memory/MEMORY.md),
+  Edit(./memory/MEMORY.md)" (CHAT_DISALLOWED_TOOLS to override) + provenance
+  rule in CLAUDE.md §Memory and DANNY_PROMPT. Durable facts from chat go to
+  daily notes tagged #durable; consolidation promotes after review.
+  (2) Medium — scheduler consolidation must produce draft/approval output →
+  folded into Phase 3 spec. (3) runs/ log mutability accepted for Stage 1/2.
+- EMPIRICAL FINDING: Claude Code's internal auto-memory dir
+  (~/.claude/projects/<slug>/memory/) collides with the "remember" intent —
+  sessions wrote there instead of ./memory/. CLAUDE.md § Memory alone did NOT
+  fix it; the binding fix is the Memory block in DANNY_PROMPT
+  (--append-system-prompt). Any future runtime (scheduler prompts etc.) that
+  should write AI-OS memory needs the same explicit instruction.
+- VERIFIED: durable-fact chat test → memory/daily/2026-07-09.md entry with
+  #durable, MEMORY.md untouched; read-path test answered from MEMORY.md seed;
+  Edit on MEMORY.md from chat denied at permission layer; knowledge/inbox
+  write intercepted (no file); interface serves updated Memory view; validate
+  233 checks green; test markers removed after verification.
 ```
 
 ---
@@ -481,6 +512,19 @@ notes: —
 - 2026-07-09 — Chat history is product-owned (`chat/history/` +
   `chat/sessions.json`), deliberately duplicating Claude Code's internal
   store rather than scraping `~/.claude/projects/`.
+- 2026-07-09 — **Phase 1 deviation: memory lives at top-level `memory/`, not
+  `knowledge/personal/memory/`.** Reason: guardrails materialize
+  `knowledge/personal` (level `read`) as hard `deny` rules for
+  `Edit/Write(./knowledge/personal/**)`, and Claude Code deny rules take
+  precedence over any child-path allow rule — a scoped allow inside that tree
+  is impossible without weakening the personal folder's write-block. A sibling
+  top-level `memory/` folder (guardrail level `write`, gitignored except its
+  README, same privacy contract) keeps `knowledge/personal/` fully protected.
+- 2026-07-09 — `runs` guardrail level changes `read` → `write`: run logs are
+  the learning loop's output and were technically impossible to write (this
+  was a second, independent cause of "zero run logs" beside the chat
+  allowlist). Risk (agents can modify existing local run logs) accepted for
+  Stage 1/2; noted for Simon review.
 
 ## Open questions (resolve with Allan when reached)
 
