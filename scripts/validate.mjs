@@ -112,8 +112,10 @@ if (fs.existsSync(companySkillsDir)) {
     const fm = read(skillFile).match(/^---\r?\n([\s\S]*?)\r?\n---/);
     const name = fm && (fm[1].match(/^name:\s*(.+)$/m) || [])[1]?.trim();
     const desc = fm && (fm[1].match(/^description:\s*(.+)$/m) || [])[1]?.trim();
+    const version = fm && (fm[1].match(/^version:\s*(.+)$/m) || [])[1]?.trim();
     check(`skill ${d.name}: has name + description frontmatter`, Boolean(name && desc));
     check(`skill ${d.name}: kebab-case name matches folder`, name === d.name && /^[a-z0-9][a-z0-9-]*$/.test(d.name));
+    check(`skill ${d.name}: has semver version frontmatter`, /^\d+\.\d+\.\d+$/.test(version || ''), `version=${version || 'missing'} — company skills need version: x.y.z (see skills/README.md)`);
   }
   for (const required of ['company-onboarding', 'personal-onboarding']) {
     check(`onboarding skill exists: skills/company/${required}`, exists(`skills/company/${required}/SKILL.md`));

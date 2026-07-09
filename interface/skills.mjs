@@ -218,6 +218,33 @@ export function createSkillHub({ rootDir }) {
     return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'skill';
   }
 
+  // Resolve the commit sha a branch currently points at, so installs are
+  // pinned and reproducible. Best-effort: offline installs record sha null.
+  async function resolveHeadSha(owner, repo, ref) {
+    try {
+      const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/commits/${encodeURIComponent(ref)}`, {
+        headers: { accept: 'application/vnd.github.v3+json' },
+      });
+      if (!res.ok) return null;
+      const json = await res.json();
+      return typeof json.sha === 'string' ? json.sha : null;
+    } catch { return null; }
+  }
+
+  // Local-only version history for personal skills (never gets a remote).
+  // Company skills are versioned by the main repo; personal scopes are
+  // gitignored there, so each personal scope carries its own git repo.
+  function personalGitSnapshot(scope, message) {
+    if (scope === 'company') return;
+    const dir = path.join(libraryDir, scope);
+    const git = (args) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
+    try {
+      if (!fs.existsSync(path.join(dir, '.git'))) git(['init', '-q']);
+      git(['add', '-A']);
+      git(['-c', 'user.name=skill-hub', '-c', 'user.email=skill-hub@local', 'commit', '-q', '-m', message]);
+    } catch { /* best-effort: empty commit or missing git never breaks installs */ }
+  }
+
   function findSkillDirs(dir, depth = 0, results = []) {
     if (depth > 4 || results.length > 50) return results;
     let entries;
@@ -248,7 +275,7 @@ export function createSkillHub({ rootDir }) {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'skill-install-'));
     try {
       const tryRefs = ref ? [ref] : ['main', 'master'];
-      let extracted = false, lastErr = '';
+      let extracted = false, lastErr = '', usedRef = null;
       for (const r of tryRefs) {
         const tarUrl = `https://codeload.github.com/${owner}/${repo}/tar.gz/refs/heads/${r}`;
         const res = await fetch(tarUrl);
@@ -257,6 +284,7 @@ export function createSkillHub({ rootDir }) {
         await fsp.writeFile(tarFile, Buffer.from(await res.arrayBuffer()));
         execFileSync('tar', ['-xzf', tarFile, '-C', tmpDir]);
         extracted = true;
+        usedRef = r;
         break;
       }
       if (!extracted) return { errors: [`could not download ${owner}/${repo}: ${lastErr}`] };
@@ -274,11 +302,24 @@ export function createSkillHub({ rootDir }) {
       skillDirs.sort((a, b) => a.split(path.sep).length - b.split(path.sep).length);
       await fsp.cp(skillDirs[0], targetDir, { recursive: true });
 
-      // note the origin so updates/customizations stay traceable
-      const meta = { source: entry.url, marketplace: MARKETPLACE_REPO, installedAt: new Date().toISOString(), originalName: entry.name };
+      // note the origin so updates/customizations stay traceable; pin the
+      // installed revision (branch head sha at install time)
+      const sha = await resolveHeadSha(owner, repo, usedRef);
+      const meta = {
+        source: entry.url,
+        marketplace: MARKETPLACE_REPO,
+        installedAt: new Date().toISOString(),
+        originalName: entry.name,
+        owner,
+        repo,
+        ref: usedRef,
+        subpath: subpath || null,
+        sha,
+      };
       await fsp.writeFile(path.join(targetDir, '.install.json'), JSON.stringify(meta, null, 2), 'utf8');
+      personalGitSnapshot(scope, `install ${slug} from ${owner}/${repo}@${sha ? sha.slice(0, 7) : usedRef}`);
 
-      return { ok: true, scope, name: slug, path: `skills/${scope}/${slug}/SKILL.md`, foundSkillDirs: skillDirs.length };
+      return { ok: true, scope, name: slug, path: `skills/${scope}/${slug}/SKILL.md`, sha, foundSkillDirs: skillDirs.length };
     } finally {
       fsp.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     }
@@ -322,5 +363,36 @@ export function createSkillHub({ rootDir }) {
 
     marketplace,
     installFromMarketplace,
+
+    // Update check for marketplace-installed skills: compares the pinned
+    // install sha against the current branch head; flags local edits.
+    async checkUpdates() {
+      const results = [];
+      for (const scope of scopeNames()) {
+        for (const name of librarySkillDirs(scope)) {
+          const metaFile = path.join(libraryDir, scope, name, '.install.json');
+          if (!fs.existsSync(metaFile)) continue;
+          let meta = {};
+          try { meta = JSON.parse(fs.readFileSync(metaFile, 'utf8')); } catch {}
+          const entry = { scope, name, source: meta.source || null, installedAt: meta.installedAt || null, sha: meta.sha || null };
+          let localModified = false;
+          try {
+            const st = fs.statSync(path.join(libraryDir, scope, name, 'SKILL.md'));
+            localModified = Boolean(meta.installedAt) && st.mtime.toISOString() > meta.installedAt;
+          } catch {}
+          entry.localModified = localModified;
+          if (!meta.owner || !meta.repo || !meta.ref || !meta.sha) {
+            entry.status = 'unpinned'; // pre-contract install — reinstall to pin
+          } else {
+            const head = await resolveHeadSha(meta.owner, meta.repo, meta.ref);
+            if (!head) entry.status = 'unknown'; // offline or repo gone
+            else entry.status = head === meta.sha ? 'current' : 'update_available';
+            entry.headSha = head;
+          }
+          results.push(entry);
+        }
+      }
+      return { skills: results, checkedAt: new Date().toISOString() };
+    },
   };
 }

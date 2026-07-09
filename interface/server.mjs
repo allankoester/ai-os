@@ -409,6 +409,14 @@ async function handleApi(req, res, url) {
     }
   }
 
+  if (url.pathname === '/api/marketplace/updates' && req.method === 'GET') {
+    try {
+      return send(200, await skillHub.checkUpdates());
+    } catch (err) {
+      return send(502, { error: err.message });
+    }
+  }
+
   // ---------- plugins ----------
 
   if (url.pathname === '/api/plugins' && req.method === 'GET') {

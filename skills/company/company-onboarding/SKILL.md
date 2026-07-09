@@ -1,5 +1,6 @@
 ---
 name: company-onboarding
+version: 1.0.0
 description: "Befüllt das Steadymade-Company-Operating-Profile mit echtem Unternehmenskontext — geführtes Interview, ersetzt die TODO-Blöcke in operating-profile.md (AI_OS root) und verankert das Profil als Custom Instruction für alle Agenten. Use whenever someone says '/company-onboarding', 'company onboarding', 'unternehmensprofil ausfüllen', 'operating profile befüllen', 'firmenkontext einrichten', 'company instructions erstellen', 'fill the company profile'. PFLICHT mindestens einmal pro Setup; gut, ihn mehrfach durch verschiedene Personen laufen zu lassen — jeder Lauf reichert das Profil an. Trigger proactively wenn operating-profile.md noch TODO-Platzhalter enthält. Für persönliche Profile stattdessen /personal-onboarding."
 ---
 

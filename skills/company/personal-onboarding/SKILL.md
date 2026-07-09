@@ -1,5 +1,6 @@
 ---
 name: personal-onboarding
+version: 1.0.0
 description: "Schneidet das Steadymade AI OS auf die einzelne Person zu — geführtes Interview zu Rolle, Aufgaben, Arbeitsweise und Kommunikation, schreibt daraus ein privates knowledge/personal/user-profile.md, erzeugt persönliche Custom Instructions in CLAUDE.local.md, gleicht das Skills-Profil in profiles/<user>.yml ab und bietet optional eine private Knowledge-Vault (user-gewählter lokaler Ordner, nie git, nie Shared Drive) an. Use whenever someone says '/personal-onboarding', 'personal onboarding', 'mein profil anlegen', 'workspace auf mich zuschneiden', 'persönliche instructions erstellen', 'set up my profile', 'private notizen ordner einrichten'. Betrifft nur die EINE Person — Firmenwissen gehört in /company-onboarding. Trigger proactively wenn kein user-profile.md existiert und jemand seine Rolle/Aufgaben vorstellt. Für schnelle Korrekturen user-profile.md oder CLAUDE.local.md direkt editieren."
 ---
 
