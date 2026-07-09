@@ -11,8 +11,28 @@ Embedded chat runtime used by the interface Chat view.
 - Danny is always the entry point.
 - Specialist selection in the UI is handled **via Danny routing instructions**.
 - No direct specialist bypass mode.
-- SSE events emitted to frontend: `init`, `delta`, `tool`, `result`, `gate`, `done`, `stderr`.
-- Session resume is supported by passing `sessionId`.
+- SSE events emitted to frontend: `conversation`, `init`, `delta`, `tool`, `result`, `gate`, `done`, `stderr`.
+- Conversations are resumed by passing `conversationId`; the server resolves
+  the Claude session chain internally (legacy `sessionId` still accepted).
+
+## Chat history (product-owned)
+
+- `chat/history/<conversationId>.jsonl` — one append-only transcript per
+  conversation (`user` / `tool` / `assistant` events).
+- `chat/sessions.json` — conversation index (title, agent, timestamps, turns,
+  `currentSessionId` for the resume chain, archived flag).
+- Both are **gitignored, local per-user data** — same privacy class as
+  `runs/` and `memory/` (may contain personal context; never committed,
+  never shared).
+- Endpoints: `GET /api/sessions` (`?all=1` includes archived),
+  `GET /api/session?id=…` (transcript), `POST /api/session/rename`,
+  `POST /api/session/archive`, `GET /api/sessions/search?q=…`.
+- The UI shows a conversation sidebar: restore, resume, rename, archive,
+  full-text search.
+- The memory rules for this runtime live in the appended system prompt
+  (`DANNY_PROMPT`): durable facts go to `memory/daily/` tagged `#durable`;
+  direct edits to `memory/MEMORY.md` are blocked via `--disallowedTools`
+  (override with `CHAT_DISALLOWED_TOOLS`).
 
 ## Safety defaults
 

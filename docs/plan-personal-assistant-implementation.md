@@ -64,10 +64,10 @@ State legend: `pending` · `in_progress` · `blocked (<why>)` · `done`
 
 | Phase | Title | Gap | State | Commit |
 | --- | --- | --- | --- | --- |
-| 0 | Baseline & safety net | — | done | (with phase 1 commit) |
-| 1 | Memory contract wiring ⚠ | G1 | done | see below |
-| 2 | Chat history & sessions | G2 | in_progress | — |
-| 3 | Learning loop v1 | G3 | pending | — |
+| 0 | Baseline & safety net | — | done | 5559c32 |
+| 1 | Memory contract wiring ⚠ | G1 | done | 5559c32 |
+| 2 | Chat history & sessions | G2 | done | (next hash, see status) |
+| 3 | Learning loop v1 | G3 | in_progress | — |
 | 4 | Skill version contract | G5 | pending | — |
 | 5 | Raw→clean promotion pipeline + incognito | G4 | pending | — |
 | 6 | Hardening & polish (optional) | G6/misc | pending | — |
@@ -254,19 +254,21 @@ searchable, deletable. The product owns its history (no scraping of
 
 **Tasks:**
 
-- [ ] 2.1 Server: persist events in `handleChat`/`forwardLine` (user msg on
+- [x] 2.1 Server: persist events in `handleChat`/`forwardLine` (user msg on
       request, assistant text + meta on `result`, tool events with `name` +
       `detail`); create/update `chat/sessions.json` (title = first user
-      message, 60 chars).
-- [ ] 2.2 Server: add the four endpoints + search; path-safety on `id`
-      (sanitize to `[a-f0-9-]`).
-- [ ] 2.3 Gitignore: add `chat/history/` and `chat/sessions.json`.
-- [ ] 2.4 UI: sidebar list + restore transcript + resume chain + rename/
+      message, 60 chars). NOTE: server resolves the resume chain itself —
+      client sends only `conversationId`; a new SSE event `conversation`
+      announces the id on first turn.
+- [x] 2.2 Server: add the four endpoints + search; path-safety on `id`
+      (sanitize to `[a-f0-9-]{8,64}`).
+- [x] 2.3 Gitignore: add `chat/history/` and `chat/sessions.json`.
+- [x] 2.4 UI: sidebar list + restore transcript + resume chain + rename/
       archive + search; "New chat" starts a fresh conversation without
       deleting anything.
-- [ ] 2.5 Update `chat/README.md` (storage, endpoints, privacy note: history
+- [x] 2.5 Update `chat/README.md` (storage, endpoints, privacy note: history
       is local per-user data, same class as `runs/`).
-- [ ] 2.6 Verification (below), including iframe embed still working inside
+- [x] 2.6 Verification (below), including iframe embed still working inside
       the interface Chat view.
 
 **Acceptance criteria + verification:**
@@ -284,11 +286,25 @@ searchable, deletable. The product owns its history (no scraping of
 
 **Status:**
 ```
-state: pending
-started: —
-completed: —
-commit: —
-notes: —
+state: done
+started: 2026-07-09
+completed: 2026-07-09
+commit: recorded in phase map
+notes:
+- VERIFIED end-to-end via curl: conversation event on first turn; resume via
+  conversationId recalled a codeword across turns; sessions list with titles/
+  turn counts; transcript endpoint returns clean user/assistant/tool events;
+  search matched content in the right conversation only; rename + archive OK
+  (default list 1, ?all=1 → 2); chat/history/ + chat/sessions.json properly
+  gitignored; served page contains sidebar; interface embed URL (4012)
+  unchanged. Test conversations removed after verification.
+- EMPIRICAL: on this Claude Code version --resume kept the SAME session id
+  (currentSessionId == conversationId); the chain logic supports both
+  same-id and new-id behavior.
+- Mid-phase interruption: the Bash safety classifier was temporarily
+  unavailable; Phase 3 file tasks (3.1-3.3) were prepped during the outage.
+  The 3.2 DANNY_PROMPT run-log line ships in this phase's commit
+  (chat/server.mjs could not be split cleanly).
 ```
 
 ---

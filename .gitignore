@@ -12,6 +12,10 @@ runs/*
 memory/*
 !memory/README.md
 
+# Chat history is local per-user data (same privacy class as runs/)
+chat/history/
+chat/sessions.json
+
 # Local backups
 backups/
 

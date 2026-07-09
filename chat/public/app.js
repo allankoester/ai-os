@@ -7,11 +7,16 @@ const sessEl = document.getElementById('sess');
 const modelSel = document.getElementById('model');
 const agentSel = document.getElementById('agent');
 const newBtn = document.getElementById('newChat');
+const convListEl = document.getElementById('convList');
+const convSearchEl = document.getElementById('convSearch');
+
+const CONV_KEY = 'steadymade_chat_conversation';
 
 const state = {
-  sessionId: null,
+  conversationId: null,
   running: false,
   abort: null,
+  sessions: [],
 };
 
 function esc(s) {
@@ -75,16 +80,36 @@ function renderMd(src) {
   return html;
 }
 
+function speakerLabel(agentId) {
+  if (!agentId || agentId === 'danny') return 'Danny · Steadymade OS';
+  const opt = [...agentSel.options].find((o) => o.value === agentId);
+  const name = opt ? opt.text.split(' · ')[0] : agentId;
+  return `${name} · via Danny`;
+}
+
 function currentSpeaker() {
-  const selected = agentSel.selectedOptions[0]?.text || 'Danny';
-  if (agentSel.value === 'danny') return 'Danny · Steadymade OS';
-  return `${selected.replace(' · via Danny', '')} · via Danny`;
+  return speakerLabel(agentSel.value);
+}
+
+function timeAgo(iso) {
+  const t = Date.parse(iso || '');
+  if (Number.isNaN(t)) return '';
+  const s = Math.floor((Date.now() - t) / 1000);
+  if (s < 60) return 'now';
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
 }
 
 function clearWelcome() {
   const welcome = chatEl.querySelector('.welcome');
   if (welcome) welcome.remove();
   stageEl.classList.remove('centered');
+}
+
+function showWelcome() {
+  chatEl.innerHTML = `<div class="welcome"><div class="w-label">STEADYMADE AI OS</div><h1>Danny Chat</h1><p>Select a specialist if needed. Messages are always routed through Danny.</p></div>`;
+  stageEl.classList.add('centered');
 }
 
 function scrollDown() {
@@ -104,13 +129,33 @@ function addUserMsg(text) {
   scrollDown();
 }
 
-function addAssistantShell() {
+function addAssistantShell(speaker, withTyping = true) {
+  clearWelcome();
   const row = document.createElement('div');
   row.className = 'msg assistant';
-  row.innerHTML = `<div class="speaker">${esc(currentSpeaker())}</div><div class="activity"></div><div class="bubble"><span class="typing"><span></span><span></span><span></span></span></div>`;
+  const typing = withTyping ? '<span class="typing"><span></span><span></span><span></span></span>' : '';
+  row.innerHTML = `<div class="speaker">${esc(speaker || currentSpeaker())}</div><div class="activity"></div><div class="bubble">${typing}</div>`;
   chatEl.appendChild(row);
   scrollDown();
   return row;
+}
+
+function addToolChip(activity, d) {
+  const chip = document.createElement('span');
+  chip.className = `chip${d.sub ? ' sub' : ''}`;
+  chip.textContent = d.name === 'Task' ? `→ ${d.detail || 'Task'}` : `${d.name}${d.detail ? ` · ${d.detail}` : ''}`;
+  activity.appendChild(chip);
+}
+
+function addMetaLine(shell, d) {
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  const dur = d.duration_ms != null ? `${(d.duration_ms / 1000).toFixed(1)}s` : '';
+  const cost = d.cost_usd != null ? `$${Number(d.cost_usd).toFixed(3)}` : '';
+  const turns = d.num_turns ? `${d.num_turns} turns` : '';
+  const tokens = d.total_tokens ? `${Number(d.total_tokens).toLocaleString()} tokens` : '';
+  meta.textContent = [dur, cost, turns, tokens].filter(Boolean).join(' · ');
+  shell.appendChild(meta);
 }
 
 function autosize() {
@@ -142,18 +187,130 @@ function applyPreset(agent, draft) {
   }
 }
 
-(function restoreSession() {
-  const sid = localStorage.getItem('steadymade_chat_session');
-  const sidAgent = localStorage.getItem('steadymade_chat_agent') || 'danny';
-  if (!sid) return;
-  selectAgent(sidAgent);
-  state.sessionId = sid;
-  sessEl.textContent = `Session ${sid.slice(0, 8)}`;
-})();
+// ---------- conversation list ----------
 
-(function applyUrlPreset() {
+async function apiJson(url, opts) {
+  const res = await fetch(url, opts);
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
+function renderConvList(items, { searchMode = false } = {}) {
+  convListEl.innerHTML = '';
+  if (!items.length) {
+    convListEl.innerHTML = `<div class="conv-empty">${searchMode ? 'No matches.' : 'No conversations yet.'}</div>`;
+    return;
+  }
+  for (const s of items) {
+    const item = document.createElement('div');
+    item.className = `conv-item${s.id === state.conversationId ? ' active' : ''}`;
+    item.innerHTML = `
+      <div class="conv-title">${esc(s.title || 'Untitled')}</div>
+      ${searchMode && s.snippet ? `<div class="conv-snippet">${esc(s.snippet)}</div>` : ''}
+      <div class="conv-meta"><span>${esc(speakerLabel(s.agent).split(' · ')[0])}</span><span>${timeAgo(s.updatedAt)}</span>${s.archived ? '<span>archived</span>' : ''}</div>
+      <div class="conv-actions">
+        <button data-act="rename">RENAME</button>
+        <button data-act="archive">${s.archived ? 'RESTORE' : 'ARCHIVE'}</button>
+      </div>`;
+    item.addEventListener('click', (e) => {
+      const act = e.target?.dataset?.act;
+      if (act === 'rename') {
+        e.stopPropagation();
+        const title = prompt('Conversation title:', s.title || '');
+        if (title && title.trim()) {
+          apiJson('/api/session/rename', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: s.id, title: title.trim() }),
+          }).then(() => loadSessions()).catch(() => {});
+        }
+        return;
+      }
+      if (act === 'archive') {
+        e.stopPropagation();
+        apiJson('/api/session/archive', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: s.id, archived: !s.archived }),
+        }).then(() => {
+          if (s.id === state.conversationId && !s.archived) resetConversation();
+          loadSessions();
+        }).catch(() => {});
+        return;
+      }
+      loadConversation(s.id);
+    });
+    convListEl.appendChild(item);
+  }
+}
+
+async function loadSessions() {
+  try {
+    const { sessions } = await apiJson('/api/sessions');
+    state.sessions = sessions;
+    if (!convSearchEl.value.trim()) renderConvList(sessions);
+  } catch {
+    convListEl.innerHTML = '<div class="conv-empty">History unavailable.</div>';
+  }
+}
+
+async function loadConversation(id) {
+  if (state.running && state.abort) state.abort.abort();
+  try {
+    const { session, events } = await apiJson(`/api/session?id=${encodeURIComponent(id)}`);
+    state.conversationId = id;
+    localStorage.setItem(CONV_KEY, id);
+    selectAgent(session.agent || 'danny');
+    sessEl.textContent = `Conversation ${id.slice(0, 8)} · ${session.turns || 0} turns`;
+    chatEl.innerHTML = '';
+    stageEl.classList.remove('centered');
+    renderEvents(events, session);
+    renderConvList(state.sessions);
+    statusEl.textContent = 'ready';
+    scrollDown();
+  } catch {
+    statusEl.textContent = 'could not load conversation';
+  }
+}
+
+function renderEvents(events, session) {
+  let shell = null;
+  let turnAgent = session.agent;
+  const ensureShell = () => {
+    if (!shell) {
+      shell = addAssistantShell(speakerLabel(turnAgent), false);
+      shell.querySelector('.bubble').innerHTML = '';
+    }
+    return shell;
+  };
+  for (const e of events) {
+    if (e.t === 'user') {
+      shell = null;
+      turnAgent = e.agent || turnAgent;
+      addUserMsg(e.text || '');
+    } else if (e.t === 'tool') {
+      addToolChip(ensureShell().querySelector('.activity'), e);
+    } else if (e.t === 'assistant') {
+      const row = ensureShell();
+      row.querySelector('.bubble').innerHTML = e.text ? renderMd(e.text) : '<em>(no text)</em>';
+      if (e.meta) addMetaLine(row, e.meta);
+      shell = null;
+    }
+  }
+}
+
+// ---------- boot ----------
+
+(function boot() {
+  localStorage.removeItem('steadymade_chat_session'); // legacy key
   const params = new URLSearchParams(location.search);
   applyPreset(params.get('agent'), params.get('msg'));
+  loadSessions().then(() => {
+    const stored = localStorage.getItem(CONV_KEY);
+    if (stored && state.sessions.some((s) => s.id === stored) && !params.get('msg')) {
+      loadConversation(stored);
+    }
+  });
 })();
 
 window.addEventListener('message', (e) => {
@@ -163,6 +320,24 @@ window.addEventListener('message', (e) => {
 if (window.parent !== window) {
   window.parent.postMessage({ type: 'steadymade-chat-ready' }, '*');
 }
+
+let searchTimer = null;
+convSearchEl.addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  const q = convSearchEl.value.trim();
+  searchTimer = setTimeout(async () => {
+    if (!q) {
+      renderConvList(state.sessions);
+      return;
+    }
+    try {
+      const { results } = await apiJson(`/api/sessions/search?q=${encodeURIComponent(q)}`);
+      renderConvList(results, { searchMode: true });
+    } catch {}
+  }, 250);
+});
+
+// ---------- send ----------
 
 async function send() {
   const text = inputEl.value.trim();
@@ -176,7 +351,7 @@ async function send() {
   setBusy(true);
   statusEl.textContent = 'working…';
 
-  const shell = addAssistantShell();
+  const shell = addAssistantShell(currentSpeaker());
   const bubble = shell.querySelector('.bubble');
   const activity = shell.querySelector('.activity');
   let raw = '';
@@ -190,7 +365,7 @@ async function send() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         message: text,
-        sessionId: state.sessionId,
+        conversationId: state.conversationId,
         model: modelSel.value,
         agent: agentSel.value,
       }),
@@ -219,6 +394,7 @@ async function send() {
   state.abort = null;
   setBusy(false);
   statusEl.textContent = 'ready';
+  loadSessions();
 
   function handleEvent(chunk) {
     let ev = 'message';
@@ -231,11 +407,14 @@ async function send() {
     try { d = data ? JSON.parse(data) : {}; } catch {}
 
     switch (ev) {
+      case 'conversation':
+        if (d.id) {
+          state.conversationId = d.id;
+          localStorage.setItem(CONV_KEY, d.id);
+        }
+        break;
       case 'init':
-        state.sessionId = d.session_id;
-        localStorage.setItem('steadymade_chat_session', d.session_id);
-        localStorage.setItem('steadymade_chat_agent', agentSel.value);
-        sessEl.textContent = `Session ${String(d.session_id || '').slice(0, 8)}${d.model ? ` · ${d.model}` : ''}`;
+        sessEl.textContent = `Conversation ${String(state.conversationId || '').slice(0, 8)}${d.model ? ` · ${d.model}` : ''}`;
         break;
       case 'delta':
         if (!gotDelta) {
@@ -246,25 +425,14 @@ async function send() {
         bubble.textContent = raw;
         scrollDown();
         break;
-      case 'tool': {
-        const chip = document.createElement('span');
-        chip.className = `chip${d.sub ? ' sub' : ''}`;
-        chip.textContent = d.name === 'Task' ? `→ ${d.detail || 'Task'}` : `${d.name}${d.detail ? ` · ${d.detail}` : ''}`;
-        activity.appendChild(chip);
+      case 'tool':
+        addToolChip(activity, d);
         scrollDown();
         break;
-      }
       case 'result': {
         if (raw) bubble.innerHTML = renderMd(raw);
         else if (d.error_text) bubble.innerHTML = `<em>${esc(d.error_text)}</em>`;
-        const meta = document.createElement('div');
-        meta.className = 'meta';
-        const dur = d.duration_ms != null ? `${(d.duration_ms / 1000).toFixed(1)}s` : '';
-        const cost = d.cost_usd != null ? `$${Number(d.cost_usd).toFixed(3)}` : '';
-        const turns = d.num_turns ? `${d.num_turns} turns` : '';
-        const tokens = d.total_tokens ? `${Number(d.total_tokens).toLocaleString()} tokens` : '';
-        meta.textContent = [dur, cost, turns, tokens].filter(Boolean).join(' · ');
-        shell.appendChild(meta);
+        addMetaLine(shell, d);
         scrollDown();
         break;
       }
@@ -288,13 +456,12 @@ async function send() {
 
 function resetConversation() {
   if (state.abort) state.abort.abort();
-  state.sessionId = null;
-  localStorage.removeItem('steadymade_chat_session');
-  localStorage.removeItem('steadymade_chat_agent');
+  state.conversationId = null;
+  localStorage.removeItem(CONV_KEY);
   sessEl.textContent = '';
-  chatEl.innerHTML = `<div class="welcome"><div class="w-label">STEADYMADE AI OS</div><h1>Danny Chat</h1><p>Select a specialist if needed. Messages are always routed through Danny.</p></div>`;
-  stageEl.classList.add('centered');
+  showWelcome();
   statusEl.textContent = 'ready';
+  renderConvList(state.sessions);
 }
 
 sendBtn.addEventListener('click', () => {
