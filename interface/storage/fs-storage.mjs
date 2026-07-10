@@ -59,6 +59,14 @@ async function buildEntry(absPath, relPath) {
 }
 
 export function createFsKnowledgeStorage({ root }) {
+  const projectRoot = path.resolve(root, '..');
+
+  function toProjectRelative(absPath) {
+    const rel = path.relative(projectRoot, absPath).replace(/\\/g, '/');
+    if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) return rel;
+    return path.relative(root, absPath).replace(/\\/g, '/');
+  }
+
   return {
     kind: 'fs',
     root,
@@ -79,7 +87,7 @@ export function createFsKnowledgeStorage({ root }) {
             docs.push(await buildEntry(absPath, `${KNOWLEDGE_PREFIX}${dirRel}/${dirent.name}`));
           }
         }
-        const subdirs = dirents.filter((d) => d.isDirectory());
+        const subdirs = dirents.filter((d) => d.isDirectory() && d.name !== '_artifacts');
         // Pure container dirs (no direct .md files, only subfolders) are not listed themselves.
         if (docs.length > 0 || subdirs.length === 0) folders.push({ name: dirRel, docs });
         for (const dirent of subdirs) {
@@ -89,7 +97,7 @@ export function createFsKnowledgeStorage({ root }) {
       const top = await fsp.readdir(root, { withFileTypes: true });
       top.sort((a, b) => a.name.localeCompare(b.name));
       for (const dirent of top) {
-        if (dirent.isDirectory()) await walk(path.join(root, dirent.name), dirent.name);
+        if (dirent.isDirectory() && dirent.name !== '_artifacts') await walk(path.join(root, dirent.name), dirent.name);
       }
       return folders;
     },
@@ -109,6 +117,48 @@ export function createFsKnowledgeStorage({ root }) {
       await fsp.mkdir(path.dirname(absPath), { recursive: true });
       await fsp.writeFile(absPath, content, 'utf8');
       return { ok: true, mtime: (await fsp.stat(absPath)).mtimeMs };
+    },
+    async listArtifacts() {
+      if (!fs.existsSync(root)) {
+        throw createError('CONFIG_ERROR', `knowledge root not found: ${root}`, 500);
+      }
+
+      const out = [];
+      const maxDepth = 8;
+      const companyRoot = path.join(root, 'company');
+      if (!fs.existsSync(companyRoot)) return out;
+
+      async function walk(dirAbs, depth) {
+        if (depth > maxDepth) return;
+        let dirents;
+        try {
+          dirents = await fsp.readdir(dirAbs, { withFileTypes: true });
+        } catch {
+          return;
+        }
+        for (const dirent of dirents) {
+          if (dirent.name.startsWith('.')) continue;
+          const absPath = path.join(dirAbs, dirent.name);
+          if (dirent.isDirectory()) {
+            await walk(absPath, depth + 1);
+            continue;
+          }
+          if (!dirent.isFile()) continue;
+          if (!absPath.includes(`${path.sep}_artifacts${path.sep}`)) continue;
+          const stat = await fsp.stat(absPath);
+          out.push({
+            name: dirent.name,
+            path: toProjectRelative(absPath),
+            folder: toProjectRelative(path.dirname(absPath)),
+            mtime: stat.mtimeMs,
+            ctime: stat.birthtimeMs || stat.mtimeMs,
+            size: stat.size,
+          });
+        }
+      }
+
+      await walk(companyRoot, 0);
+      return out;
     },
   };
 }

@@ -8,12 +8,24 @@ Embedded chat runtime used by the interface Chat view.
 
 ## Behavior
 
-- Danny is always the entry point.
-- Specialist selection in the UI is handled **via Danny routing instructions**.
-- No direct specialist bypass mode.
-- SSE events emitted to frontend: `conversation`, `init`, `delta`, `tool`, `result`, `gate`, `done`, `stderr`.
-- Conversations are resumed by passing `conversationId`; the server resolves
-  the Claude session chain internally (legacy `sessionId` still accepted).
+- Agent modes:
+  - `danny` (default): Danny orchestration prompt.
+  - `direct_specialist`: selected specialist runs directly from
+    `.claude/agents/*.md` prompt + shared safety addendum (approval logic,
+    no false execution claims, memory/source-precedence reminders).
+- `GET /api/agents` is the selector/source-of-truth endpoint (`id`, `name`,
+  `function`, `mode`). UI labels use `Name — Function`.
+- SSE events emitted to frontend: `conversation`, `init`, `delta`, `tool`,
+  `result`, `gate`, `done`, `stderr`.
+- Run lifecycle for non-incognito conversations is server-owned:
+  - one active run per conversation (`POST /api/chat` returns `409` if active),
+  - disconnect detaches subscriber only,
+  - `GET /api/chat/attach?conversationId=&after=` replays buffered events and
+    streams live updates,
+  - `POST /api/chat/stop` explicitly terminates the run and persists partial
+    assistant text when no final result exists.
+- Incognito keeps connection-bound behavior (no persistence, no sessions,
+  no history, no memory/run-log writes).
 
 ## Chat history (product-owned)
 
@@ -24,7 +36,8 @@ Embedded chat runtime used by the interface Chat view.
 - Both are **gitignored, local per-user data** — same privacy class as
   `runs/` and `memory/` (may contain personal context; never committed,
   never shared).
-- Endpoints: `GET /api/sessions` (`?all=1` includes archived),
+- Endpoints: `GET /api/sessions` (`?all=1` includes archived; includes
+  `running: true|false`),
   `GET /api/session?id=…` (transcript), `POST /api/session/rename`,
   `POST /api/session/archive`, `GET /api/sessions/search?q=…`.
 - The UI shows a conversation sidebar: restore, resume, rename, archive,
@@ -36,7 +49,8 @@ Embedded chat runtime used by the interface Chat view.
   write-block (memory-poisoning defense) — leave it at the default.
 - Incognito turns: no history file, no index entry, no memory writes; the
   usage log keeps cost numbers only (no session id) and the Claude Code
-  CLI's own transcript of the turn is deleted after the run.
+  CLI's own transcript of the turn is deleted after the run as a best-effort
+  cleanup (not an absolute guarantee).
 - The server binds `127.0.0.1` only — it must never be exposed to the LAN
   (it drives Claude with project permissions and has no auth).
 

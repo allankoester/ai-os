@@ -105,7 +105,7 @@ never synced, never shared — see `memory/README.md`):
   session summaries, parked ideas.
 
 These project files are the **canonical AI-OS memory** — visible in the
-interface Memory view and consolidated weekly. Claude Code's internal
+interface Settings memory section and consolidated weekly. Claude Code's internal
 auto-memory directory (`~/.claude/projects/<project>/memory/`) is **not** the
 AI-OS memory: writing only there does not satisfy these rules. AI-OS memory
 writes always target the `memory/` folder **next to this CLAUDE.md** (project

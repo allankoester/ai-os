@@ -24,8 +24,6 @@
 
       <nav class="sidebar-nav" id="nav">
         <button class="nav-item" data-view="chat">Chat</button>
-        <button class="nav-item" data-view="usage">Usage</button>
-        <button class="nav-item" data-view="memory">Memory</button>
         <button class="nav-item active" data-view="command">Command Center</button>
         <button class="nav-item" data-view="map">Agent Map</button>
         <button class="nav-item" data-view="knowledge">Knowledge Docs</button>
@@ -39,6 +37,7 @@
 
       <div class="sidebar-status">
         <div class="status-row"><span>PROJECT</span><span>Steadymade AI OS</span></div>
+        <div class="status-row"><span>USER</span><span id="status-user">—</span></div>
         <div class="status-row"><span>MODE</span><span>OpenCode/ Claude Project</span></div>
         <div class="status-row"><span>AGENTS</span><span id="status-agents">—</span></div>
         <div class="status-row"><span>KNOWLEDGE</span><span>Markdown</span></div>
@@ -58,11 +57,7 @@
             <div id="search-results" class="search-results hidden"></div>
           </div>
         </div>
-        <div class="topbar-right">
-          <button class="btn btn-ghost" id="btn-add-knowledge">Add Knowledge</button>
-          <button class="btn btn-primary" id="btn-new-workflow">New Workflow</button>
-          <button class="btn btn-ghost btn-fullscreen" id="btn-fullscreen" title="Fullscreen (F)">⛶</button>
-        </div>
+        <div class="topbar-right"></div>
       </header>
 
       <main id="view" class="view"></main>

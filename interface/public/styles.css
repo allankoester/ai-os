@@ -359,6 +359,8 @@ input, textarea, select { font-family: inherit; }
 .stat-card.card-dark .stat-value { color: var(--green); }
 .stat-card .stat-note { font-size: 12px; color: var(--muted); }
 .stat-card.card-dark .stat-note { color: #7E978A; }
+.stat-link { cursor: pointer; transition: border-color 0.15s, transform 0.15s; }
+.stat-link:hover { border-color: var(--green-light); transform: translateY(-1px); }
 
 .cc-cols {
   display: grid;
@@ -426,6 +428,8 @@ input, textarea, select { font-family: inherit; }
   font-size: 13px;
 }
 .kh-row:last-child { border-bottom: none; }
+.kh-link { cursor: pointer; }
+.kh-link:hover span:first-child { color: var(--green-light) !important; }
 .kh-bar {
   height: 4px; border-radius: 2px; background: var(--border);
   flex: 1; margin: 0 14px; max-width: 160px;

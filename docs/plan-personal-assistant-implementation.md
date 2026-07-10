@@ -71,10 +71,12 @@ State legend: `pending` · `in_progress` · `blocked (<why>)` · `done`
 | 4 | Skill version contract | G5 | done | 8033052 |
 | 5 | Raw→clean promotion pipeline + incognito | G4 | done | 8ef7f7d |
 | 6 | Hardening & polish (6.1-6.4 done; 6.5 backlog) | G6/misc | done | 0d3ece0 |
+| 7 | Interface & chat UX round (2026-07-10 list) ⚠ | UX/7.3 | in_progress | — |
 
 Dependencies: 1 → 3 → 5 (memory before learning before promotion). 2 and 4 are
 independent and can be reordered if blocked. 5's incognito subtasks depend
-on 2.
+on 2. 7 builds on 2 (chat history) and 4 (skill contract); its packages
+7.1 → 7.2 → 7.3 land as separate commits.
 
 ---
 
@@ -606,6 +608,148 @@ notes:
 
 ---
 
+## Phase 7 — Interface & chat UX round (2026-07-10 list) ⚠
+
+**Goal:** implement Allan's 9-point UI/technical improvement list
+(analysis delivered in chat 2026-07-10) in three packages, one commit each.
+Package 7.3 contains security-relevant runtime/permission changes → Simon
+review + Allan approval before it is marked done.
+
+**Design decisions (from the 2026-07-10 analysis):**
+
+- Chat runs become **server-owned** (OpenClaw gateway pattern): the Claude
+  child is never killed by a client disconnect; clients attach/detach via
+  SSE with replay. Explicit stop endpoint. Incognito keeps the old
+  connection-bound lifecycle (no persistence anywhere by design).
+- **Direct specialist mode** reverses the "no direct specialist bypass"
+  decision (chat/README.md): selecting a specialist talks to that agent
+  directly (`--append-system-prompt` from `.claude/agents/<id>.md` + shared
+  specialist addendum with approval/no-execution-claim/memory rules). Danny
+  stays the default and still orchestrates via Task.
+- Artifacts convention: `knowledge/**/_artifacts/` is a first-class artifact
+  location; `_artifacts` dirs are excluded from the knowledge folder tree.
+- Style gate scoped to content agents (clara/otto/dora/rosa), muted chip.
+- Skill capability model extends SKILL.md frontmatter
+  (`version`, `requires-plugins`, `knowledge`) — no new instruction system.
+- Hub-owned SKILL.md write path fixes the CUSTOMIZE-vs-guardrail conflict
+  (`skills/personal: read` blocks /api/file PUT) without weakening the
+  guardrail for agents; goes through Simon.
+
+**Tasks — 7.1 quick wins (commit 1):**
+
+- [x] 7.1.1 Header: remove Add Knowledge / New Workflow / Fullscreen buttons
+      (search stays); clean up bindChrome.
+- [x] 7.1.2 Knowledge view: "+ New doc" (drawer-based create, replaces the
+      header prompt() flow).
+- [x] 7.1.3 Command Center links: stat cards → Agent Map / Knowledge (incl.
+      needs_review filter) / Workflows; Knowledge Health rows →
+      selectKnFolder; Recent Artifacts rows → Artifacts view.
+- [x] 7.1.4 Knowledge Health: cap at 6 rows (lowest approval ratio first) +
+      "view all" link.
+- [x] 7.1.5 Sidebar: active user row (server exposes user from
+      `os.userInfo()` + `profiles/<user>.yml` in /api/system).
+- [x] 7.1.6 Settings order: Project Info, Runtime, Onboarding,
+      Profile & Instructions, Plugins, Guardrails (tabs + card order).
+- [x] 7.1.7 Chat: streaming markdown (rAF-throttled renderMd on deltas,
+      open code fences closed optimistically).
+- [x] 7.1.8 Style gate: server emits only for content agents; UI renders
+      muted chip instead of red warning.
+
+**Tasks — 7.2 medium (commit 2):**
+
+- [x] 7.2.1 Memory view → Settings section; nav item removed; CLAUDE.md
+      "Memory view" sentence updated.
+- [x] 7.2.2 Artifact discovery: `listArtifacts` in the storage layer scans
+      `artifacts/` + `knowledge/**/_artifacts/**`; `_artifacts` excluded from
+      listFolders; /api/artifact serves both roots.
+- [x] 7.2.3 Knowledge Docs ⇄ Artifacts toggle per folder (subtree scope).
+- [x] 7.2.4 Skill Hub: version/sha/install-date line; "Check updates" wired
+      to /api/marketplace/updates with UPDATE AVAILABLE / MODIFIED badges.
+- [x] 7.2.5 Skill Hub: "New Skill" (hub-owned createSkill endpoint + drawer)
+      + hub-owned SKILL.md save path (fixes CUSTOMIZE 403). ⚠ Simon scope.
+- [x] 7.2.6 Onboarding: memory-setup step in /api/workspace, startup modal
+      and Settings card (MEMORY.md + daily/ exist).
+- [x] 7.2.7 Usage: unified `runs/usage.jsonl` (source field; scheduler runs
+      log usage too; legacy chat-usage.jsonl still read); Command Center
+      usage row; Usage nav item removed (view reachable from Command Center).
+
+**Tasks — 7.3 structural ⚠ (commit 3, approval-gated):**
+
+- [x] 7.3.1 Chat server run registry: runs keyed by conversation, events
+      buffered + persisted incrementally, child survives disconnect,
+      `GET /api/chat/attach` (SSE replay), `POST /api/chat/stop`, running
+      flag in /api/sessions, one active run per conversation (409).
+- [x] 7.3.2 Chat UI: re-attach on conversation open/reload, running badge in
+      sidebar, stop = explicit stop (detach ≠ stop).
+- [x] 7.3.3 `GET /api/agents` single source (frontmatter + first heading of
+      `.claude/agents/*.md`); selector + speaker labels "Name — Function";
+      hardcoded copies removed.
+- [x] 7.3.4 Direct specialist mode per design decision; chat/README.md
+      updated (routing section + safety defaults).
+- [x] 7.3.5 Skill capability model: frontmatter parsing, type badges
+      (PROMPT/+TOOLS/+KNOWLEDGE), per-skill configure panel, activation
+      dependency check against enabled plugins.
+- [ ] 7.3.6 Simon review of 7.2.5 + 7.3 diff; findings fixed; diff presented
+      to Allan; approval recorded here before phase marked done.
+
+**Acceptance criteria + verification:**
+
+1. `node --check` clean on all touched .mjs/.js; `node scripts/validate.mjs`
+   passes.
+2. /api/system exposes `user`; sidebar shows it; header has only search.
+3. Command Center: every card/row navigates; health card ≤ 6 rows; usage row
+   shows real totals from the unified log.
+4. Artifacts view lists files from `knowledge/**/_artifacts/**` (e.g. the
+   gebr-heinemann offer PDFs); Knowledge folder toggle shows them in place.
+5. Skill Hub: installed skill shows pinned sha + update status; New Skill
+   creates + opens editor; CUSTOMIZE saves without 403.
+6. Chat: mid-run conversation switch + page reload → run continues, transcript
+   complete after re-attach; explicit stop persists partial text.
+7. Direct mode: specialist turn runs without Danny wrapper and is labeled
+   "Name — Function"; Danny default unchanged.
+8. Style gate absent on plain Danny turns; muted chip on content-agent drafts.
+
+**Status:**
+```
+state: in_progress
+started: 2026-07-10
+completed: —
+commit: —
+notes:
+- Phase created from the 2026-07-10 chat analysis (9-point list from Allan +
+  OpenClaw-pattern recommendations). Allan approved implementation
+  2026-07-10 ("yes please complete as suggested").
+- 7.1 is partially landed from an interrupted session: 7.1.1, 7.1.2, 7.1.4,
+  7.1.5, 7.1.6, 7.1.7, 7.1.8 are in code and were validated locally
+  (`node --check` + `node scripts/validate.mjs`).
+- 7.3.1-7.3.4 implemented: server-owned run registry with attach/stop,
+  running flags in sessions, `/api/agents` registry from `.claude/agents`,
+  UI auto-attach/running badges/explicit stop semantics, and direct specialist
+  execution mode with shared safety addendum + usage mode metadata.
+- 7.2.1-7.2.6 and 7.3.5 implemented: Memory moved into Settings, onboarding
+  memory checks added, artifacts merged from `artifacts/` +
+  `knowledge/**/_artifacts/**` (including Knowledge Docs toggle), Skill Hub now
+  shows version/install/update state, supports personal New Skill + scoped
+  SKILL.md save path, and enforces plugin dependencies on activation.
+- 2026-07-10 follow-up: 7.1.3 + 7.2.7 completed. Command Center review card now
+  opens Knowledge Docs with a review-needed filter; usage is unified in
+  `runs/usage.jsonl` with source-aware chat/scheduler entries and legacy
+  `runs/chat-usage.jsonl` compatibility.
+- Verification (2026-07-10): `node --check interface/public/app.js
+  interface/server.mjs interface/scheduler.mjs chat/server.mjs` ✅, `node
+  scripts/validate.mjs` ✅ ("Checks passed: 241").
+- 2026-07-10 Simon follow-up hardening patch applied for 7.2.5 + 7.3 scope:
+  mutation-request protections (JSON + trusted local origin/referer with token
+  fallback), Skill Hub write guardrails with ask-confirm flow,
+  artifacts restricted to `artifacts/` + `knowledge/company/**/_artifacts/**`,
+  /api/artifact symlink+realpath enforcement, scheduler default permission/tool
+  constraints, and incognito README wording clarified as best-effort cleanup.
+  7.3.6 remains pending until Allan approval is explicitly recorded.
+- Remaining: 7.3.6 Simon review and Allan approval gate before phase close.
+```
+
+---
+
 ## Decisions log (append-only)
 
 - 2026-07-09 — Plan created from `docs/reference/personal-assistant-gap-analysis.md`
@@ -631,6 +775,19 @@ notes:
   was a second, independent cause of "zero run logs" beside the chat
   allowlist). Risk (agents can modify existing local run logs) accepted for
   Stage 1/2; noted for Simon review.
+- 2026-07-10 — **Chat design reversal (Allan):** the chat agent selector gets
+  a direct specialist mode (no Danny wrapper); "no direct specialist bypass"
+  in chat/README.md is superseded. Danny remains default; approval logic and
+  no-execution-claim rules are injected into direct specialist prompts.
+- 2026-07-10 — Chat run lifecycle decoupled from the HTTP connection
+  (server-owned run registry, attach/stop endpoints). Client disconnect no
+  longer kills a run; incognito keeps the connection-bound lifecycle.
+- 2026-07-10 — `knowledge/**/_artifacts/` recognized as first-class artifact
+  location (scanned by the Artifacts view, toggle in Knowledge Docs,
+  excluded from the knowledge folder tree).
+- 2026-07-10 — SKILL.md writes from the interface go through a hub-owned
+  endpoint (like installs) instead of weakening the `skills/personal: read`
+  guardrail for agents.
 
 ## Open questions (resolve with Allan when reached)
 

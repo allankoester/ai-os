@@ -7,6 +7,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createKnowledgeConfig } from './storage/config.mjs';
@@ -23,15 +24,19 @@ const ROOT = path.resolve(__dirname, '..'); // project root: steadymade-ai-os
 const PUBLIC = path.join(__dirname, 'public');
 const META_FILE = path.join(__dirname, 'meta.json'); // sidecar metadata (status, scope) — keeps real docs untouched
 const FLOWS_FILE = path.join(__dirname, 'workflows.json'); // user workflow edits: overrides / custom / deleted (machine-local)
-const USAGE_LOG = path.join(ROOT, 'runs', 'chat-usage.jsonl');
+const USAGE_LOG = path.join(ROOT, 'runs', 'usage.jsonl');
+const LEGACY_CHAT_USAGE_LOG = path.join(ROOT, 'runs', 'chat-usage.jsonl');
 const PORT = process.env.PORT || 4011;
 const HOST = process.env.HOST || '127.0.0.1';
 const API_TOKEN = process.env.STEADYMADE_INTERFACE_TOKEN || '';
 const KNOWLEDGE_PATH_PREFIX = 'knowledge/';
 
 const scheduler = createScheduler({ rootDir: ROOT });
-const skillHub = createSkillHub({ rootDir: ROOT });
 const pluginManager = createPluginManager({ rootDir: ROOT });
+const skillHub = createSkillHub({
+  rootDir: ROOT,
+  listEnabledPlugins: () => pluginManager.list().filter((p) => p.enabled).map((p) => p.id),
+});
 const guardrails = createGuardrails({ rootDir: ROOT });
 
 const knowledgeConfig = createKnowledgeConfig({ rootDir: ROOT });
@@ -65,6 +70,63 @@ function isKnowledgePath(relPath) {
   // via the generic ROOT-relative file branch instead (see /api/file below).
   return typeof relPath === 'string' && relPath.startsWith(KNOWLEDGE_PATH_PREFIX) && relPath.endsWith('.md')
     && !relPath.startsWith('knowledge/personal/');
+}
+
+function normalizeProjectRelPath(relPath) {
+  return path.posix.normalize('/' + String(relPath || '').replace(/\\/g, '/')).slice(1);
+}
+
+function isAllowedArtifactPath(relPath) {
+  const normalized = normalizeProjectRelPath(relPath);
+  if (normalized.startsWith('artifacts/')) return true;
+  return normalized.startsWith('knowledge/company/') && normalized.includes('/_artifacts/');
+}
+
+function hasJsonContentType(req) {
+  return String(req.headers['content-type'] || '').toLowerCase().includes('application/json');
+}
+
+function isTrustedLocalWebRequest(req, expectedPort) {
+  const expected = Number(expectedPort);
+  const origins = [req.headers.origin, req.headers.referer];
+  for (const raw of origins) {
+    if (!raw) continue;
+    try {
+      const u = new URL(String(raw));
+      const host = u.hostname;
+      const port = Number(u.port || (u.protocol === 'https:' ? 443 : 80));
+      if ((host === 'localhost' || host === '127.0.0.1') && port === expected) return true;
+    } catch {
+      // invalid header value
+    }
+  }
+  return false;
+}
+
+function endpointExpectsJsonBody(req, url) {
+  if (req.method === 'PUT') return true;
+  if (req.method === 'POST') {
+    if (url.pathname === '/api/restart') return false;
+    if (/^\/api\/scheduler\/jobs\/[0-9a-f-]+\/run$/i.test(url.pathname)) return false;
+    return true;
+  }
+  if (req.method === 'DELETE') return false;
+  return false;
+}
+
+function isPathWithin(parentAbs, targetAbs) {
+  const rel = path.relative(parentAbs, targetAbs);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+async function isAllowedArtifactRealPath(realAbs) {
+  const artifactsRootReal = await fsp.realpath(path.join(ROOT, 'artifacts')).catch(() => null);
+  const companyRootReal = await fsp.realpath(path.join(ROOT, 'knowledge', 'company')).catch(() => null);
+  if (artifactsRootReal && isPathWithin(artifactsRootReal, realAbs)) return true;
+  if (companyRootReal && isPathWithin(companyRootReal, realAbs) && realAbs.includes(`${path.sep}_artifacts${path.sep}`)) {
+    return true;
+  }
+  return false;
 }
 
 function parseFrontmatter(text) {
@@ -167,13 +229,56 @@ async function scanArtifacts(baseAbs) {
   return out;
 }
 
-async function readUsageLog() {
+async function readJsonl(file) {
   let text = '';
-  try { text = await fsp.readFile(USAGE_LOG, 'utf8'); }
-  catch (err) { if (err.code !== 'ENOENT') throw err; }
-  const entries = text.split(/\r?\n/).filter(Boolean).map((line) => {
-    try { return JSON.parse(line); } catch { return null; }
-  }).filter(Boolean).sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')));
+  try { text = await fsp.readFile(file, 'utf8'); }
+  catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+  return text
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => {
+      try { return JSON.parse(line); } catch { return null; }
+    })
+    .filter(Boolean);
+}
+
+function usageEntryKey(e) {
+  return JSON.stringify({
+    source: e.source || 'chat',
+    timestamp: e.timestamp || null,
+    session_id: e.session_id || null,
+    selected_agent: e.selected_agent || null,
+    mode: e.mode || null,
+    model: e.model || null,
+    duration_ms: e.duration_ms ?? null,
+    cost_usd: e.cost_usd ?? null,
+    num_turns: e.num_turns ?? null,
+    total_tokens: e.total_tokens ?? null,
+    status: e.status || null,
+    job_id: e.job_id || e.jobId || null,
+    job_name: e.job_name || e.jobName || null,
+    incognito: Boolean(e.incognito),
+  });
+}
+
+async function readUsageLog() {
+  const unified = await readJsonl(USAGE_LOG);
+  const legacy = await readJsonl(LEGACY_CHAT_USAGE_LOG);
+
+  const merged = unified.map((e) => ({ ...e, source: e.source || 'chat' }));
+  const seen = new Set(merged.map(usageEntryKey));
+  for (const e of legacy) {
+    const normalized = { ...e, source: 'chat' };
+    const key = usageEntryKey(normalized);
+    if (!seen.has(key)) {
+      seen.add(key);
+      merged.push(normalized);
+    }
+  }
+
+  const entries = merged.sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')));
   const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
   const summary = entries.reduce((acc, e) => {
     acc.count += 1;
@@ -187,19 +292,40 @@ async function readUsageLog() {
     acc.cache_read_input_tokens += num(e.cache_read_input_tokens);
     acc.total_tokens += num(e.total_tokens);
     if (e.is_error) acc.errors += 1;
+    const src = e.source || 'chat';
+    acc.sources[src] = (acc.sources[src] || 0) + 1;
     return acc;
-  }, { count: 0, sessions: new Set(), total_cost_usd: 0, total_duration_ms: 0, total_turns: 0, input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, total_tokens: 0, errors: 0 });
+  }, { count: 0, sessions: new Set(), total_cost_usd: 0, total_duration_ms: 0, total_turns: 0, input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, total_tokens: 0, errors: 0, sources: {} });
   return {
-    path: 'runs/chat-usage.jsonl',
+    path: fs.existsSync(USAGE_LOG)
+      ? 'runs/usage.jsonl (+ runs/chat-usage.jsonl legacy merge)'
+      : 'runs/chat-usage.jsonl (legacy)',
     entries,
     summary: { ...summary, sessions: summary.sessions.size },
   };
 }
 
+// ---------- active user (OS user + optional profiles/<user>.yml) ----------
+
+function getActiveUser() {
+  const username = os.userInfo().username;
+  const user = { id: username, name: username, role: null };
+  try {
+    const text = fs.readFileSync(path.join(ROOT, 'profiles', `${username}.yml`), 'utf8');
+    const get = (key) => {
+      const m = text.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'));
+      return m ? m[1].trim().replace(/^["']|["']$/g, '') : null;
+    };
+    user.name = get('user') || username;
+    user.role = get('role');
+  } catch { /* no team profile for this OS user */ }
+  return user;
+}
+
 // ---------- API ----------
 
 async function getSystem() {
-  const system = { agents: [], folders: [], docs: [], artifacts: [], meta: await readMeta() };
+  const system = { agents: [], folders: [], docs: [], artifacts: [], meta: await readMeta(), user: getActiveUser() };
 
   // Agents from .claude/agents/*.md
   const agentDir = path.join(ROOT, '.claude', 'agents');
@@ -217,8 +343,13 @@ async function getSystem() {
   }
 
   // Artifacts (any file type, read-only listing — recursive, newest first)
+  const artifacts = [];
   const aDir = path.join(ROOT, 'artifacts');
-  if (fs.existsSync(aDir)) system.artifacts = await scanArtifacts(aDir);
+  if (fs.existsSync(aDir)) artifacts.push(...await scanArtifacts(aDir));
+  if (typeof knowledgeStorage.listArtifacts === 'function') {
+    artifacts.push(...await knowledgeStorage.listArtifacts());
+  }
+  system.artifacts = artifacts.sort((a, b) => (b.ctime || b.mtime || 0) - (a.ctime || a.mtime || 0));
 
   return system;
 }
@@ -230,10 +361,18 @@ async function handleApi(req, res, url) {
   };
 
   const mutating = req.method !== 'GET';
-  if (mutating && API_TOKEN) {
-    const auth = req.headers['x-steadymade-token'] || req.headers.authorization || '';
-    const bearer = String(auth).replace(/^Bearer\s+/i, '');
-    if (bearer !== API_TOKEN) return send(401, { error: 'unauthorized' });
+  if (mutating) {
+    if (endpointExpectsJsonBody(req, url) && !hasJsonContentType(req)) {
+      return send(403, { error: 'forbidden: Content-Type must include application/json' });
+    }
+    const trustedLocal = isTrustedLocalWebRequest(req, PORT);
+    let tokenValid = false;
+    if (API_TOKEN) {
+      const auth = req.headers['x-steadymade-token'] || req.headers.authorization || '';
+      const bearer = String(auth).replace(/^Bearer\s+/i, '');
+      tokenValid = bearer === API_TOKEN;
+    }
+    if (!trustedLocal && !tokenValid) return send(401, { error: 'unauthorized' });
   }
 
   if (url.pathname === '/api/system' && req.method === 'GET') {
@@ -303,19 +442,29 @@ async function handleApi(req, res, url) {
     return send(200, { ok: true, config });
   }
 
-  // ---------- artifacts (open any file under artifacts/ in the browser) ----------
+  // ---------- artifacts (open any file under artifacts/ and knowledge/company/**/_artifacts/**) ----------
 
   if (url.pathname === '/api/artifact' && req.method === 'GET') {
-    const rel = url.searchParams.get('path') || '';
-    if (!rel.startsWith('artifacts/')) return send(400, { error: 'only files under artifacts/ can be opened here' });
+    const rel = normalizeProjectRelPath(url.searchParams.get('path') || '');
+    if (!isAllowedArtifactPath(rel)) {
+      return send(400, { error: 'only files under artifacts/ or knowledge/company/**/_artifacts/** can be opened here' });
+    }
     const gate = guardrails.check(rel, 'read');
     if (!gate.allowed) return send(403, { error: gate.reason });
     const abs = safeResolve(rel);
-    if (!abs || !fs.existsSync(abs) || !fs.statSync(abs).isFile()) return send(404, { error: 'not found' });
-    const ext = path.extname(abs).toLowerCase();
+    if (!abs || !fs.existsSync(abs)) return send(404, { error: 'not found' });
+    const st = await fsp.lstat(abs).catch(() => null);
+    if (!st) return send(404, { error: 'not found' });
+    if (st.isSymbolicLink()) return send(403, { error: 'forbidden: symlink artifacts are not allowed' });
+    if (!st.isFile()) return send(404, { error: 'not found' });
+    const realAbs = await fsp.realpath(abs).catch(() => null);
+    if (!realAbs || !(await isAllowedArtifactRealPath(realAbs))) {
+      return send(403, { error: 'forbidden: artifact path resolves outside allowed roots' });
+    }
+    const ext = path.extname(realAbs).toLowerCase();
     const type = { '.md': 'text/plain; charset=utf-8', '.txt': 'text/plain; charset=utf-8', '.pdf': 'application/pdf', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' }[ext] || MIME[ext] || 'application/octet-stream';
     res.writeHead(200, { 'Content-Type': type, 'Content-Disposition': 'inline' });
-    return fs.createReadStream(abs).pipe(res);
+    return fs.createReadStream(realAbs).pipe(res);
   }
 
   // ---------- agent plugin assignment (frontmatter `plugins:` line) ----------
@@ -390,6 +539,38 @@ async function handleApi(req, res, url) {
     const body = await readBody(req);
     const result = await skillHub.setActive(body.scope, body.name, Boolean(body.active));
     return send(result.errors ? 400 : 200, result);
+  }
+
+  if (url.pathname === '/api/skills/new' && req.method === 'POST') {
+    try {
+      const body = await readBody(req);
+      const targetPath = normalizeProjectRelPath(`skills/${body.scope || ''}/${body.name || ''}/SKILL.md`);
+      const writeGate = guardrails.check(targetPath, 'write');
+      if (!writeGate.allowed) return send(403, { error: writeGate.reason });
+      if (writeGate.confirmRequired && body.confirmed !== true) {
+        return send(409, { confirmRequired: true, folder: writeGate.folder, error: `guardrail: ${writeGate.folder} is set to "ask" — confirm the write` });
+      }
+      const result = await skillHub.createPersonalSkill(body);
+      return send(result.errors ? 400 : 200, result);
+    } catch (err) {
+      return send(500, { errors: [err.message] });
+    }
+  }
+
+  if (url.pathname === '/api/skills/content' && req.method === 'PUT') {
+    try {
+      const body = await readBody(req);
+      const targetPath = normalizeProjectRelPath(`skills/${body.scope || ''}/${body.name || ''}/SKILL.md`);
+      const writeGate = guardrails.check(targetPath, 'write');
+      if (!writeGate.allowed) return send(403, { error: writeGate.reason });
+      if (writeGate.confirmRequired && body.confirmed !== true) {
+        return send(409, { confirmRequired: true, folder: writeGate.folder, error: `guardrail: ${writeGate.folder} is set to "ask" — confirm the write` });
+      }
+      const result = await skillHub.savePersonalSkillContent(body);
+      return send(result.errors ? 400 : 200, result);
+    } catch (err) {
+      return send(500, { errors: [err.message] });
+    }
   }
 
   if (url.pathname === '/api/marketplace' && req.method === 'GET') {
@@ -472,6 +653,8 @@ async function handleApi(req, res, url) {
       { id: 'claude-md', label: 'CLAUDE.md (shared instructions)', path: 'CLAUDE.md', hint: 'core project instructions' },
       { id: 'claude-local', label: 'CLAUDE.local.md (personal instructions)', path: 'CLAUDE.local.md', hint: 'run /personal-onboarding' },
       { id: 'user-profile', label: 'knowledge/personal/user-profile.md (persona profile)', path: 'knowledge/personal/user-profile.md', hint: 'run /personal-onboarding' },
+      { id: 'memory-file', label: 'memory/MEMORY.md (curated durable memory)', path: 'memory/MEMORY.md', hint: 'create in Settings → Memory or run memory-consolidation setup' },
+      { id: 'memory-daily', label: 'memory/daily/ (working notes folder)', path: 'memory/daily', hint: 'create in Settings → Memory' },
       { id: 'operating-profile', label: 'operating-profile.md (company profile, symlinked to AI_OS root)', path: 'operating-profile.md', hint: 'run /company-onboarding' },
       { id: 'skill-profile', label: '.skill-profile (active skills)', path: '.skill-profile', hint: 'created by the Skill Hub' },
       { id: 'settings', label: '.claude/settings.local.json (permissions)', path: '.claude/settings.local.json', hint: 'created when plugins/permissions are set' },
@@ -489,9 +672,10 @@ async function handleApi(req, res, url) {
     const onboarding = {
       personalDone: Boolean(byId('user-profile').exists && byId('claude-local').exists),
       companyDone: Boolean(byId('operating-profile').exists && byId('operating-profile').todos === 0),
+      memoryDone: Boolean(byId('memory-file').exists && byId('memory-daily').exists),
       companyTodos: byId('operating-profile').todos || 0,
     };
-    onboarding.complete = onboarding.personalDone && onboarding.companyDone;
+    onboarding.complete = onboarding.personalDone && onboarding.companyDone && onboarding.memoryDone;
     return send(200, { checks, onboarding });
   }
 

@@ -199,7 +199,9 @@ export function createGraphKnowledgeStorage({ config }) {
       const mdItems = items
         .filter((item) => item.file && item.name && item.name.toLowerCase().endsWith('.md'))
         .sort((a, b) => a.name.localeCompare(b.name));
-      const subdirs = items.filter((item) => item.folder && item.name).sort((a, b) => a.name.localeCompare(b.name));
+      const subdirs = items
+        .filter((item) => item.folder && item.name && item.name !== '_artifacts')
+        .sort((a, b) => a.name.localeCompare(b.name));
 
       const docs = [];
       for (const item of mdItems) {
@@ -213,7 +215,9 @@ export function createGraphKnowledgeStorage({ config }) {
     }
 
     const children = await listChildrenByItemId(rootItem.id);
-    const folderItems = children.filter((item) => item.folder && item.name).sort((a, b) => a.name.localeCompare(b.name));
+    const folderItems = children
+      .filter((item) => item.folder && item.name && item.name !== '_artifacts')
+      .sort((a, b) => a.name.localeCompare(b.name));
     for (const folder of folderItems) {
       await walk(folder.id, folder.name);
     }
@@ -259,6 +263,9 @@ export function createGraphKnowledgeStorage({ config }) {
     kind: 'graph',
     root: config.knowledgeRoot,
     listFolders,
+    async listArtifacts() {
+      return [];
+    },
     readFile,
     writeFile,
   };

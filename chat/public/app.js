@@ -15,10 +15,16 @@ const CONV_KEY = 'steadymade_chat_conversation';
 
 const state = {
   conversationId: null,
-  incognitoSessionId: null, // in-memory only — never persisted
+  incognitoSessionId: null,
   running: false,
   abort: null,
+  streamConversationId: null,
+  streamIncognito: false,
   sessions: [],
+  agents: [],
+  agentById: new Map(),
+  seqByConversation: {},
+  live: null,
 };
 
 function esc(s) {
@@ -82,15 +88,32 @@ function renderMd(src) {
   return html;
 }
 
+function mdStreamSafe(src) {
+  const fences = (src.match(/^```/gm) || []).length;
+  return fences % 2 ? src + '\n```' : src;
+}
+
+function renderStreamingMd(bubble, raw) {
+  bubble._raw = raw;
+  if (bubble._mdQueued) return;
+  bubble._mdQueued = true;
+  requestAnimationFrame(() => {
+    bubble._mdQueued = false;
+    bubble.innerHTML = renderMd(mdStreamSafe(bubble._raw));
+  });
+}
+
+function agentMeta(id) {
+  return state.agentById.get(id) || { id: 'danny', name: 'Danny', function: 'Orchestrator' };
+}
+
 function speakerLabel(agentId) {
-  if (!agentId || agentId === 'danny') return 'Danny · Steadymade OS';
-  const opt = [...agentSel.options].find((o) => o.value === agentId);
-  const name = opt ? opt.text.split(' · ')[0] : agentId;
-  return `${name} · via Danny`;
+  const a = agentMeta(agentId);
+  return `${a.name} — ${a.function}`;
 }
 
 function currentSpeaker() {
-  return speakerLabel(agentSel.value);
+  return speakerLabel(agentSel.value || 'danny');
 }
 
 function timeAgo(iso) {
@@ -110,7 +133,7 @@ function clearWelcome() {
 }
 
 function showWelcome() {
-  chatEl.innerHTML = `<div class="welcome"><div class="w-label">STEADYMADE AI OS</div><h1>Danny Chat</h1><p>Select a specialist if needed. Messages are always routed through Danny.</p></div>`;
+  chatEl.innerHTML = `<div class="welcome"><div class="w-label">STEADYMADE AI OS</div><h1>Danny Chat</h1><p>Danny is the default orchestrator. You can switch to direct specialist mode in the selector.</p></div>`;
   stageEl.classList.add('centered');
 }
 
@@ -176,7 +199,8 @@ function selectAgent(id) {
   const opt = [...agentSel.options].find((o) => o.value === id);
   if (!opt) return false;
   agentSel.value = id;
-  inputEl.placeholder = id === 'danny' ? 'Message Danny…' : `Message ${opt.text.split(' · ')[0]} (via Danny)…`;
+  const meta = agentMeta(id);
+  inputEl.placeholder = id === 'danny' ? 'Message Danny…' : `Message ${meta.name}…`;
   return true;
 }
 
@@ -189,12 +213,16 @@ function applyPreset(agent, draft) {
   }
 }
 
-// ---------- conversation list ----------
-
 async function apiJson(url, opts) {
   const res = await fetch(url, opts);
-  if (!res.ok) throw new Error(`${res.status}`);
-  return res.json();
+  let data = {};
+  try { data = await res.json(); } catch {}
+  if (!res.ok) {
+    const err = new Error(data?.error || `${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  return data;
 }
 
 function renderConvList(items, { searchMode = false } = {}) {
@@ -209,7 +237,7 @@ function renderConvList(items, { searchMode = false } = {}) {
     item.innerHTML = `
       <div class="conv-title">${esc(s.title || 'Untitled')}</div>
       ${searchMode && s.snippet ? `<div class="conv-snippet">${esc(s.snippet)}</div>` : ''}
-      <div class="conv-meta"><span>${esc(speakerLabel(s.agent).split(' · ')[0])}</span><span>${timeAgo(s.updatedAt)}</span>${s.archived ? '<span>archived</span>' : ''}</div>
+      <div class="conv-meta"><span>${esc(agentMeta(s.agent).name)}</span><span>${timeAgo(s.updatedAt)}</span>${s.running ? '<span class="run-badge">RUNNING</span>' : ''}${s.archived ? '<span>archived</span>' : ''}</div>
       <div class="conv-actions">
         <button data-act="rename">RENAME</button>
         <button data-act="archive">${s.archived ? 'RESTORE' : 'ARCHIVE'}</button>
@@ -246,6 +274,20 @@ function renderConvList(items, { searchMode = false } = {}) {
   }
 }
 
+async function loadAgents() {
+  const { agents } = await apiJson('/api/agents');
+  state.agents = agents;
+  state.agentById = new Map(agents.map((a) => [a.id, a]));
+  agentSel.innerHTML = '';
+  for (const a of agents) {
+    const opt = document.createElement('option');
+    opt.value = a.id;
+    opt.textContent = `${a.name} — ${a.function}`;
+    agentSel.appendChild(opt);
+  }
+  selectAgent('danny');
+}
+
 async function loadSessions() {
   try {
     const { sessions } = await apiJson('/api/sessions');
@@ -253,30 +295,6 @@ async function loadSessions() {
     if (!convSearchEl.value.trim()) renderConvList(sessions);
   } catch {
     convListEl.innerHTML = '<div class="conv-empty">History unavailable.</div>';
-  }
-}
-
-async function loadConversation(id) {
-  if (state.running && state.abort) state.abort.abort();
-  if (incogEl.checked) {
-    incogEl.checked = false;
-    incogEl.parentElement.classList.remove('on');
-    state.incognitoSessionId = null;
-  }
-  try {
-    const { session, events } = await apiJson(`/api/session?id=${encodeURIComponent(id)}`);
-    state.conversationId = id;
-    localStorage.setItem(CONV_KEY, id);
-    selectAgent(session.agent || 'danny');
-    sessEl.textContent = `Conversation ${id.slice(0, 8)} · ${session.turns || 0} turns`;
-    chatEl.innerHTML = '';
-    stageEl.classList.remove('centered');
-    renderEvents(events, session);
-    renderConvList(state.sessions);
-    statusEl.textContent = 'ready';
-    scrollDown();
-  } catch {
-    statusEl.textContent = 'could not load conversation';
   }
 }
 
@@ -306,18 +324,276 @@ function renderEvents(events, session) {
   }
 }
 
-// ---------- boot ----------
+function detachStream() {
+  if (state.abort) state.abort.abort();
+  state.abort = null;
+  state.running = false;
+  state.streamConversationId = null;
+  state.streamIncognito = false;
+  state.live = null;
+  setBusy(false);
+}
 
-(function boot() {
-  localStorage.removeItem('steadymade_chat_session'); // legacy key
-  const params = new URLSearchParams(location.search);
-  applyPreset(params.get('agent'), params.get('msg'));
-  loadSessions().then(() => {
-    const stored = localStorage.getItem(CONV_KEY);
-    if (stored && state.sessions.some((s) => s.id === stored) && !params.get('msg')) {
-      loadConversation(stored);
+function ensureLive(agentId) {
+  if (state.live) return state.live;
+  const shell = addAssistantShell(speakerLabel(agentId));
+  state.live = {
+    agentId,
+    shell,
+    bubble: shell.querySelector('.bubble'),
+    activity: shell.querySelector('.activity'),
+    raw: '',
+    gotDelta: false,
+  };
+  return state.live;
+}
+
+function parseSseChunk(chunk) {
+  let ev = 'message';
+  let data = '';
+  for (const line of chunk.split('\n')) {
+    if (line.startsWith('event: ')) ev = line.slice(7).trim();
+    if (line.startsWith('data: ')) data += line.slice(6);
+  }
+  let payload = {};
+  try { payload = data ? JSON.parse(data) : {}; } catch {}
+  return { ev, payload };
+}
+
+function handleStreamEvent(ev, d, streamAgentId) {
+  if (state.streamConversationId && Number.isFinite(d._seq)) {
+    state.seqByConversation[state.streamConversationId] = d._seq;
+  }
+  switch (ev) {
+    case 'conversation':
+      if (d.id) {
+        state.conversationId = d.id;
+        state.streamConversationId = d.id;
+        localStorage.setItem(CONV_KEY, d.id);
+      }
+      break;
+    case 'init':
+      if (d.incognito) {
+        state.incognitoSessionId = d.session_id || state.incognitoSessionId;
+        sessEl.textContent = `Incognito${d.model ? ` · ${d.model}` : ''}`;
+      } else {
+        sessEl.textContent = `Conversation ${String(state.streamConversationId || state.conversationId || '').slice(0, 8)}${d.model ? ` · ${d.model}` : ''}`;
+      }
+      break;
+    case 'delta': {
+      const live = ensureLive(streamAgentId || agentSel.value || 'danny');
+      if (!live.gotDelta) {
+        live.bubble.innerHTML = '';
+        live.gotDelta = true;
+      }
+      live.raw += d.text || '';
+      renderStreamingMd(live.bubble, live.raw);
+      scrollDown();
+      break;
     }
-  });
+    case 'tool': {
+      const live = ensureLive(streamAgentId || agentSel.value || 'danny');
+      addToolChip(live.activity, d);
+      scrollDown();
+      break;
+    }
+    case 'result': {
+      const live = ensureLive(streamAgentId || agentSel.value || 'danny');
+      if (live.raw) live.bubble.innerHTML = renderMd(live.raw);
+      else if (d.error_text) live.bubble.innerHTML = `<em>${esc(d.error_text)}</em>`;
+      addMetaLine(live.shell, d);
+      scrollDown();
+      break;
+    }
+    case 'gate': {
+      if (!state.live) break;
+      if (Array.isArray(d.issues) && d.issues.length) {
+        const note = document.createElement('div');
+        note.className = 'gate note';
+        note.title = 'Editorial style check for client-facing drafts (em-dash / „nicht … sondern" pattern)';
+        note.textContent = `Style check: ${d.issues.join(' · ')}`;
+        state.live.shell.appendChild(note);
+        scrollDown();
+      }
+      break;
+    }
+    case 'stderr':
+      console.warn('[chat]', d.text);
+      break;
+    case 'done':
+      state.live = null;
+      state.running = false;
+      state.abort = null;
+      setBusy(false);
+      statusEl.textContent = 'ready';
+      loadSessions();
+      break;
+    default:
+      break;
+  }
+}
+
+async function streamFetch(url, opts, streamAgentId) {
+  const ctrl = new AbortController();
+  state.abort = ctrl;
+  state.running = true;
+  setBusy(true);
+  const res = await fetch(url, { ...opts, signal: ctrl.signal });
+  if (!res.ok) {
+    const txt = await res.text();
+    const err = new Error(txt || `${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf('\n\n')) >= 0) {
+      const { ev, payload } = parseSseChunk(buf.slice(0, idx));
+      handleStreamEvent(ev, payload, streamAgentId);
+      buf = buf.slice(idx + 2);
+    }
+  }
+}
+
+async function attachConversation(id, agentId) {
+  detachStream();
+  state.streamConversationId = id;
+  state.streamIncognito = false;
+  statusEl.textContent = 'reattached…';
+  const after = Number(state.seqByConversation[id] || 0);
+  try {
+    await streamFetch(`/api/chat/attach?conversationId=${encodeURIComponent(id)}&after=${after}`, { method: 'GET' }, agentId || 'danny');
+  } catch (err) {
+    if (err.name !== 'AbortError') statusEl.textContent = 'attach failed';
+  } finally {
+    if (!state.running) {
+      setBusy(false);
+      statusEl.textContent = 'ready';
+    }
+  }
+}
+
+async function loadConversation(id) {
+  detachStream();
+  if (incogEl.checked) {
+    incogEl.checked = false;
+    incogEl.parentElement.classList.remove('on');
+    state.incognitoSessionId = null;
+  }
+  try {
+    const { session, events } = await apiJson(`/api/session?id=${encodeURIComponent(id)}`);
+    state.conversationId = id;
+    localStorage.setItem(CONV_KEY, id);
+    selectAgent(session.agent || 'danny');
+    sessEl.textContent = `Conversation ${id.slice(0, 8)} · ${session.turns || 0} turns`;
+    chatEl.innerHTML = '';
+    stageEl.classList.remove('centered');
+    renderEvents(events, session);
+    renderConvList(state.sessions);
+    statusEl.textContent = session.running ? 'running…' : 'ready';
+    scrollDown();
+    if (session.running) attachConversation(id, session.agent || 'danny');
+  } catch {
+    statusEl.textContent = 'could not load conversation';
+  }
+}
+
+async function send() {
+  const text = inputEl.value.trim();
+  if (!text || state.running) return;
+
+  addUserMsg(text);
+  inputEl.value = '';
+  autosize();
+
+  state.live = null;
+  ensureLive(agentSel.value || 'danny');
+  statusEl.textContent = 'working…';
+
+  const incognito = incogEl.checked;
+  state.streamIncognito = incognito;
+  state.streamConversationId = incognito ? null : state.conversationId;
+
+  try {
+    await streamFetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(incognito ? {
+        message: text,
+        sessionId: state.incognitoSessionId,
+        incognito: true,
+        model: modelSel.value,
+        agent: agentSel.value,
+      } : {
+        message: text,
+        conversationId: state.conversationId,
+        model: modelSel.value,
+        agent: agentSel.value,
+      }),
+    }, agentSel.value || 'danny');
+  } catch (err) {
+    if (err.name !== 'AbortError') {
+      const live = ensureLive(agentSel.value || 'danny');
+      if (err.status === 409) live.bubble.innerHTML = '<em>This conversation already has an active run. Re-open it to attach.</em>';
+      else live.bubble.textContent = `Connection error: ${err.message}`;
+      state.live = null;
+    }
+    state.running = false;
+    state.abort = null;
+    setBusy(false);
+    statusEl.textContent = 'ready';
+    loadSessions();
+  }
+}
+
+async function stopActiveRun() {
+  if (!state.streamConversationId) {
+    detachStream();
+    return;
+  }
+  try {
+    await apiJson('/api/chat/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversationId: state.streamConversationId }),
+    });
+  } catch {
+    detachStream();
+    statusEl.textContent = 'stop failed';
+  }
+}
+
+function resetConversation() {
+  detachStream();
+  state.conversationId = null;
+  state.incognitoSessionId = null;
+  if (incogEl.checked) {
+    incogEl.checked = false;
+    incogEl.parentElement.classList.remove('on');
+  }
+  localStorage.removeItem(CONV_KEY);
+  sessEl.textContent = '';
+  showWelcome();
+  statusEl.textContent = 'ready';
+  renderConvList(state.sessions);
+}
+
+(async function boot() {
+  localStorage.removeItem('steadymade_chat_session');
+  const params = new URLSearchParams(location.search);
+  await loadAgents();
+  applyPreset(params.get('agent'), params.get('msg'));
+  await loadSessions();
+  const stored = localStorage.getItem(CONV_KEY);
+  if (stored && state.sessions.some((s) => s.id === stored) && !params.get('msg')) {
+    loadConversation(stored);
+  }
 })();
 
 window.addEventListener('message', (e) => {
@@ -344,152 +620,9 @@ convSearchEl.addEventListener('input', () => {
   }, 250);
 });
 
-// ---------- send ----------
-
-async function send() {
-  const text = inputEl.value.trim();
-  if (!text || state.running) return;
-
-  addUserMsg(text);
-  inputEl.value = '';
-  autosize();
-
-  state.running = true;
-  setBusy(true);
-  statusEl.textContent = 'working…';
-
-  const shell = addAssistantShell(currentSpeaker());
-  const bubble = shell.querySelector('.bubble');
-  const activity = shell.querySelector('.activity');
-  let raw = '';
-  let gotDelta = false;
-  const ctrl = new AbortController();
-  state.abort = ctrl;
-
-  try {
-    const res = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(incogEl.checked ? {
-        message: text,
-        sessionId: state.incognitoSessionId,
-        incognito: true,
-        model: modelSel.value,
-        agent: agentSel.value,
-      } : {
-        message: text,
-        conversationId: state.conversationId,
-        model: modelSel.value,
-        agent: agentSel.value,
-      }),
-      signal: ctrl.signal,
-    });
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = '';
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      let idx;
-      while ((idx = buf.indexOf('\n\n')) >= 0) {
-        handleEvent(buf.slice(0, idx));
-        buf = buf.slice(idx + 2);
-      }
-    }
-  } catch (err) {
-    if (err.name !== 'AbortError') bubble.textContent = `Connection error: ${err.message}`;
-  }
-
-  if (!gotDelta && bubble.querySelector('.typing')) bubble.innerHTML = '<em>No response received.</em>';
-  state.running = false;
-  state.abort = null;
-  setBusy(false);
-  statusEl.textContent = 'ready';
-  loadSessions();
-
-  function handleEvent(chunk) {
-    let ev = 'message';
-    let data = '';
-    for (const line of chunk.split('\n')) {
-      if (line.startsWith('event: ')) ev = line.slice(7).trim();
-      if (line.startsWith('data: ')) data += line.slice(6);
-    }
-    let d = {};
-    try { d = data ? JSON.parse(data) : {}; } catch {}
-
-    switch (ev) {
-      case 'conversation':
-        if (d.id) {
-          state.conversationId = d.id;
-          localStorage.setItem(CONV_KEY, d.id);
-        }
-        break;
-      case 'init':
-        if (d.incognito) {
-          state.incognitoSessionId = d.session_id || state.incognitoSessionId;
-          sessEl.textContent = `Incognito${d.model ? ` · ${d.model}` : ''}`;
-        } else {
-          sessEl.textContent = `Conversation ${String(state.conversationId || '').slice(0, 8)}${d.model ? ` · ${d.model}` : ''}`;
-        }
-        break;
-      case 'delta':
-        if (!gotDelta) {
-          bubble.innerHTML = '';
-          gotDelta = true;
-        }
-        raw += d.text || '';
-        bubble.textContent = raw;
-        scrollDown();
-        break;
-      case 'tool':
-        addToolChip(activity, d);
-        scrollDown();
-        break;
-      case 'result': {
-        if (raw) bubble.innerHTML = renderMd(raw);
-        else if (d.error_text) bubble.innerHTML = `<em>${esc(d.error_text)}</em>`;
-        addMetaLine(shell, d);
-        scrollDown();
-        break;
-      }
-      case 'gate':
-        if (Array.isArray(d.issues) && d.issues.length) {
-          const warn = document.createElement('div');
-          warn.className = 'gate warn';
-          warn.textContent = `⚠ Style gate: ${d.issues.join(' · ')}`;
-          shell.appendChild(warn);
-          scrollDown();
-        }
-        break;
-      case 'stderr':
-        console.warn('[chat]', d.text);
-        break;
-      default:
-        break;
-    }
-  }
-}
-
-function resetConversation() {
-  if (state.abort) state.abort.abort();
-  state.conversationId = null;
-  state.incognitoSessionId = null;
-  if (incogEl.checked) {
-    incogEl.checked = false;
-    incogEl.parentElement.classList.remove('on');
-  }
-  localStorage.removeItem(CONV_KEY);
-  sessEl.textContent = '';
-  showWelcome();
-  statusEl.textContent = 'ready';
-  renderConvList(state.sessions);
-}
-
 incogEl.addEventListener('change', () => {
   incogEl.parentElement.classList.toggle('on', incogEl.checked);
-  if (state.abort) state.abort.abort();
+  detachStream();
   state.incognitoSessionId = null;
   if (incogEl.checked) {
     state.conversationId = null;
@@ -504,12 +637,14 @@ incogEl.addEventListener('change', () => {
 });
 
 sendBtn.addEventListener('click', () => {
-  if (state.running && state.abort) {
-    state.abort.abort();
+  if (state.running) {
+    if (!state.streamIncognito && state.streamConversationId) stopActiveRun();
+    else detachStream();
     return;
   }
   send();
 });
+
 inputEl.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
@@ -519,7 +654,7 @@ inputEl.addEventListener('keydown', (e) => {
 inputEl.addEventListener('input', autosize);
 newBtn.addEventListener('click', resetConversation);
 agentSel.addEventListener('change', () => {
-  inputEl.placeholder = agentSel.value === 'danny'
-    ? 'Message Danny…'
-    : `Message ${agentSel.selectedOptions[0].text.split(' · ')[0]} (via Danny)…`;
+  const id = agentSel.value;
+  const meta = agentMeta(id);
+  inputEl.placeholder = id === 'danny' ? 'Message Danny…' : `Message ${meta.name}…`;
 });

@@ -10,13 +10,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const PUBLIC = path.join(__dirname, 'public');
 const PORT = Number(process.env.CHAT_PORT || 4012);
-const USAGE_LOG = path.join(ROOT, 'runs', 'chat-usage.jsonl');
+const LEGACY_USAGE_LOG = path.join(ROOT, 'runs', 'chat-usage.jsonl');
+const USAGE_LOG = path.join(ROOT, 'runs', 'usage.jsonl');
 // Product-owned chat history (gitignored): one JSONL per conversation plus a
 // sessions.json index. conversationId = session_id of the first turn (stable);
 // currentSessionId = latest turn's session id (each --resume returns a new one).
 const HISTORY_DIR = path.join(__dirname, 'history');
 const SESSIONS_FILE = path.join(__dirname, 'sessions.json');
 const SAFE_ID = /^[a-f0-9-]{8,64}$/;
+const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---\n?/;
 
 const PERMISSION_MODE = process.env.CHAT_PERMISSION_MODE || 'default';
 const ALLOWED_TOOLS = process.env.CHAT_ALLOWED_TOOLS || 'Task,Read,Glob,Grep,Skill,WebFetch';
@@ -28,23 +30,26 @@ const ALLOWED_TOOLS = process.env.CHAT_ALLOWED_TOOLS || 'Task,Read,Glob,Grep,Ski
 const DISALLOWED_TOOLS = process.env.CHAT_DISALLOWED_TOOLS
   ?? 'Write(./memory/MEMORY.md),Edit(./memory/MEMORY.md)';
 
-const AGENT_MAP = {
-  danny: { label: 'Danny', specialist: false },
-  atlas: { label: 'Atlas', specialist: true },
-  nora: { label: 'Nora', specialist: true },
-  mara: { label: 'Mara', specialist: true },
-  ada: { label: 'Ada', specialist: true },
-  clara: { label: 'Clara', specialist: true },
-  rosa: { label: 'Rosa', specialist: true },
-  jonas: { label: 'Jonas', specialist: true },
-  otto: { label: 'Otto', specialist: true },
-  dora: { label: 'Dora', specialist: true },
-  vera: { label: 'Vera', specialist: true },
-  noah: { label: 'Noah', specialist: true },
-  kira: { label: 'Kira', specialist: true },
-  simon: { label: 'Simon', specialist: true },
-  iris: { label: 'Iris', specialist: true },
+const AGENT_FILE_ALIASES = {
+  atlas: 'atlas-strategic-advisor.md',
+  nora: 'nora-knowledge-agent.md',
+  mara: 'mara-setup-agent.md',
+  ada: 'ada-marketing-strategy.md',
+  clara: 'clara-writer.md',
+  rosa: 'rosa-review.md',
+  jonas: 'jonas-calendar-agent.md',
+  otto: 'otto-proposal-agent.md',
+  dora: 'dora-document-agent.md',
+  vera: 'vera-visual-concept.md',
+  noah: 'noah-image-prompt-router.md',
+  kira: 'kira-image-generation-agent.md',
+  simon: 'simon-security-audit.md',
+  iris: 'iris-spec-architect.md',
 };
+
+// Editorial style gate applies to client-facing content drafts only —
+// running it on every conversational turn is noise (2026-07-10 decision).
+const CONTENT_AGENTS = new Set(['clara', 'otto', 'dora', 'rosa']);
 
 const DANNY_PROMPT = `FRONTEND MODE (Steadymade AI OS Chat).
 You are Danny, the central orchestrator. The user always talks to Danny.
@@ -74,6 +79,17 @@ Memory (hard rules for this runtime):
 - After every significant task (2+ agents or an external artifact), write the
   run log ./runs/YYYY-MM-DD-<slug>.md from runs/run-log-template.md, and
   record user corrections as #feedback entries in today's daily note.`;
+
+const DIRECT_SPECIALIST_SAFETY_ADDENDUM = `
+
+Safety addendum (mandatory in this runtime):
+- This is direct specialist mode (no Danny wrapper). Keep your specialist role.
+- Approval logic applies: never mark outputs approved/final/published/scheduled unless the user explicitly approves.
+- Never claim external execution (APIs, automations, publishing, image generation, exports, deployments) unless it actually ran in this environment.
+- Follow memory/source rules from CLAUDE.md: use source precedence, flag contradictions, and keep personal memory in ./memory/* only.
+- Keep claims evidence-based and bounded; if uncertain, say so.`;
+
+const RUN_REGISTRY = new Map(); // conversationId -> non-incognito run
 
 function findClaudeBin() {
   if (process.env.CLAUDE_BIN) return process.env.CLAUDE_BIN;
@@ -107,7 +123,8 @@ function lintText(text) {
 function appendUsageLog(entry) {
   try {
     fs.mkdirSync(path.dirname(USAGE_LOG), { recursive: true });
-    fs.appendFileSync(USAGE_LOG, JSON.stringify(entry) + '\n', 'utf8');
+    fs.appendFileSync(USAGE_LOG, JSON.stringify({ ...entry, source: 'chat' }) + '\n', 'utf8');
+    fs.appendFileSync(LEGACY_USAGE_LOG, JSON.stringify(entry) + '\n', 'utf8');
   } catch {
     // never fail chat flow because of local logging
   }
@@ -144,6 +161,39 @@ function sendJson(res, code, data) {
   res.end(JSON.stringify(data));
 }
 
+function hasJsonContentType(req) {
+  return String(req.headers['content-type'] || '').toLowerCase().includes('application/json');
+}
+
+function isTrustedLocalWebRequest(req, expectedPort) {
+  const expected = Number(expectedPort);
+  const origins = [req.headers.origin, req.headers.referer];
+  for (const raw of origins) {
+    if (!raw) continue;
+    try {
+      const u = new URL(String(raw));
+      const host = u.hostname;
+      const port = Number(u.port || (u.protocol === 'https:' ? 443 : 80));
+      if ((host === 'localhost' || host === '127.0.0.1') && port === expected) return true;
+    } catch {
+      // invalid header value
+    }
+  }
+  return false;
+}
+
+function requireTrustedLocalJsonMutation(req, res) {
+  if (!hasJsonContentType(req)) {
+    sendJson(res, 403, { error: 'forbidden: Content-Type must include application/json' });
+    return false;
+  }
+  if (!isTrustedLocalWebRequest(req, PORT)) {
+    sendJson(res, 403, { error: 'forbidden: untrusted origin/referer' });
+    return false;
+  }
+  return true;
+}
+
 function readBody(req) {
   return new Promise((resolve) => {
     let body = '';
@@ -152,10 +202,74 @@ function readBody(req) {
   });
 }
 
+function parseFrontmatter(text) {
+  const m = text.match(FRONTMATTER_RE);
+  if (!m) return {};
+  const out = {};
+  for (const line of m[1].split('\n')) {
+    const i = line.indexOf(':');
+    if (i <= 0) continue;
+    const key = line.slice(0, i).trim();
+    const val = line.slice(i + 1).trim();
+    if (key) out[key] = val;
+  }
+  return out;
+}
+
+function parseAgentMeta(content, fallbackId) {
+  const frontmatter = parseFrontmatter(content);
+  const heading = (content.match(/^#\s+(.+)$/m) || [])[1] || '';
+  const headingParts = heading.split(/[—-]/).map((s) => s.trim()).filter(Boolean);
+  const description = String(frontmatter.description || '');
+  const fnFromDescription = description.split(/[.]/)[0].trim();
+  const name = headingParts[0] || fallbackId[0].toUpperCase() + fallbackId.slice(1);
+  const fn = headingParts.slice(1).join(' — ') || fnFromDescription || 'Specialist';
+  const prompt = content.replace(FRONTMATTER_RE, '').trim();
+  return { name, fn, prompt };
+}
+
+function loadAgents() {
+  const agents = [{ id: 'danny', name: 'Danny', function: 'Orchestrator', mode: 'danny', prompt: DANNY_PROMPT }];
+  const agentsDir = path.join(ROOT, '.claude', 'agents');
+  for (const [id, fileName] of Object.entries(AGENT_FILE_ALIASES)) {
+    const file = path.join(agentsDir, fileName);
+    let name = id[0].toUpperCase() + id.slice(1);
+    let fn = 'Specialist';
+    let prompt = `You are ${name}, a specialist agent.`;
+    try {
+      if (fs.existsSync(file)) {
+        const parsed = parseAgentMeta(fs.readFileSync(file, 'utf8'), id);
+        name = parsed.name;
+        fn = parsed.fn;
+        prompt = parsed.prompt;
+      }
+    } catch {
+      // keep fallbacks
+    }
+    agents.push({ id, name, function: fn, mode: 'direct_specialist', prompt });
+  }
+  return agents;
+}
+
+const AGENTS = loadAgents();
+const AGENTS_BY_ID = new Map(AGENTS.map((a) => [a.id, a]));
+
+function listAgents(res) {
+  sendJson(res, 200, {
+    agents: AGENTS.map((a) => ({ id: a.id, name: a.name, function: a.function, mode: a.mode })),
+  });
+}
+
+function isConversationRunning(id) {
+  const run = RUN_REGISTRY.get(id);
+  return Boolean(run?.active);
+}
+
 function listSessions(res, includeArchived) {
   const sessions = Object.values(readSessions())
     .filter((s) => includeArchived || !s.archived)
-    .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+    .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+    .map((s) => ({ ...s, running: isConversationRunning(s.id) }));
   sendJson(res, 200, { sessions });
 }
 
@@ -163,7 +277,7 @@ function getSession(res, id) {
   if (!SAFE_ID.test(id || '')) return sendJson(res, 400, { error: 'invalid id' });
   const entry = readSessions()[id];
   if (!entry) return sendJson(res, 404, { error: 'not found' });
-  sendJson(res, 200, { session: entry, events: readHistory(id) });
+  sendJson(res, 200, { session: { ...entry, running: isConversationRunning(entry.id) }, events: readHistory(id) });
 }
 
 async function patchSession(req, res, field) {
@@ -180,7 +294,7 @@ async function patchSession(req, res, field) {
     sessions[id].archived = Boolean(body.archived ?? true);
   }
   writeSessions(sessions);
-  sendJson(res, 200, { ok: true, session: sessions[id] });
+  sendJson(res, 200, { ok: true, session: { ...sessions[id], running: isConversationRunning(id) } });
 }
 
 function searchSessions(res, q) {
@@ -199,21 +313,177 @@ function searchSessions(res, q) {
         }
       }
     }
-    if (snippet) results.push({ id: s.id, title: s.title, agent: s.agent, updatedAt: s.updatedAt, archived: !!s.archived, snippet });
+    if (snippet) {
+      results.push({
+        id: s.id,
+        title: s.title,
+        agent: s.agent,
+        updatedAt: s.updatedAt,
+        archived: !!s.archived,
+        running: isConversationRunning(s.id),
+        snippet,
+      });
+    }
     if (results.length >= 20) break;
   }
   sendJson(res, 200, { results });
 }
 
-function routeMessage(message, selectedAgent) {
-  const agent = AGENT_MAP[selectedAgent] || AGENT_MAP.danny;
-  if (!agent.specialist) return message;
-  return [
-    `[Routing instruction] User selected specialist "${agent.label}" in chat UI.`,
-    'Remain Danny. Route this request to that specialist via Task tool, then synthesize the final answer as Danny.',
-    '',
-    message,
-  ].join('\n');
+function openSse(res) {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+}
+
+function resolveAgent(selectedId) {
+  return AGENTS_BY_ID.get(selectedId) || AGENTS_BY_ID.get('danny');
+}
+
+function buildSystemPrompt(agent) {
+  if (!agent || agent.id === 'danny') return DANNY_PROMPT;
+  return `${agent.prompt.trim()}\n${DIRECT_SPECIALIST_SAFETY_ADDENDUM}`;
+}
+
+function addSubscriber(run, res) {
+  run.subscribers.add(res);
+}
+
+function removeSubscriber(run, res) {
+  run.subscribers.delete(res);
+}
+
+function emitRunEvent(run, event, data = {}) {
+  const payload = { ...data, _seq: ++run.seq };
+  run.events.push({ seq: run.seq, event, data: payload });
+  for (const sub of [...run.subscribers]) {
+    if (sub.writableEnded || sub.destroyed) {
+      run.subscribers.delete(sub);
+      continue;
+    }
+    sse(sub, event, payload);
+  }
+}
+
+function replayRunEvents(run, res, after = 0) {
+  for (const ev of run.events) {
+    if (ev.seq > after) sse(res, ev.event, ev.data);
+  }
+}
+
+function closeSubscribers(run) {
+  for (const sub of [...run.subscribers]) {
+    if (!sub.writableEnded) sub.end();
+    run.subscribers.delete(sub);
+  }
+}
+
+function persistConversationTurn(run, assistantEntry) {
+  if (run.incognito || !run.conversationId || run.historyFlushed) return;
+  for (const toolEntry of run.pendingToolEvents) appendHistory(run.conversationId, toolEntry);
+  if (assistantEntry) appendHistory(run.conversationId, assistantEntry);
+  const sessions = readSessions();
+  if (sessions[run.conversationId]) {
+    sessions[run.conversationId].updatedAt = new Date().toISOString();
+    sessions[run.conversationId].agent = run.selectedAgent;
+    sessions[run.conversationId].currentSessionId = run.meta.session_id || sessions[run.conversationId].currentSessionId;
+    if (assistantEntry) sessions[run.conversationId].turns = (sessions[run.conversationId].turns || 0) + 1;
+    writeSessions(sessions);
+  }
+  run.historyFlushed = true;
+}
+
+function finalizeUsage(run, override = {}) {
+  if (run.logged) return;
+  run.logged = true;
+  appendUsageLog({
+    timestamp: new Date().toISOString(),
+    session_id: run.incognito ? null : (override.session_id ?? run.meta.session_id),
+    selected_agent: run.selectedAgent,
+    mode: run.mode,
+    model: override.model ?? run.meta.model,
+    duration_ms: override.duration_ms ?? run.meta.duration_ms ?? (Date.now() - run.startedAt),
+    cost_usd: override.cost_usd ?? run.meta.cost_usd,
+    num_turns: override.num_turns ?? run.meta.num_turns,
+    input_tokens: override.input_tokens ?? run.meta.input_tokens,
+    output_tokens: override.output_tokens ?? run.meta.output_tokens,
+    cache_creation_input_tokens: override.cache_creation_input_tokens ?? run.meta.cache_creation_input_tokens,
+    cache_read_input_tokens: override.cache_read_input_tokens ?? run.meta.cache_read_input_tokens,
+    total_tokens: override.total_tokens ?? run.meta.total_tokens,
+    is_error: Boolean(override.is_error ?? run.meta.is_error),
+    incognito: run.incognito || undefined,
+  });
+}
+
+function buildPartialAssistant(run) {
+  const text = String(run.finalText || '').trim();
+  if (!text) return null;
+  return {
+    t: 'assistant',
+    ts: new Date().toISOString(),
+    text,
+    meta: {
+      session_id: run.meta.session_id,
+      model: run.meta.model,
+      duration_ms: Date.now() - run.startedAt,
+      cost_usd: run.meta.cost_usd,
+      num_turns: run.meta.num_turns,
+      total_tokens: run.meta.total_tokens,
+      is_error: true,
+      stopped: true,
+    },
+  };
+}
+
+function finalizeRun(run, { code = 0, isError = false, assistantEntry = run.pendingAssistant } = {}) {
+  if (run.finalState?.done) return;
+  run.active = false;
+  if (!assistantEntry && run.stopRequested) assistantEntry = buildPartialAssistant(run);
+  persistConversationTurn(run, assistantEntry);
+  run.meta.duration_ms = run.meta.duration_ms ?? (Date.now() - run.startedAt);
+  run.meta.is_error = Boolean(run.meta.is_error || isError || run.stopRequested || code !== 0);
+  finalizeUsage(run, { duration_ms: Date.now() - run.startedAt, is_error: run.meta.is_error });
+  emitRunEvent(run, 'done', { code, stopped: !!run.stopRequested });
+  closeSubscribers(run);
+  if (run.incognito && run.meta.session_id) {
+    const slug = ROOT.replace(/[^a-zA-Z0-9]/g, '-');
+    fs.rm(path.join(os.homedir(), '.claude', 'projects', slug, `${run.meta.session_id}.jsonl`), { force: true }, () => {});
+  }
+  run.finalState = { done: true, code, stopped: !!run.stopRequested, endedAt: Date.now() };
+}
+
+function handleAttach(req, res, url) {
+  const id = String(url.searchParams.get('conversationId') || '').trim();
+  if (!SAFE_ID.test(id)) return sendJson(res, 400, { error: 'invalid conversationId' });
+  const run = RUN_REGISTRY.get(id);
+  if (!run) return sendJson(res, 404, { error: 'no run' });
+  const after = Number(url.searchParams.get('after') || 0);
+  openSse(res);
+  replayRunEvents(run, res, Number.isFinite(after) ? after : 0);
+  if (!run.active) {
+    res.end();
+    return;
+  }
+  addSubscriber(run, res);
+  res.on('close', () => removeSubscriber(run, res));
+}
+
+async function handleStop(req, res) {
+  const body = await readBody(req);
+  const conversationId = String(body.conversationId || '').trim();
+  if (!SAFE_ID.test(conversationId)) return sendJson(res, 400, { error: 'invalid conversationId' });
+  const run = RUN_REGISTRY.get(conversationId);
+  if (!run || !run.active) return sendJson(res, 404, { error: 'no active run' });
+  run.stopRequested = true;
+  finalizeRun(run, { code: 143, isError: true });
+  try { run.child.kill('SIGTERM'); } catch {}
+  setTimeout(() => {
+    if (run.processClosed) return;
+    try { run.child.kill('SIGKILL'); } catch {}
+  }, 1200);
+  sendJson(res, 200, { ok: true, conversationId });
 }
 
 function toolDetail(block) {
@@ -231,7 +501,6 @@ function toolDetail(block) {
 }
 
 function handleChat(req, res) {
-  const startedAt = Date.now();
   let body = '';
   req.on('data', (chunk) => { body += chunk; });
   req.on('end', () => {
@@ -243,8 +512,9 @@ function handleChat(req, res) {
     const requestedConvId = typeof payload.conversationId === 'string' && SAFE_ID.test(payload.conversationId.trim())
       ? payload.conversationId.trim() : '';
     const model = typeof payload.model === 'string' ? payload.model.trim() : '';
-    const selectedAgent = AGENT_MAP[payload.agent] ? payload.agent : 'danny';
-    const mode = selectedAgent === 'danny' ? 'danny' : 'via_danny_specialist';
+    const agent = resolveAgent(payload.agent);
+    const selectedAgent = agent.id;
+    const mode = selectedAgent === 'danny' ? 'danny' : 'direct_specialist';
     // Incognito turns leave no trace: no history, no index entry, no memory
     // writes (instructed below). Multi-turn continuity works in-memory via
     // the legacy sessionId field, which the UI never persists.
@@ -263,24 +533,61 @@ function handleChat(req, res) {
       return;
     }
 
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    });
+    if (!incognito && convId && isConversationRunning(convId)) {
+      sendJson(res, 409, { error: 'conversation already has an active run' });
+      return;
+    }
 
-    const routedMessage = incognito
-      ? `[Incognito turn] Do not write memory files, daily notes, or run logs for this turn, and do not store anything about this exchange anywhere.\n\n${routeMessage(message, selectedAgent)}`
-      : routeMessage(message, selectedAgent);
+    openSse(res);
+
+    const run = {
+      startedAt: Date.now(),
+      selectedAgent,
+      mode,
+      model: model || 'default',
+      incognito,
+      conversationId: convId || null,
+      seq: 0,
+      events: [],
+      subscribers: new Set(),
+      finalState: null,
+      active: true,
+      stopRequested: false,
+      historyFlushed: false,
+      pendingToolEvents: [],
+      pendingAssistant: null,
+      finalText: '',
+      tokenUsage: {},
+      logged: false,
+      processClosed: false,
+      meta: {
+        session_id: resumeId || null,
+        model: model || 'default',
+        duration_ms: null,
+        cost_usd: null,
+        num_turns: null,
+        input_tokens: null,
+        output_tokens: null,
+        cache_creation_input_tokens: null,
+        cache_read_input_tokens: null,
+        total_tokens: null,
+        is_error: false,
+      },
+    };
+    addSubscriber(run, res);
+    if (!incognito && convId) RUN_REGISTRY.set(convId, run);
+
+    const runMessage = incognito
+      ? `[Incognito turn] Do not write memory files, daily notes, or run logs for this turn, and do not store anything about this exchange anywhere.\n\n${message}`
+      : message;
     const args = [
-      '-p', routedMessage,
+      '-p', runMessage,
       '--output-format', 'stream-json',
       '--include-partial-messages',
       '--verbose',
       '--permission-mode', PERMISSION_MODE,
       '--allowedTools', ALLOWED_TOOLS,
-      '--append-system-prompt', DANNY_PROMPT,
+      '--append-system-prompt', buildSystemPrompt(agent),
     ];
     if (DISALLOWED_TOOLS) args.push('--disallowedTools', DISALLOWED_TOOLS);
     if (resumeId) args.push('--resume', resumeId);
@@ -292,54 +599,14 @@ function handleChat(req, res) {
     delete env.CLAUDE_CODE_SSE_PORT;
 
     const child = spawn(CLAUDE_BIN, args, { cwd: ROOT, env });
+    run.child = child;
     child.stdin.end();
 
     let buffer = '';
-    let finalText = '';
-    let meta = {
-      session_id: resumeId || null,
-      model: model || 'default',
-      duration_ms: null,
-      cost_usd: null,
-      num_turns: null,
-      input_tokens: null,
-      output_tokens: null,
-      cache_creation_input_tokens: null,
-      cache_read_input_tokens: null,
-      total_tokens: null,
-      is_error: false,
-    };
-    let tokenUsage = {};
-    let logged = false;
-    let pendingAssistant = null; // buffered until child exit — the CLI can emit more than one result event per turn
-
-    const finalizeLog = (override = {}) => {
-      if (logged) return;
-      logged = true;
-      appendUsageLog({
-        timestamp: new Date().toISOString(),
-        session_id: incognito ? null : (override.session_id ?? meta.session_id),
-        selected_agent: selectedAgent,
-        mode,
-        model: override.model ?? meta.model,
-        duration_ms: override.duration_ms ?? meta.duration_ms ?? (Date.now() - startedAt),
-        cost_usd: override.cost_usd ?? meta.cost_usd,
-        num_turns: override.num_turns ?? meta.num_turns,
-        input_tokens: override.input_tokens ?? meta.input_tokens,
-        output_tokens: override.output_tokens ?? meta.output_tokens,
-        cache_creation_input_tokens: override.cache_creation_input_tokens ?? meta.cache_creation_input_tokens,
-        cache_read_input_tokens: override.cache_read_input_tokens ?? meta.cache_read_input_tokens,
-        total_tokens: override.total_tokens ?? meta.total_tokens,
-        is_error: Boolean(override.is_error ?? meta.is_error),
-        incognito: incognito || undefined,
-      });
-    };
 
     child.on('error', (err) => {
-      sse(res, 'stderr', { text: `spawn error: ${err.message}` });
-      finalizeLog({ is_error: true, duration_ms: Date.now() - startedAt });
-      sse(res, 'done', { code: -1 });
-      res.end();
+      emitRunEvent(run, 'stderr', { text: `spawn error: ${err.message}` });
+      finalizeRun(run, { code: -1, isError: true });
     });
 
     child.stdout.on('data', (chunk) => {
@@ -348,38 +615,23 @@ function handleChat(req, res) {
       while ((idx = buffer.indexOf('\n')) >= 0) {
         const line = buffer.slice(0, idx).trim();
         buffer = buffer.slice(idx + 1);
-        if (line) forwardLine(line);
+        if (line && run.active) forwardLine(line);
       }
     });
 
     child.stderr.on('data', (chunk) => {
-      sse(res, 'stderr', { text: String(chunk) });
+      if (run.active) emitRunEvent(run, 'stderr', { text: String(chunk) });
     });
 
     child.on('close', (code) => {
-      if (incognito && meta.session_id) {
-        // the no-trace promise includes the CLI's own transcript file
-        const slug = ROOT.replace(/[^a-zA-Z0-9]/g, '-');
-        fs.rm(path.join(os.homedir(), '.claude', 'projects', slug, `${meta.session_id}.jsonl`), { force: true }, () => {});
-      }
-      if (convId && pendingAssistant) {
-        appendHistory(convId, pendingAssistant);
-        const s = readSessions();
-        if (s[convId]) {
-          s[convId].currentSessionId = pendingAssistant.meta.session_id || s[convId].currentSessionId;
-          s[convId].updatedAt = new Date().toISOString();
-          s[convId].turns = (s[convId].turns || 0) + 1;
-          s[convId].agent = selectedAgent;
-          writeSessions(s);
-        }
-      }
-      finalizeLog({ is_error: code !== 0 && !meta.duration_ms, duration_ms: Date.now() - startedAt });
-      sse(res, 'done', { code });
-      res.end();
+      run.processClosed = true;
+      finalizeRun(run, { code, isError: code !== 0 && !run.meta.duration_ms });
     });
 
     res.on('close', () => {
-      if (!res.writableEnded) {
+      removeSubscriber(run, res);
+      if (incognito && run.active && !res.writableEnded) {
+        run.stopRequested = true;
         try { child.kill('SIGTERM'); } catch {}
       }
     });
@@ -390,12 +642,14 @@ function handleChat(req, res) {
       const isSub = !!ev.parent_tool_use_id;
 
       if (ev.type === 'system' && ev.subtype === 'init') {
-        meta.session_id = ev.session_id || meta.session_id;
-        meta.model = ev.model || meta.model;
+        run.meta.session_id = ev.session_id || run.meta.session_id;
+        run.meta.model = ev.model || run.meta.model;
         if (!convId && ev.session_id && !incognito) {
           // first turn of a new conversation — the first session id becomes
           // the stable conversation id
           convId = ev.session_id;
+          run.conversationId = convId;
+          RUN_REGISTRY.set(convId, run);
           const s = readSessions();
           s[convId] = {
             id: convId,
@@ -410,79 +664,79 @@ function handleChat(req, res) {
           writeSessions(s);
           appendHistory(convId, userEntry);
         }
-        if (convId) sse(res, 'conversation', { id: convId });
-        sse(res, 'init', { session_id: ev.session_id, model: ev.model, incognito });
+        if (convId) emitRunEvent(run, 'conversation', { id: convId });
+        emitRunEvent(run, 'init', { session_id: ev.session_id, model: ev.model, incognito });
         return;
       }
 
       if (ev.type === 'stream_event' && !isSub) {
         const e = ev.event;
         if (e?.type === 'content_block_delta' && e.delta?.type === 'text_delta') {
-          finalText += e.delta.text;
-          sse(res, 'delta', { text: e.delta.text });
+          run.finalText += e.delta.text;
+          emitRunEvent(run, 'delta', { text: e.delta.text });
         }
         return;
       }
 
       if (ev.type === 'assistant') {
-        if (ev.message?.usage) tokenUsage = ev.message.usage;
+        if (ev.message?.usage) run.tokenUsage = ev.message.usage;
         const blocks = ev.message?.content || [];
         for (const b of blocks) {
           if (b.type === 'tool_use') {
-            sse(res, 'tool', { name: b.name, sub: isSub, detail: toolDetail(b) });
-            if (convId) appendHistory(convId, { t: 'tool', ts: new Date().toISOString(), name: b.name, sub: isSub, detail: toolDetail(b) });
+            const toolEvent = { name: b.name, sub: isSub, detail: toolDetail(b) };
+            emitRunEvent(run, 'tool', toolEvent);
+            if (convId) run.pendingToolEvents.push({ t: 'tool', ts: new Date().toISOString(), ...toolEvent });
           }
         }
         return;
       }
 
       if (ev.type === 'result') {
-        const text = ev.result || finalText;
-        meta = {
-          session_id: ev.session_id || meta.session_id,
-          model: meta.model,
+        const text = ev.result || run.finalText;
+        run.meta = {
+          session_id: ev.session_id || run.meta.session_id,
+          model: run.meta.model,
           duration_ms: ev.duration_ms,
           cost_usd: ev.total_cost_usd,
           num_turns: ev.num_turns,
-          input_tokens: tokenUsage.input_tokens ?? null,
-          output_tokens: tokenUsage.output_tokens ?? null,
-          cache_creation_input_tokens: tokenUsage.cache_creation_input_tokens ?? null,
-          cache_read_input_tokens: tokenUsage.cache_read_input_tokens ?? null,
-          total_tokens: tokenUsage.total_tokens ?? (
-            tokenUsage.input_tokens != null || tokenUsage.output_tokens != null
-              ? Number(tokenUsage.input_tokens || 0) + Number(tokenUsage.output_tokens || 0) + Number(tokenUsage.cache_creation_input_tokens || 0) + Number(tokenUsage.cache_read_input_tokens || 0)
+          input_tokens: run.tokenUsage.input_tokens ?? null,
+          output_tokens: run.tokenUsage.output_tokens ?? null,
+          cache_creation_input_tokens: run.tokenUsage.cache_creation_input_tokens ?? null,
+          cache_read_input_tokens: run.tokenUsage.cache_read_input_tokens ?? null,
+          total_tokens: run.tokenUsage.total_tokens ?? (
+            run.tokenUsage.input_tokens != null || run.tokenUsage.output_tokens != null
+              ? Number(run.tokenUsage.input_tokens || 0) + Number(run.tokenUsage.output_tokens || 0) + Number(run.tokenUsage.cache_creation_input_tokens || 0) + Number(run.tokenUsage.cache_read_input_tokens || 0)
               : null
           ),
           is_error: Boolean(ev.is_error),
         };
-        pendingAssistant = {
+        run.pendingAssistant = {
           t: 'assistant',
           ts: new Date().toISOString(),
           text,
           meta: {
-            session_id: meta.session_id,
-            model: meta.model,
-            duration_ms: meta.duration_ms,
-            cost_usd: meta.cost_usd,
-            num_turns: meta.num_turns,
-            total_tokens: meta.total_tokens,
-            is_error: meta.is_error,
+            session_id: run.meta.session_id,
+            model: run.meta.model,
+            duration_ms: run.meta.duration_ms,
+            cost_usd: run.meta.cost_usd,
+            num_turns: run.meta.num_turns,
+            total_tokens: run.meta.total_tokens,
+            is_error: run.meta.is_error,
           },
         };
-        sse(res, 'result', {
-          session_id: meta.session_id,
-          model: meta.model,
-          duration_ms: meta.duration_ms,
-          cost_usd: meta.cost_usd,
-          num_turns: meta.num_turns,
-          input_tokens: meta.input_tokens,
-          output_tokens: meta.output_tokens,
-          total_tokens: meta.total_tokens,
-          is_error: meta.is_error,
-          error_text: meta.is_error && !finalText ? text : undefined,
+        emitRunEvent(run, 'result', {
+          session_id: run.meta.session_id,
+          model: run.meta.model,
+          duration_ms: run.meta.duration_ms,
+          cost_usd: run.meta.cost_usd,
+          num_turns: run.meta.num_turns,
+          input_tokens: run.meta.input_tokens,
+          output_tokens: run.meta.output_tokens,
+          total_tokens: run.meta.total_tokens,
+          is_error: run.meta.is_error,
+          error_text: run.meta.is_error && !run.finalText ? text : undefined,
         });
-        sse(res, 'gate', { issues: lintText(text) });
-        finalizeLog();
+        emitRunEvent(run, 'gate', { issues: CONTENT_AGENTS.has(selectedAgent) ? lintText(text) : [] });
       }
     }
   });
@@ -519,7 +773,16 @@ function serveStatic(req, res) {
 
 http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
-  if (req.method === 'POST' && url.pathname === '/api/chat') return handleChat(req, res);
+  if (req.method === 'POST' && url.pathname === '/api/chat') {
+    if (!requireTrustedLocalJsonMutation(req, res)) return;
+    return handleChat(req, res);
+  }
+  if (req.method === 'GET' && url.pathname === '/api/chat/attach') return handleAttach(req, res, url);
+  if (req.method === 'POST' && url.pathname === '/api/chat/stop') {
+    if (!requireTrustedLocalJsonMutation(req, res)) return;
+    return void handleStop(req, res);
+  }
+  if (req.method === 'GET' && url.pathname === '/api/agents') return listAgents(res);
   if (req.method === 'GET' && url.pathname === '/api/sessions') return listSessions(res, url.searchParams.get('all') === '1');
   if (req.method === 'GET' && url.pathname === '/api/sessions/search') return searchSessions(res, url.searchParams.get('q'));
   if (req.method === 'GET' && url.pathname === '/api/session') return getSession(res, url.searchParams.get('id'));

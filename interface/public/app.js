@@ -16,6 +16,8 @@ const state = {
   kn: {
     folder: null,        // active folder key in Knowledge view
     level: '',           // folder level shown in the folder column ('' = root)
+    docsMode: 'docs',    // docs | artifacts
+    filter: 'all',       // all | review-needed (docs mode)
     doc: null,           // active doc path
     content: '',
     savedContent: '',
@@ -29,8 +31,6 @@ const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').
 
 const VIEW_TITLES = {
   chat: 'Chat',
-  usage: 'Usage',
-  memory: 'Memory',
   command: 'Command Center',
   map: 'Agent Map',
   knowledge: 'Knowledge Docs',
@@ -117,6 +117,10 @@ function statusBadgeClass(status) {
   return 'badge-gray';
 }
 
+function isReviewStatus(status) {
+  return status === 'needs_review' || status === 'needs review' || status === 'conflict';
+}
+
 function timeAgo(ms) {
   const diff = Date.now() - ms;
   const m = Math.floor(diff / 60000);
@@ -149,6 +153,12 @@ async function boot() {
   try { applyFlowsCfg(await apiJson('/api/workflows')); } catch { /* base workflows only */ }
   const live = state.system.agents.length + 1; // +1 = Danny (docs/)
   $('#status-agents').textContent = live + ' active';
+  const u = state.system.user;
+  if (u) {
+    const uEl = $('#status-user');
+    uEl.textContent = u.name || u.id;
+    if (u.role) uEl.title = u.role;
+  }
   bindChrome();
   setView('command');
   checkOnboarding(); // non-blocking: shows the onboarding guide if the workspace is not fully onboarded
@@ -157,15 +167,6 @@ async function boot() {
 function bindChrome() {
   $$('#nav .nav-item').forEach((btn) =>
     btn.addEventListener('click', () => setView(btn.dataset.view)));
-
-  $('#btn-new-workflow').addEventListener('click', () => {
-    setView('workflows');
-    requestAnimationFrame(() => openWorkflowDrawer(null));
-  });
-  $('#btn-add-knowledge').addEventListener('click', addKnowledge);
-
-  // true browser fullscreen — hides browser chrome entirely
-  $('#btn-fullscreen').addEventListener('click', toggleFullscreen);
 
   // search
   const input = $('#search');
@@ -183,11 +184,6 @@ function bindChrome() {
       saveDoc();
     }
   });
-}
-
-function toggleFullscreen() {
-  if (document.fullscreenElement) document.exitFullscreen();
-  else document.documentElement.requestFullscreen().catch(() => toast('FULLSCREEN BLOCKED BY BROWSER', true));
 }
 
 function openChat(agentId, draftMessage) {
@@ -220,9 +216,8 @@ function setView(view) {
   el.innerHTML = '';
   ({ command: renderCommand, map: renderMap, knowledge: renderKnowledge,
      workflows: renderWorkflows, scheduler: renderScheduler, skills: renderSkills,
-      usage: renderUsage, memory: renderMemory,
       departments: renderDepartments,
-      artifacts: renderArtifacts, settings: renderSettings }[view])(el);
+       artifacts: renderArtifacts, settings: renderSettings }[view])(el);
 }
 
 // ---------------------------------------------------------------- search
@@ -255,32 +250,45 @@ function renderSearch(q) {
 function renderCommand(el) {
   const docs = allDocs();
   const statuses = docs.map((d) => docMeta(d.path).status);
-  const needsReview = statuses.filter((s) => s === 'needs_review' || s === 'needs review' || s === 'conflict').length;
+  const needsReview = statuses.filter((s) => isReviewStatus(s)).length;
   const approved = statuses.filter((s) => s === 'approved').length;
   const recent = [...docs].sort((a, b) => b.mtime - a.mtime).slice(0, 7);
+  // Knowledge health: capped list, lowest approval ratio first (stays actionable)
+  const healthAll = sortedFolders()
+    .filter((f) => f.docs.length)
+    .map((f) => {
+      const ok = f.docs.filter((d) => docMeta(d.path).status === 'approved').length;
+      return { name: f.name, ok, total: f.docs.length, pct: Math.round((ok / f.docs.length) * 100) };
+    });
+  const health = [...healthAll].sort((a, b) => a.pct - b.pct || b.total - a.total).slice(0, 6);
 
   el.innerHTML = `
   <div class="view-pad">
     <div class="cc-grid">
-      <div class="card card-dark stat-card">
+      <div class="card card-dark stat-card stat-link" data-goto="map" title="Open Agent Map">
         <div class="mono-label" style="color:#7E978A">AGENTS ONLINE</div>
         <div class="stat-value">${AGENTS.length}</div>
         <div class="stat-note">Danny + ${AGENTS.length - 1} specialists, ${DEPARTMENTS.length} departments</div>
       </div>
-      <div class="card stat-card">
+      <div class="card stat-card stat-link" data-goto="knowledge" title="Open Knowledge Docs">
         <div class="mono-label">KNOWLEDGE DOCS</div>
         <div class="stat-value">${docs.length}</div>
         <div class="stat-note">${state.system.folders.length} folders, Markdown on disk</div>
       </div>
-      <div class="card stat-card">
+      <div class="card stat-card stat-link" data-act="review-items" title="Open review-needed docs in Knowledge Docs">
         <div class="mono-label">OPEN REVIEW ITEMS</div>
         <div class="stat-value" style="color:${needsReview ? 'var(--apricot-deep)' : 'var(--headline)'}">${needsReview}</div>
         <div class="stat-note">${approved} approved · ${docs.length - approved - needsReview} draft</div>
       </div>
-      <div class="card stat-card">
+      <div class="card stat-card stat-link" data-goto="workflows" title="Open Workflows">
         <div class="mono-label">WORKFLOWS</div>
         <div class="stat-value">${FLOWS.length}</div>
         <div class="stat-note">All routed through Danny</div>
+      </div>
+      <div class="card stat-card stat-link" data-act="usage-details" title="Open usage details">
+        <div class="mono-label">USAGE</div>
+        <div class="stat-value" id="cc-usage-cost">…</div>
+        <div class="stat-note" id="cc-usage-note">Loading usage summary…</div>
       </div>
     </div>
 
@@ -305,25 +313,22 @@ function renderCommand(el) {
 
       <div style="display:flex;flex-direction:column;gap:14px">
         <div class="card">
-          <div class="section-title">Knowledge Health</div>
-          ${sortedFolders().map((f) => {
-            const ok = f.docs.filter((d) => docMeta(d.path).status === 'approved').length;
-            const pct = f.docs.length ? Math.round((ok / f.docs.length) * 100) : 0;
-            return `<div class="kh-row">
+          <div class="section-title" style="display:flex;align-items:center;gap:8px"><span style="flex:1">Knowledge Health</span><button class="chip" data-goto="knowledge">VIEW ALL</button></div>
+          ${health.map((f) => `<div class="kh-row kh-link" data-kh="${esc(f.name)}" title="Open in Knowledge Docs">
               <span style="font-weight:600;color:var(--headline)">${esc(f.name)}</span>
-              <span class="kh-bar"><i style="width:${pct}%"></i></span>
-              <span class="list-meta">${ok}/${f.docs.length} approved</span>
-            </div>`;
-          }).join('')}
+              <span class="kh-bar"><i style="width:${f.pct}%"></i></span>
+              <span class="list-meta">${f.ok}/${f.total} approved</span>
+            </div>`).join('')}
+          ${healthAll.length > health.length ? `<div class="stat-note" style="margin-top:6px">Lowest approval ratio first · ${healthAll.length - health.length} more folders in Knowledge Docs.</div>` : ''}
         </div>
         <div class="card">
-          <div class="section-title">Recent Artifacts</div>
-          ${state.system.artifacts.length ? state.system.artifacts.map((a) => `
-            <div class="list-row">
+          <div class="section-title" style="display:flex;align-items:center;gap:8px"><span style="flex:1">Recent Artifacts</span><button class="chip" data-goto="artifacts">VIEW ALL</button></div>
+          ${state.system.artifacts.length ? state.system.artifacts.slice(0, 6).map((a) => `
+            <button class="list-row" data-art-open="${esc(a.path)}" title="Open file">
               <span class="badge badge-gray">FILE</span>
               <span class="list-title">${esc(a.name)}</span>
-              <span class="list-meta">${timeAgo(a.mtime)}</span>
-            </div>`).join('') : '<div class="stat-note">No artifacts yet.</div>'}
+              <span class="list-meta">${timeAgo(a.ctime || a.mtime)}</span>
+            </button>`).join('') : '<div class="stat-note">No artifacts yet.</div>'}
         </div>
         <div class="card card-dark">
           <div class="section-title" style="color:#7E978A">Operating Principle</div>
@@ -337,6 +342,76 @@ function renderCommand(el) {
 
   $$('[data-open]', el).forEach((b) => b.addEventListener('click', () => openInEditor(b.dataset.open)));
   $$('[data-agent]', el).forEach((b) => b.addEventListener('click', () => { setView('map'); selectMapAgent(b.dataset.agent); }));
+  $$('[data-goto]', el).forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); setView(b.dataset.goto); }));
+  $('[data-act="usage-details"]', el)?.addEventListener('click', openUsageDrawer);
+  $('[data-act="review-items"]', el)?.addEventListener('click', () => activateKnowledgeReviewFilter());
+  $$('[data-kh]', el).forEach((b) => b.addEventListener('click', () => selectKnFolder(b.dataset.kh)));
+  $$('[data-art-open]', el).forEach((b) => b.addEventListener('click', () =>
+    window.open('/api/artifact?path=' + encodeURIComponent(b.dataset.artOpen), '_blank')));
+  refreshCommandUsageCard(el);
+}
+
+async function refreshCommandUsageCard(el) {
+  const costEl = $('#cc-usage-cost', el);
+  const noteEl = $('#cc-usage-note', el);
+  if (!costEl || !noteEl) return;
+  try {
+    const data = await apiJson('/api/usage');
+    if (state.view !== 'command') return;
+    const s = data.summary || {};
+    costEl.textContent = fmtUsd(s.total_cost_usd);
+    noteEl.textContent = `${fmtInt(s.count)} entries · ${fmtInt(s.sessions)} sessions · ${fmtInt(s.total_tokens)} tokens`;
+  } catch {
+    costEl.textContent = '—';
+    noteEl.textContent = 'Usage unavailable';
+  }
+}
+
+function activateKnowledgeReviewFilter({ openDrawer = false } = {}) {
+  const reviewDocs = allDocs().filter((d) => isReviewStatus(docMeta(d.path).status));
+  state.kn.filter = 'review-needed';
+  state.kn.docsMode = 'docs';
+  state.kn.doc = null;
+
+  const current = knFolderList().find((f) => f.key === state.kn.folder);
+  const currentHasReview = Boolean(current?.docs?.some((d) => isReviewStatus(docMeta(d.path).status)));
+  if (!currentHasReview && reviewDocs.length) {
+    const target = reviewDocs[0];
+    const targetFolder = knFolderList().find((f) => f.docs.some((d) => d.path === target.path));
+    if (targetFolder) {
+      state.kn.folder = targetFolder.key;
+      state.kn.level = knChildren(targetFolder.key).length ? targetFolder.key : knParent(targetFolder.key);
+    }
+  }
+
+  if (state.view !== 'knowledge') setView('knowledge');
+  else { paintKnFolders(); paintKnDocs(); paintKnEditor(); }
+
+  if (openDrawer) openReviewDrawer();
+}
+
+// Optional helper drawer: every doc waiting for review/conflict resolution.
+function openReviewDrawer() {
+  const items = allDocs().filter((d) =>
+    isReviewStatus(docMeta(d.path).status));
+  openDrawer(`
+    <div class="drawer-head">
+      <button class="drawer-close">✕</button>
+      <div class="drawer-dept">REVIEW QUEUE</div>
+      <div class="drawer-name">Open Review Items</div>
+      <div class="drawer-role">${items.length} document${items.length === 1 ? '' : 's'} with needs_review or conflict status.</div>
+    </div>
+    <div class="drawer-body">
+      <div class="drawer-section">
+        ${items.map((d) => `
+          <button class="list-row" data-open="${esc(d.path)}">
+            <span class="badge ${statusBadgeClass(docMeta(d.path).status)}">${docMeta(d.path).status.toUpperCase()}</span>
+            <span class="list-title">${esc(d.title)}</span>
+            <span class="list-meta">${esc(d.folder)}</span>
+          </button>`).join('') || '<div class="stat-note">Nothing waiting for review.</div>'}
+      </div>
+    </div>`);
+  $$('[data-open]', $('#drawer')).forEach((b) => b.addEventListener('click', () => openInEditor(b.dataset.open)));
 }
 
 // ---------------------------------------------------------------- Agent Map
@@ -986,6 +1061,7 @@ function renderKnowledge(el) {
 // the folder column jumps to the level that shows it
 function selectKnFolder(key) {
   state.kn.folder = key;
+  state.kn.docsMode = 'docs';
   state.kn.doc = null;
   state.kn.level = knChildren(key).length ? key : knParent(key);
   if (state.view !== 'knowledge') setView('knowledge');
@@ -1003,7 +1079,7 @@ function paintKnFolders() {
   const children = knChildren(level);
 
   el.innerHTML = `
-    <div class="section-title" style="padding:0 12px">Folders</div>
+    <div class="section-title" style="padding:0 12px;display:flex;align-items:center;gap:8px"><span style="flex:1">Folders</span><button class="chip" data-new-doc title="Create a new Markdown document">+ NEW DOC</button></div>
     <div class="kn-crumbs">${crumbs}</div>
     ${level ? `
       <button class="kn-folder-btn kn-up" data-up>
@@ -1016,6 +1092,7 @@ function paintKnFolders() {
         <span class="kn-folder-meta">${c.docs + c.subDocs} DOCS${c.subs.size ? ' · ' + c.subs.size + ' FOLDERS' : ''}</span>
       </button>`).join('') || '<div class="stat-note" style="padding:0 12px">No subfolders.</div>'}`;
 
+  $('[data-new-doc]', el)?.addEventListener('click', () => openNewDocDrawer(state.kn.folder));
   $$('.kn-crumb', el).forEach((b) => b.addEventListener('click', () => {
     state.kn.level = b.dataset.level;
     paintKnFolders();
@@ -1026,32 +1103,97 @@ function paintKnFolders() {
   });
   $$('.kn-folder-btn[data-key]', el).forEach((b) => b.addEventListener('click', () => {
     state.kn.folder = b.dataset.key;
+    state.kn.docsMode = 'docs';
     state.kn.doc = null;
     if (b.dataset.children) state.kn.level = b.dataset.key; // drill in: clicked folder becomes the level
     paintKnFolders(); paintKnDocs(); paintKnEditor();
   }));
 }
 
+function knSystemFolderKey(key) {
+  return key === '_agents' || key === '_system';
+}
+
+function knArtifactsForFolder(folderKey) {
+  if (!folderKey || knSystemFolderKey(folderKey)) return [];
+  const prefix = `knowledge/${folderKey}/`;
+  return state.system.artifacts
+    .filter((a) => a.path.startsWith(prefix) && a.path.includes('/_artifacts/'))
+    .sort((a, b) => (b.ctime || b.mtime) - (a.ctime || a.mtime));
+}
+
 function paintKnDocs() {
   const el = $('#kn-docs');
   if (!el) return;
   const folder = knFolderList().find((f) => f.key === state.kn.folder);
-  if (!folder) {
-    // container folder without direct documents (exists only as a path prefix)
-    el.innerHTML = `<div class="section-title" style="padding:0 12px">${esc((state.kn.folder || '—') + '/')}</div>
-      <div class="stat-note" style="padding:0 12px">No documents at this level — open a subfolder.</div>`;
-    return;
-  }
-  el.innerHTML = `<div class="section-title" style="padding:0 12px">${esc(folder.label)}</div>` +
-    (folder.docs.length ? folder.docs.map((d) => `
+  const isSystemFolder = folder ? folder.kind === 'system' : knSystemFolderKey(state.kn.folder);
+  const headerLabel = folder ? folder.label : (state.kn.folder || '—') + '/';
+  const showModeToggle = !isSystemFolder && Boolean(state.kn.folder);
+  if (state.kn.filter !== 'review-needed' && state.kn.filter !== 'all') state.kn.filter = 'all';
+  if (state.kn.docsMode !== 'artifacts' && state.kn.docsMode !== 'docs') state.kn.docsMode = 'docs';
+
+  if (state.kn.docsMode === 'artifacts') {
+    const artifacts = knArtifactsForFolder(state.kn.folder);
+    el.innerHTML = `<div class="section-title" style="padding:0 12px;display:flex;align-items:center;gap:8px">
+      <span style="flex:1">${esc(headerLabel)}</span>
+      ${showModeToggle ? `<span class="filter-tabs">
+        <button class="filter-tab" data-kn-mode="docs">Docs</button>
+        <button class="filter-tab active" data-kn-mode="artifacts">Artifacts</button>
+      </span>` : ''}
+    </div>` +
+      (artifacts.length ? artifacts.map((a) => `
+      <button class="kn-doc-btn" data-art-open="${esc(a.path)}">
+        <div class="kn-doc-title">${esc(a.name)}</div>
+        <div class="kn-doc-meta">
+          <span class="badge badge-gray">${esc((a.name.includes('.') ? a.name.split('.').pop() : 'file').toUpperCase())}</span>
+          <span>${timeAgo(a.ctime || a.mtime)}</span><span>${(a.size / 1024).toFixed(1)}kb</span>
+        </div>
+      </button>`).join('') : '<div class="stat-note" style="padding:0 12px">No artifacts in this subtree.</div>');
+    $$('[data-art-open]', el).forEach((b) => b.addEventListener('click', () => {
+      window.open('/api/artifact?path=' + encodeURIComponent(b.dataset.artOpen), '_blank');
+    }));
+  } else {
+    const folderDocs = folder?.docs || [];
+    const filteredDocs = state.kn.filter === 'review-needed'
+      ? folderDocs.filter((d) => isReviewStatus(docMeta(d.path).status))
+      : folderDocs;
+    const reviewCount = folderDocs.filter((d) => isReviewStatus(docMeta(d.path).status)).length;
+    el.innerHTML = `<div class="section-title" style="padding:0 12px;display:flex;align-items:center;gap:8px">
+      <span style="flex:1">${esc(headerLabel)}</span>
+      ${showModeToggle ? `<span class="filter-tabs">
+        <button class="filter-tab active" data-kn-mode="docs">Docs</button>
+        <button class="filter-tab" data-kn-mode="artifacts">Artifacts</button>
+      </span>` : ''}
+      <span class="filter-tabs" title="Filter docs by review status">
+        <button class="filter-tab ${state.kn.filter === 'all' ? 'active' : ''}" data-kn-filter="all">All</button>
+        <button class="filter-tab ${state.kn.filter === 'review-needed' ? 'active' : ''}" data-kn-filter="review-needed">Review Needed ${reviewCount ? `(${reviewCount})` : ''}</button>
+      </span>
+    </div>` +
+      (filteredDocs.length ? filteredDocs.map((d) => `
       <button class="kn-doc-btn ${state.kn.doc === d.path ? 'active' : ''}" data-path="${esc(d.path)}">
         <div class="kn-doc-title">${esc(d.title)}</div>
         <div class="kn-doc-meta">
           <span class="badge ${statusBadgeClass(docMeta(d.path).status)}">${docMeta(d.path).status.toUpperCase()}</span>
           <span>${timeAgo(d.mtime)}</span><span>${d.words}w</span>
         </div>
-      </button>`).join('') : '<div class="stat-note" style="padding:0 12px">Empty folder.</div>');
-  $$('.kn-doc-btn', el).forEach((b) => b.addEventListener('click', () => loadDoc(b.dataset.path)));
+      </button>`).join('') : `<div class="stat-note" style="padding:0 12px">${folder ? (state.kn.filter === 'review-needed' ? 'No review-needed docs in this folder.' : 'Empty folder.') : 'No documents at this level - open a subfolder.'}</div>`);
+    $$('.kn-doc-btn[data-path]', el).forEach((b) => b.addEventListener('click', () => loadDoc(b.dataset.path)));
+  }
+
+  $$('[data-kn-mode]', el).forEach((b) => b.addEventListener('click', () => {
+    state.kn.docsMode = b.dataset.knMode;
+    state.kn.doc = null;
+    paintKnDocs();
+    paintKnEditor();
+  }));
+  $$('[data-kn-filter]', el).forEach((b) => b.addEventListener('click', () => {
+    state.kn.filter = b.dataset.knFilter;
+    if (state.kn.doc && state.kn.filter === 'review-needed' && !isReviewStatus(docMeta(state.kn.doc).status)) {
+      state.kn.doc = null;
+    }
+    paintKnDocs();
+    paintKnEditor();
+  }));
 }
 
 async function loadDoc(path, mode) {
@@ -1069,8 +1211,10 @@ function openInEditor(path, mode = 'preview') {
   const folder = knFolderList().find((f) => f.docs.some((d) => d.path === path));
   if (folder) {
     state.kn.folder = folder.key;
+    state.kn.docsMode = 'docs';
     state.kn.level = knChildren(folder.key).length ? folder.key : knParent(folder.key);
   }
+  state.kn.filter = 'all';
   state.kn.doc = null;
   closeDrawer();
   setView('knowledge');
@@ -1210,23 +1354,44 @@ async function setDocMeta(key, value) {
   toast(key.toUpperCase() + ' SET: ' + value.toUpperCase());
 }
 
-async function addKnowledge() {
+// New-document drawer (lives in the Knowledge view since the header buttons
+// were removed): folder select + name, guardrail-aware save, opens the editor.
+function openNewDocDrawer(defaultFolder) {
   const folders = state.system.folders.map((f) => f.name);
-  const folder = prompt('Folder:\n' + folders.join(', '), folders[0]);
-  if (!folder || !folders.includes(folder)) return;
-  const name = prompt('File name (without .md):', 'new-document');
-  if (!name) return;
-  const path = `knowledge/${folder}/${name.replace(/\.md$/, '')}.md`;
-  const content = `# ${name}\n\nStatus: draft\n\n`;
-  const res = await fetch('/api/file', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, content }) });
-  if (res.ok) {
-    state.system = await (await fetch('/api/system')).json();
-    state.kn.folder = folder;
-    state.kn.level = knParent(folder);
-    setView('knowledge');
-    loadDoc(path, 'edit');
-    toast('CREATED ' + path.toUpperCase());
-  }
+  if (!folders.length) return toast('NO KNOWLEDGE FOLDERS AVAILABLE', true);
+  const preset = folders.includes(defaultFolder) ? defaultFolder : folders[0];
+  openDrawer(`
+    <div class="drawer-head">
+      <button class="drawer-close">✕</button>
+      <div class="drawer-dept">KNOWLEDGE · NEW</div>
+      <div class="drawer-name">New Document</div>
+      <div class="drawer-role">Creates a Markdown file in the selected knowledge folder (guardrails apply).</div>
+    </div>
+    <div class="drawer-body">
+      <div class="form-field"><label>Folder</label>
+        <select id="nd-folder">${folders.map((f) => `<option ${f === preset ? 'selected' : ''}>${esc(f)}</option>`).join('')}</select>
+      </div>
+      <div class="form-field"><label>File name (without .md)</label><input id="nd-name" placeholder="new-document"></div>
+      <button class="btn btn-primary" id="nd-create">Create Document</button>
+    </div>`);
+  $('#nd-name').focus();
+  $('#nd-create').addEventListener('click', async () => {
+    const folder = $('#nd-folder').value;
+    const name = ($('#nd-name').value || '').trim().replace(/\.md$/, '');
+    if (!name) return toast('FILE NAME IS REQUIRED', true);
+    if (/[\\/]|\.\./.test(name)) return toast('INVALID FILE NAME', true);
+    const relPath = `knowledge/${folder}/${name}.md`;
+    try {
+      await putFileGuarded(relPath, `# ${name}\n\nStatus: draft\n\n`);
+      try { state.system = await apiJson('/api/system'); } catch { /* keep stale model */ }
+      closeDrawer();
+      state.kn.folder = folder;
+      state.kn.level = knChildren(folder).length ? folder : knParent(folder);
+      setView('knowledge');
+      loadDoc(relPath, 'edit');
+      toast('CREATED ' + relPath.toUpperCase());
+    } catch (e) { toast(e.message.toUpperCase(), true); }
+  });
 }
 
 // ---------------------------------------------------------------- Workflows
@@ -1767,12 +1932,16 @@ const skillState = {
   q: '',               // search query
   filter: 'all',       // all | active | inactive
   workspace: '',       // '' = all, otherwise a scope name (company / personal / personal-<name>)
+  updates: {},         // map key "scope/name" -> update result
+  updatesCheckedAt: null,
+  updatesLoading: false,
   market: null,        // /api/marketplace result
   marketQ: '',
   marketCat: '',
   marketScope: 'personal', // install target workspace
   marketOpen: false,
   installing: null,
+  plugins: null,
   el: null,
 };
 
@@ -1784,6 +1953,140 @@ function workspaceLabel(scope) {
   if (scope.name === 'company') return 'Company Skills';
   if (scope.name === 'personal') return 'Personal Skills';
   return `Personal Workspace — ${scope.name.replace(/^personal-/, '')}`;
+}
+
+function skillKey(scope, name) {
+  return `${scope}/${name}`;
+}
+
+function shortSha(sha) {
+  return typeof sha === 'string' && sha.length ? sha.slice(0, 7) : '—';
+}
+
+function formatInstalledDate(iso) {
+  if (!iso) return '—';
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return '—';
+  return new Date(t).toLocaleDateString();
+}
+
+function skillCapabilitySummary(skill) {
+  return {
+    prompt: true,
+    tools: Array.isArray(skill.requiresPlugins) && skill.requiresPlugins.length > 0,
+    knowledge: Array.isArray(skill.knowledge) && skill.knowledge.length > 0,
+  };
+}
+
+function skillTypeBadgesHtml(skill) {
+  const caps = skillCapabilitySummary(skill);
+  const out = ['<span class="badge badge-gray">PROMPT</span>'];
+  if (caps.tools) out.push('<span class="badge badge-gray">+TOOLS</span>');
+  if (caps.knowledge) out.push('<span class="badge badge-gray">+KNOWLEDGE</span>');
+  return out.join(' ');
+}
+
+function findSkill(scope, name) {
+  for (const sc of skillState.data?.scopes || []) {
+    if (sc.name !== scope) continue;
+    const hit = sc.skills.find((s) => s.name === name);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function openSkillCustomizeEditor(skill) {
+  const scopedSkill = /^personal(?:-|$)/.test(skill.scope)
+    ? { scope: skill.scope, name: skill.name }
+    : null;
+  openFileEditorDrawer(skill.path, {
+    title: 'Customize Skill',
+    hint: 'Edits the local SKILL.md — adapt triggers, instructions and constraints to Steadymade.',
+    scopedSkill,
+  });
+}
+
+function toKnowledgeFolder(dep) {
+  const raw = String(dep || '').trim().replace(/\\/g, '/').replace(/^\.?\//, '').replace(/\/+$/, '');
+  if (!raw) return null;
+  return raw.startsWith('knowledge/') ? raw.replace(/^knowledge\//, '') : raw;
+}
+
+async function openSkillConfigureDrawer(skill) {
+  let plugins = [];
+  try {
+    ({ plugins } = await apiJson('/api/plugins'));
+    skillState.plugins = plugins;
+  } catch {
+    plugins = skillState.plugins || [];
+  }
+
+  const byId = Object.fromEntries((plugins || []).map((p) => [p.id, p]));
+  const requires = skill.requiresPlugins || [];
+  const knowledge = skill.knowledge || [];
+  const capabilities = skill.capabilities || [];
+
+  openDrawer(`
+    <div class="drawer-head">
+      <button class="drawer-close">✕</button>
+      <div class="drawer-dept">SKILL HUB · CONFIGURE</div>
+      <div class="drawer-name">/${esc(skill.name)}</div>
+      <div class="drawer-role">${esc(skill.scope)} · ${esc(skill.path)}</div>
+    </div>
+    <div class="drawer-body">
+      <div class="drawer-section">
+        <div class="section-title">Capability summary</div>
+        <div class="tag-row">${skillTypeBadgesHtml(skill)}</div>
+        ${capabilities.length ? `<div class="stat-note" style="margin-top:8px;white-space:normal">Declared capabilities: ${esc(capabilities.join(', '))}</div>` : ''}
+      </div>
+      <div class="drawer-section">
+        <div class="section-title">Plugin dependencies</div>
+        ${requires.length ? requires.map((id) => {
+          const p = byId[id];
+          const on = Boolean(p?.enabled);
+          return `<div class="kv-row"><span><code>${esc(id)}</code>${p ? ` <span class="list-meta">· ${esc(p.name)}</span>` : ''}</span><span class="badge ${on ? 'badge-green' : 'badge-apricot'}">${on ? 'ENABLED' : 'MISSING'}</span></div>`;
+        }).join('') : '<div class="stat-note">No plugin dependencies declared.</div>'}
+      </div>
+      <div class="drawer-section">
+        <div class="section-title">Knowledge dependencies</div>
+        ${knowledge.length ? `<div class="tag-row">${knowledge.map((k) => `<span class="chip" style="cursor:default">${esc(k)}</span>`).join('')}</div>` : '<div class="stat-note">No knowledge dependencies declared.</div>'}
+      </div>
+      <div class="drawer-actions">
+        <button class="btn btn-primary btn-small" data-act="skill-config-customize">CUSTOMIZE SKILL.md</button>
+        <button class="btn btn-small" data-act="skill-config-plugins">OPEN PLUGINS SETTINGS</button>
+        <button class="btn btn-small" data-act="skill-config-knowledge">OPEN KNOWLEDGE DOCS</button>
+      </div>
+    </div>`);
+
+  const d = $('#drawer');
+  $('[data-act="skill-config-customize"]', d)?.addEventListener('click', () => openSkillCustomizeEditor(skill));
+  $('[data-act="skill-config-plugins"]', d)?.addEventListener('click', () => {
+    closeDrawer();
+    settingsState.section = 'plugins';
+    setView('settings');
+  });
+  $('[data-act="skill-config-knowledge"]', d)?.addEventListener('click', () => {
+    closeDrawer();
+    const first = toKnowledgeFolder((skill.knowledge || [])[0]);
+    setView('knowledge');
+    if (first) requestAnimationFrame(() => selectKnFolder(first));
+  });
+}
+
+function updateBadgesHtml(skill) {
+  const badges = [];
+  const update = skillState.updates[skillKey(skill.scope, skill.name)] || null;
+  const localModified = typeof update?.localModified === 'boolean'
+    ? update.localModified
+    : (typeof skill.localModified === 'boolean' ? skill.localModified : null);
+
+  if (update?.status === 'update_available') badges.push('<span class="badge badge-apricot">UPDATE AVAILABLE</span>');
+  if (update?.status === 'unpinned') badges.push('<span class="badge badge-gray">UNPINNED</span>');
+  if (update?.status === 'unknown') badges.push('<span class="badge badge-gray">UNKNOWN</span>');
+  if (update?.status === 'current') badges.push('<span class="badge badge-green">CURRENT</span>');
+  if (localModified === true) badges.push('<span class="badge badge-apricot">MODIFIED</span>');
+
+  return badges.join(' ');
 }
 
 function renderSkills(el) {
@@ -1835,11 +2138,17 @@ function skillBodyHtml() {
         <div class="list-row" style="cursor:default;align-items:flex-start">
           <span class="badge ${s.active ? 'badge-green' : 'badge-gray'}">${s.active ? 'ACTIVE' : 'OFF'}</span>
           <span style="flex:1;min-width:0">
-            <span class="list-title" style="display:block">/${esc(s.name)}</span>
+            <span class="list-title" style="display:block">/${esc(s.name)} ${updateBadgesHtml(s)}</span>
+            <span class="list-meta" style="display:block">${skillTypeBadgesHtml(s)}</span>
             <span class="stat-note" style="display:block;white-space:normal">${esc((s.description || 'No description in SKILL.md frontmatter.').slice(0, 220))}</span>
+            <span class="list-meta" style="display:block">Version: ${esc(s.version || '—')}</span>
+            ${(s.sha || s.installedAt)
+              ? `<span class="list-meta" style="display:block">Installed: ${esc(shortSha(s.sha))} · ${esc(formatInstalledDate(s.installedAt))}</span>`
+              : ''}
           </span>
           <span style="display:flex;gap:6px;flex-shrink:0">
-            <button class="chip" data-customize="${esc(s.path)}">CUSTOMIZE</button>
+            <button class="chip" data-configure-skill="${esc(s.scope)}:${esc(s.name)}">CONFIGURE</button>
+            <button class="chip" data-customize="${esc(s.path)}" data-customize-scope="${esc(s.scope)}" data-customize-name="${esc(s.name)}">CUSTOMIZE</button>
             <button class="chip" data-skill="${esc(s.scope)}:${esc(s.name)}" data-active="${s.active ? '1' : ''}">${s.active ? 'DEACTIVATE' : 'ACTIVATE'}</button>
           </span>
         </div>`).join('') : `<div class="stat-note">${esc(skills.length ? 'No skills match the current filter.' : empties[scope.name] || 'No skills in this workspace yet.')}</div>`}
@@ -1859,14 +2168,39 @@ function paintSkillBody() {
 
   $$('[data-skill]', body).forEach((b) => b.addEventListener('click', async () => {
     const [scope, name] = b.dataset.skill.split(':');
+    const activating = !b.dataset.active;
     try {
+      if (activating) {
+        const skill = findSkill(scope, name);
+        const required = skill?.requiresPlugins || [];
+        if (required.length) {
+          const { plugins } = await apiJson('/api/plugins');
+          skillState.plugins = plugins;
+          const enabled = new Set(plugins.filter((p) => p.enabled).map((p) => p.id));
+          const missing = required.filter((id) => !enabled.has(id));
+          if (missing.length) {
+            toast(`CAN'T ACTIVATE /${name.toUpperCase()} — ENABLE MISSING PLUGINS: ${missing.join(', ').toUpperCase()}`, true);
+            return;
+          }
+        }
+      }
       await apiJson('/api/skills/toggle', { method: 'POST', body: JSON.stringify({ scope, name, active: !b.dataset.active }) });
       toast(`/${name.toUpperCase()} ${b.dataset.active ? 'DEACTIVATED' : 'ACTIVATED'}`);
       skillState.data = await apiJson('/api/skills');
       paintSkillBody();
     } catch (e) { toast(e.message.toUpperCase(), true); }
   }));
-  $$('[data-customize]', body).forEach((b) => b.addEventListener('click', () => openFileEditorDrawer(b.dataset.customize, { title: 'Customize Skill', hint: 'Edits the local SKILL.md — adapt triggers, instructions and constraints to Steadymade.' })));
+  $$('[data-configure-skill]', body).forEach((b) => b.addEventListener('click', () => {
+    const [scope, name] = b.dataset.configureSkill.split(':');
+    const skill = findSkill(scope, name);
+    if (!skill) return toast('SKILL NOT FOUND', true);
+    openSkillConfigureDrawer(skill);
+  }));
+  $$('[data-customize]', body).forEach((b) => b.addEventListener('click', () => {
+    const skill = findSkill(b.dataset.customizeScope, b.dataset.customizeName);
+    if (!skill) return toast('SKILL NOT FOUND', true);
+    openSkillCustomizeEditor(skill);
+  }));
 }
 
 function paintSkills() {
@@ -1874,6 +2208,7 @@ function paintSkills() {
   if (!el || state.view !== 'skills') return;
 
   const scopes = skillState.data.scopes;
+  const personalScopes = scopes.filter((s) => s.kind === 'personal');
   el.innerHTML = `
   <div class="view-pad simple-list" style="max-width:920px">
     <div class="card">
@@ -1887,8 +2222,11 @@ function paintSkills() {
           ${['all', 'active', 'inactive'].map((f) => `<button class="filter-tab ${skillState.filter === f ? 'active' : ''}" data-filter="${f}">${f === 'all' ? 'All' : f === 'active' ? 'Active' : 'Inactive'}</button>`).join('')}
         </span>
         <span class="list-meta" id="sk-count"></span>
+        <button class="btn btn-small" data-act="check-updates">${skillState.updatesLoading ? 'CHECKING…' : 'CHECK UPDATES'}</button>
+        ${personalScopes.length ? '<button class="btn btn-primary btn-small" data-act="new-skill">NEW SKILL</button>' : ''}
         <button class="btn btn-ghost btn-small" data-act="market">${skillState.marketOpen ? 'Hide Marketplace' : 'Browse Marketplace'}</button>
       </div>
+      ${skillState.updatesCheckedAt ? `<div class="stat-note" style="margin-top:8px">Update status checked ${esc(timeAgo(Date.parse(skillState.updatesCheckedAt)))}</div>` : ''}
     </div>
     ${skillState.marketOpen ? '<div id="sk-market"></div>' : ''}
     <div id="sk-body"></div>
@@ -1909,9 +2247,75 @@ function paintSkills() {
   $('#sk-search', el).addEventListener('input', (e) => { skillState.q = e.target.value; paintSkillBody(); });
   $('#sk-workspace', el).addEventListener('change', (e) => { skillState.workspace = e.target.value; paintSkillBody(); });
   $$('.filter-tab', el).forEach((b) => b.addEventListener('click', () => { skillState.filter = b.dataset.filter; paintSkillBody(); }));
+  $('[data-act="check-updates"]', el)?.addEventListener('click', checkSkillUpdates);
+  $('[data-act="new-skill"]', el)?.addEventListener('click', openNewSkillDrawer);
   $('[data-act="market"]', el).addEventListener('click', () => { skillState.marketOpen = !skillState.marketOpen; paintSkills(); if (skillState.marketOpen) loadMarketplace(); });
   paintSkillBody();
   if (skillState.marketOpen && skillState.market) paintMarketplace();
+}
+
+async function checkSkillUpdates() {
+  if (skillState.updatesLoading) return;
+  skillState.updatesLoading = true;
+  paintSkills();
+  try {
+    const data = await apiJson('/api/marketplace/updates');
+    const map = {};
+    for (const s of data.skills || []) map[skillKey(s.scope, s.name)] = s;
+    skillState.updates = map;
+    skillState.updatesCheckedAt = data.checkedAt || new Date().toISOString();
+    toast('SKILL UPDATE STATUS REFRESHED');
+  } catch (e) {
+    toast(e.message.toUpperCase(), true);
+  } finally {
+    skillState.updatesLoading = false;
+    paintSkills();
+  }
+}
+
+function openNewSkillDrawer() {
+  const scopes = (skillState.data?.scopes || []).filter((s) => s.kind === 'personal');
+  if (!scopes.length) return toast('NO PERSONAL SKILL SCOPE AVAILABLE', true);
+  const preferred = scopes.some((s) => s.name === skillState.workspace) ? skillState.workspace : (skillState.marketScope || scopes[0].name);
+  openDrawer(`
+    <div class="drawer-head">
+      <button class="drawer-close">✕</button>
+      <div class="drawer-dept">SKILL HUB · NEW</div>
+      <div class="drawer-name">New Skill</div>
+      <div class="drawer-role">Creates a personal SKILL.md in the selected workspace.</div>
+    </div>
+    <div class="drawer-body">
+      <div class="form-field"><label>Scope</label>
+        <select id="ns-scope">${scopes.map((s) => `<option value="${esc(s.name)}" ${preferred === s.name ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>
+      </div>
+      <div class="form-field"><label>Skill name (kebab-case)</label><input id="ns-name" placeholder="my-skill"></div>
+      <button class="btn btn-primary" id="ns-create">Create Skill</button>
+    </div>`);
+  $('#ns-name')?.focus();
+
+  $('#ns-create')?.addEventListener('click', async () => {
+    const scope = $('#ns-scope').value;
+    const name = ($('#ns-name').value || '').trim();
+    if (!name) return toast('SKILL NAME IS REQUIRED', true);
+    try {
+      const result = await apiJson('/api/skills/new', {
+        method: 'POST',
+        body: JSON.stringify({ scope, name }),
+      });
+      skillState.workspace = scope;
+      skillState.data = await apiJson('/api/skills');
+      closeDrawer();
+      if (state.view === 'skills') paintSkills();
+      openFileEditorDrawer(result.path, {
+        title: `Customize /${name}`,
+        hint: 'Define triggers, constraints and output format for this personal skill.',
+        scopedSkill: { scope, name },
+      });
+      toast(`CREATED /${name.toUpperCase()} IN ${scope.toUpperCase()}`);
+    } catch (e) {
+      toast(e.message.toUpperCase(), true);
+    }
+  });
 }
 
 async function loadMarketplace(refresh = false) {
@@ -2008,7 +2412,7 @@ function paintMarketplace() {
 
 // ---------------------------------------------------------------- File editor drawer (profile, instructions, SKILL.md)
 
-async function openFileEditorDrawer(path, { title = 'Edit File', hint = '', template = '' } = {}) {
+async function openFileEditorDrawer(path, { title = 'Edit File', hint = '', template = '', scopedSkill = null } = {}) {
   let content = template;
   let exists = false;
   try {
@@ -2033,7 +2437,14 @@ async function openFileEditorDrawer(path, { title = 'Edit File', hint = '', temp
 
   $('#fe-save').addEventListener('click', async () => {
     try {
-      await putFileGuarded(path, $('#fe-content').value);
+      if (scopedSkill) {
+        await apiJson('/api/skills/content', {
+          method: 'PUT',
+          body: JSON.stringify({ scope: scopedSkill.scope, name: scopedSkill.name, content: $('#fe-content').value }),
+        });
+      } else {
+        await putFileGuarded(path, $('#fe-content').value);
+      }
       toast('SAVED ' + path.toUpperCase());
       closeDrawer();
       // refresh the system model so a newly created file shows up in the Knowledge view immediately
@@ -2080,7 +2491,7 @@ function paintArtifacts(el) {
           ${ART_RANGES.map(([id, , label]) => `<button class="filter-tab ${artState.range === id ? 'active' : ''}" data-range="${id}">${label}</button>`).join('')}
         </span>
       </div>
-      <div class="stat-note" style="margin-top:6px;white-space:normal">Generated files under <code>artifacts/</code> (incl. subfolders), newest first by creation date.</div>
+      <div class="stat-note" style="margin-top:6px;white-space:normal">Generated files under <code>artifacts/</code> and <code>knowledge/**/_artifacts/**</code>, newest first by creation date.</div>
     </div>
     ${items.length ? items.map((a) => `
       <div class="card">
@@ -2094,7 +2505,7 @@ function paintArtifacts(el) {
           <span class="list-meta" title="${new Date(a.ctime || a.mtime).toLocaleString()}">created ${timeAgo(a.ctime || a.mtime)}</span>
           <button class="chip" data-art-open="${esc(a.path)}">OPEN</button>
         </div>
-      </div>`).join('') : `<div class="card">${state.system.artifacts.length ? 'No artifacts match the current filter.' : 'No artifacts in artifacts/ yet — agent runs place generated files there.'}</div>`}
+      </div>`).join('') : `<div class="card">${state.system.artifacts.length ? 'No artifacts match the current filter.' : 'No artifacts yet - agent runs place generated files under artifacts/ or knowledge/**/_artifacts/**.'}</div>`}
   </div>`;
 
   const search = $('#art-search', el);
@@ -2129,6 +2540,56 @@ function fmtDuration(ms) {
   return `${m}m ${s % 60}s`;
 }
 
+function usageDetailsHtml(data, { compact = false } = {}) {
+  const s = data.summary || {};
+  const entries = data.entries || [];
+  return `${compact ? '' : '<div class="view-pad simple-list" style="max-width:1040px">'}
+    <div class="card">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <div class="section-title" style="flex:1;margin:0">Usage Report</div>
+        <span class="list-meta">${esc(data.path || 'runs/usage.jsonl')}</span>
+      </div>
+      <div class="stat-note" style="margin-top:6px;white-space:normal">
+        Local runtime telemetry from Chat and Scheduler. Token and cost fields are populated when available from the underlying run metadata.
+      </div>
+    </div>
+
+    <div class="cc-grid">
+      <div class="card stat-card"><div class="mono-label">ENTRIES</div><div class="stat-value">${fmtInt(s.count)}</div><div class="stat-note">${fmtInt(s.sessions)} sessions · ${fmtInt(s.errors)} errors</div></div>
+      <div class="card stat-card"><div class="mono-label">COST</div><div class="stat-value" style="font-size:28px">${fmtUsd(s.total_cost_usd)}</div><div class="stat-note">reported by Claude result metadata</div></div>
+      <div class="card stat-card"><div class="mono-label">DURATION</div><div class="stat-value" style="font-size:28px">${fmtDuration(s.total_duration_ms)}</div><div class="stat-note">sum of logged durations</div></div>
+      <div class="card stat-card"><div class="mono-label">TOKENS</div><div class="stat-value" style="font-size:28px">${fmtInt(s.total_tokens)}</div><div class="stat-note">in ${fmtInt(s.input_tokens)} · out ${fmtInt(s.output_tokens)}</div></div>
+    </div>
+
+    <div class="card">
+      <div class="section-title">Recent usage entries</div>
+      ${entries.length ? entries.slice(0, compact ? 30 : 80).map((e) => {
+        const source = String(e.source || 'chat');
+        const isScheduler = source === 'scheduler';
+        const badge = isScheduler
+          ? (e.status === 'ok' ? '<span class="badge badge-green">SCHED</span>' : `<span class="badge ${e.is_error ? 'badge-apricot' : 'badge-gray'}">SCHED</span>`)
+          : `<span class="badge ${e.is_error ? 'badge-apricot' : 'badge-gray'}">${e.is_error ? 'ERROR' : 'CHAT'}</span>`;
+        const title = isScheduler
+          ? `${esc(e.job_name || e.jobName || e.job_id || e.jobId || 'scheduler run')} <span class="list-meta">${esc(e.status || '')}</span>`
+          : `${esc(e.selected_agent || 'danny')} <span class="list-meta">${esc(e.mode || '')}</span>`;
+        const duration = e.duration_ms == null ? '—' : fmtDuration(e.duration_ms);
+        const cost = e.cost_usd == null ? '—' : fmtUsd(e.cost_usd);
+        const tokens = e.total_tokens == null ? '—' : `${fmtInt(e.total_tokens)} tokens`;
+        return `
+        <div class="list-row" style="cursor:default">
+          ${badge}
+          <span class="list-title">${title}</span>
+          <span class="list-meta">${esc(e.model || 'default')}</span>
+          <span class="list-meta">${duration}</span>
+          <span class="list-meta">${cost}</span>
+          <span class="list-meta">${tokens}</span>
+          <span class="list-meta" title="${esc(e.timestamp || '')}">${e.timestamp ? timeAgo(Date.parse(e.timestamp)) : '—'}</span>
+        </div>`;
+      }).join('') : '<div class="stat-note">No usage recorded yet. Run one chat turn or scheduler job to create the first entry.</div>'}
+    </div>
+  ${compact ? '' : '</div>'}`;
+}
+
 async function renderUsage(el) {
   el.innerHTML = '<div class="view-pad"><div class="card">Loading usage…</div></div>';
   let data;
@@ -2137,62 +2598,49 @@ async function renderUsage(el) {
     el.innerHTML = `<div class="view-pad"><div class="card">Usage unavailable: ${esc(e.message)}</div></div>`;
     return;
   }
-  if (state.view !== 'usage') return;
-  const s = data.summary || {};
-  const entries = data.entries || [];
-  el.innerHTML = `<div class="view-pad simple-list" style="max-width:1040px">
-    <div class="card">
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <div class="section-title" style="flex:1;margin:0">Chat Usage Report</div>
-        <span class="list-meta">${esc(data.path || 'runs/chat-usage.jsonl')}</span>
-        <button class="btn btn-ghost btn-small" id="usage-refresh">Refresh</button>
-      </div>
-      <div class="stat-note" style="margin-top:6px;white-space:normal">
-        Usage is local telemetry from the Chat runtime. Token counts appear when the Claude stream exposes them; cost, duration and turns are logged from result metadata.
-      </div>
-    </div>
-
-    <div class="cc-grid">
-      <div class="card stat-card"><div class="mono-label">TURNS</div><div class="stat-value">${fmtInt(s.count)}</div><div class="stat-note">${fmtInt(s.sessions)} sessions · ${fmtInt(s.errors)} errors</div></div>
-      <div class="card stat-card"><div class="mono-label">COST</div><div class="stat-value" style="font-size:28px">${fmtUsd(s.total_cost_usd)}</div><div class="stat-note">reported by Claude result metadata</div></div>
-      <div class="card stat-card"><div class="mono-label">DURATION</div><div class="stat-value" style="font-size:28px">${fmtDuration(s.total_duration_ms)}</div><div class="stat-note">sum of chat turns</div></div>
-      <div class="card stat-card"><div class="mono-label">TOKENS</div><div class="stat-value" style="font-size:28px">${fmtInt(s.total_tokens)}</div><div class="stat-note">in ${fmtInt(s.input_tokens)} · out ${fmtInt(s.output_tokens)}</div></div>
-    </div>
-
-    <div class="card">
-      <div class="section-title">Recent chat turns</div>
-      ${entries.length ? entries.slice(0, 80).map((e) => `
-        <div class="list-row" style="cursor:default">
-          <span class="badge ${e.is_error ? 'badge-apricot' : 'badge-gray'}">${e.is_error ? 'ERROR' : 'CHAT'}</span>
-          <span class="list-title">${esc(e.selected_agent || 'danny')} <span class="list-meta">${esc(e.mode || '')}</span></span>
-          <span class="list-meta">${esc(e.model || 'default')}</span>
-          <span class="list-meta">${fmtDuration(e.duration_ms)}</span>
-          <span class="list-meta">${fmtUsd(e.cost_usd)}</span>
-          <span class="list-meta">${fmtInt(e.total_tokens)} tokens</span>
-          <span class="list-meta" title="${esc(e.timestamp || '')}">${e.timestamp ? timeAgo(Date.parse(e.timestamp)) : '—'}</span>
-        </div>`).join('') : '<div class="stat-note">No chat usage recorded yet. Send one message in Chat to create the first entry.</div>'}
-    </div>
-  </div>`;
-  $('#usage-refresh')?.addEventListener('click', () => renderUsage(el));
+  el.innerHTML = usageDetailsHtml(data);
 }
 
-function renderMemory(el) {
+function openUsageDrawer() {
+  openDrawer(`
+    <div class="drawer-head">
+      <button class="drawer-close">✕</button>
+      <div class="drawer-dept">COMMAND CENTER</div>
+      <div class="drawer-name">Usage Details</div>
+      <div class="drawer-role">Local telemetry from runs/usage.jsonl (chat + scheduler)</div>
+    </div>
+    <div class="drawer-body" id="usage-drawer-body">
+      <div class="card">Loading usage…</div>
+    </div>`);
+  const body = $('#usage-drawer-body');
+  const render = async () => {
+    try {
+      const data = await apiJson('/api/usage');
+      if (!body) return;
+      body.innerHTML = usageDetailsHtml(data, { compact: true }) +
+        '<div style="margin-top:10px"><button class="btn btn-ghost btn-small" id="usage-drawer-refresh">Refresh</button></div>';
+      $('#usage-drawer-refresh', body)?.addEventListener('click', render);
+    } catch (e) {
+      if (body) body.innerHTML = `<div class="card">Usage unavailable: ${esc(e.message)}</div>`;
+    }
+  };
+  render();
+}
+
+function renderMemoryCard() {
   const companyPath = 'knowledge/company/company_handbook_SSOT/agent-memory.md';
   const personalPath = 'memory/MEMORY.md';
-  const personalTemplate = '# MEMORY — curated long-term memory (local user)\n\nDurable facts, preferences and standing decisions. One dated line per entry\n(`- YYYY-MM-DD | fact`). Keep under ~200 lines.\n\n## Working preferences\n\n## Standing decisions\n\n## Active context\n';
-  el.innerHTML = `<div class="view-pad simple-list" style="max-width:900px">
-    <div class="card">
-      <div class="section-title">Agent Memory</div>
-      <div class="stat-note" style="white-space:normal">
+  return `<div class="card" data-section="profile">
+      <div class="section-title">Memory</div>
+      <div class="stat-note" style="white-space:normal;margin-bottom:10px">
         Memory is split by scope so local/private context does not leak into shared company material.
       </div>
-    </div>
     <div class="card">
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
         <span class="badge badge-green">COMPANY</span>
         <span class="list-title">Shared company memory</span>
         <span class="list-meta">${esc(companyPath)}</span>
-        <button class="btn btn-green btn-small" id="mem-company">Open</button>
+        <button class="btn btn-green btn-small" data-act="mem-company">Open</button>
       </div>
       <div class="stat-note" style="margin-top:8px;white-space:normal">For organization-level facts that all agents may use. No private personal facts.</div>
     </div>
@@ -2201,7 +2649,7 @@ function renderMemory(el) {
         <span class="badge badge-apricot">PERSONAL</span>
         <span class="list-title">Private personal memory</span>
         <span class="list-meta">${esc(personalPath)} · gitignored</span>
-        <button class="btn btn-small" id="mem-personal">Create / Open</button>
+        <button class="btn btn-small" data-act="mem-personal">Create / Open</button>
       </div>
       <div class="stat-note" style="margin-top:8px;white-space:normal">Curated long-term memory (MEMORY.md); working notes live in memory/daily/. Local user context only — never copied into company artifacts. See memory/README.md.</div>
     </div>
@@ -2214,15 +2662,30 @@ function renderMemory(el) {
       <div class="stat-note" style="margin-top:8px;white-space:normal">Team memory remains in the shared OneDrive team area unless this repo explicitly links and documents a <code>knowledge/team/</code> path.</div>
     </div>
   </div>`;
-  $('#mem-company')?.addEventListener('click', () => openInEditor(companyPath, 'edit'));
-  $('#mem-personal')?.addEventListener('click', async () => {
+}
+
+const PERSONAL_MEMORY_TEMPLATE = '# MEMORY — curated long-term memory (local user)\n\nDurable facts, preferences and standing decisions. One dated line per entry\n(`- YYYY-MM-DD | fact`). Keep under ~200 lines.\n\n## Working preferences\n\n## Standing decisions\n\n## Active context\n';
+
+async function ensurePersonalMemoryFile() {
+  const personalPath = 'memory/MEMORY.md';
+  try {
+    await apiJson('/api/file?path=' + encodeURIComponent(personalPath));
+  } catch {
+    await putFileGuarded(personalPath, PERSONAL_MEMORY_TEMPLATE);
+  }
+  return personalPath;
+}
+
+function bindMemoryActions(scope = document) {
+  const companyPath = 'knowledge/company/company_handbook_SSOT/agent-memory.md';
+  $('[data-act="mem-company"]', scope)?.addEventListener('click', () => openInEditor(companyPath, 'edit'));
+  $('[data-act="mem-personal"]', scope)?.addEventListener('click', async () => {
     try {
-      await apiJson('/api/file?path=' + encodeURIComponent(personalPath));
-    } catch {
-      try { await putFileGuarded(personalPath, personalTemplate); }
-      catch (e) { toast(e.message.toUpperCase(), true); return; }
+      const personalPath = await ensurePersonalMemoryFile();
+      openInEditor(personalPath, 'edit');
+    } catch (e) {
+      toast(e.message.toUpperCase(), true);
     }
-    openInEditor(personalPath, 'edit');
   });
 }
 
@@ -2235,12 +2698,12 @@ const settingsState = { section: 'all', el: null, data: null };
 
 const SETTINGS_SECTIONS = [
   ['all', 'All'],
-  ['onboarding', 'Onboarding'],
-  ['runtime', 'Runtime'],
-  ['profile', 'Profile & Instructions'],
-  ['guardrails', 'Guardrails'],
-  ['plugins', 'Plugins'],
   ['project', 'Project Info'],
+  ['runtime', 'Runtime'],
+  ['onboarding', 'Onboarding'],
+  ['profile', 'Profile & Instructions'],
+  ['plugins', 'Plugins'],
+  ['guardrails', 'Guardrails'],
 ];
 
 function renderSettings(el) {
@@ -2289,6 +2752,10 @@ function paintSettingsBody(el) {
         <span>${onb.companyDone ? '<span class="badge badge-green">DONE</span>' : '<span class="badge badge-apricot">OPEN</span>'} Company onboarding — operating profile filled${onb.companyTodos ? ` <span class="list-meta">· ${onb.companyTodos} TODOs open</span>` : ''}</span>
         <span><span class="list-meta">run /company-onboarding in Claude Code</span></span>
       </div>
+      <div class="kv-row">
+        <span>${onb.memoryDone ? '<span class="badge badge-green">DONE</span>' : '<span class="badge badge-apricot">OPEN</span>'} Memory setup — <code>memory/MEMORY.md</code> + <code>memory/daily/</code> exist</span>
+        <span><span class="list-meta">create/open from Settings → Memory</span></span>
+      </div>
       <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <button class="btn btn-ghost btn-small" data-act="onboarding-guide">Show Onboarding Guide</button>
         <span class="stat-note">The guide also appears automatically when the app loads while onboarding is incomplete.</span>
@@ -2302,7 +2769,28 @@ function paintSettingsBody(el) {
       </span>
     </div>
 
-    ${show('onboarding') ? onboardingCard : ''}
+    ${show('project') ? `
+    <div class="card" data-section="project">
+      <div class="section-title">Project</div>
+      <div class="kv-row"><span>Name</span><span>Steadymade AI OS — Agent Setup</span></div>
+      <div class="kv-row"><span>Mode</span><span>Claude Project (no external runtime)</span></div>
+      <div class="kv-row"><span>Knowledge format</span><span>Markdown on disk</span></div>
+      <div class="kv-row"><span>Agents</span><span>${AGENTS.length} (Danny + ${AGENTS.length - 1} specialists)</span></div>
+      <div class="kv-row"><span>Agent prompts</span><span>.claude/agents/*.md</span></div>
+      <div class="kv-row"><span>Orchestrator prompt</span><span>CLAUDE.md</span></div>
+    </div>
+    <div class="card" data-section="project">
+      <div class="section-title">Persistence</div>
+      <div class="kv-row"><span>Markdown edits</span><span>REAL — written to disk via local API</span></div>
+      <div class="kv-row"><span>Status / market scope</span><span>interface/meta.json (sidecar, docs untouched)</span></div>
+      <div class="kv-row"><span>Agent execution</span><span>REAL — Scheduler runs headless via claude -p (while server runs)</span></div>
+      <div class="kv-row"><span>Skills</span><span>skills/company + skills/personal, activated via Skill Hub symlinks</span></div>
+    </div>
+    <div class="card" data-section="project">
+      <div class="section-title">Approval Logic</div>
+      <div class="kv-row"><span>States</span><span>idea → briefing → draft → review → strategy_check → approval_required → approved → final</span></div>
+      <div class="kv-row"><span>Rule</span><span>Nothing is marked approved without explicit user approval</span></div>
+    </div>` : ''}
 
     ${show('runtime') ? `
     <div class="card" data-section="runtime">
@@ -2319,6 +2807,8 @@ function paintSettingsBody(el) {
       </div>
     </div>` : ''}
 
+    ${show('onboarding') ? onboardingCard : ''}
+
     ${show('profile') ? `
     <div class="card" data-section="profile">
       <div class="section-title">Profile &amp; Instructions</div>
@@ -2331,9 +2821,8 @@ function paintSettingsBody(el) {
         Persona and company profiles are best filled through the interviews: <code>/personal-onboarding</code> and <code>/company-onboarding</code> in Claude Code.
         The editors here are for quick corrections.
       </div>
-    </div>` : ''}
-
-    ${show('guardrails') ? '<div class="card" id="gr-card" data-section="guardrails"></div>' : ''}
+    </div>
+    ${renderMemoryCard()}` : ''}
 
     ${show('plugins') ? `
     <div class="card" data-section="plugins">
@@ -2359,28 +2848,7 @@ function paintSettingsBody(el) {
       </div>
     </div>` : ''}
 
-    ${show('project') ? `
-    <div class="card" data-section="project">
-      <div class="section-title">Project</div>
-      <div class="kv-row"><span>Name</span><span>Steadymade AI OS — Agent Setup</span></div>
-      <div class="kv-row"><span>Mode</span><span>Claude Project (no external runtime)</span></div>
-      <div class="kv-row"><span>Knowledge format</span><span>Markdown on disk</span></div>
-      <div class="kv-row"><span>Agents</span><span>${AGENTS.length} (Danny + ${AGENTS.length - 1} specialists)</span></div>
-      <div class="kv-row"><span>Agent prompts</span><span>.claude/agents/*.md</span></div>
-      <div class="kv-row"><span>Orchestrator prompt</span><span>CLAUDE.md</span></div>
-    </div>
-    <div class="card" data-section="project">
-      <div class="section-title">Persistence</div>
-      <div class="kv-row"><span>Markdown edits</span><span>REAL — written to disk via local API</span></div>
-      <div class="kv-row"><span>Status / market scope</span><span>interface/meta.json (sidecar, docs untouched)</span></div>
-      <div class="kv-row"><span>Agent execution</span><span>REAL — Scheduler runs headless via claude -p (while server runs)</span></div>
-      <div class="kv-row"><span>Skills</span><span>skills/company + skills/personal, activated via Skill Hub symlinks</span></div>
-    </div>
-    <div class="card" data-section="project">
-      <div class="section-title">Approval Logic</div>
-      <div class="kv-row"><span>States</span><span>idea → briefing → draft → review → strategy_check → approval_required → approved → final</span></div>
-      <div class="kv-row"><span>Rule</span><span>Nothing is marked approved without explicit user approval</span></div>
-    </div>` : ''}
+    ${show('guardrails') ? '<div class="card" id="gr-card" data-section="guardrails"></div>' : ''}
   </div>`;
 
   $$('[data-section-tab]', el).forEach((b) => b.addEventListener('click', () => {
@@ -2389,6 +2857,7 @@ function paintSettingsBody(el) {
   }));
 
   $('[data-act="onboarding-guide"]', el)?.addEventListener('click', () => showOnboardingModal(settingsState.data.workspace, { force: true }));
+  bindMemoryActions(el);
 
   $$('[data-edit-file]', el).forEach((b) => b.addEventListener('click', () => {
     const check = workspace.checks.find((c) => c.path === b.dataset.editFile);
@@ -2480,6 +2949,7 @@ function showOnboardingModal(workspace, { force = false } = {}) {
       </p>
       ${step(onb.personalDone, '1 · Personal onboarding', 'Creates your private persona profile (knowledge/personal/user-profile.md) and your personal instructions (CLAUDE.local.md).', '/personal-onboarding')}
       ${step(onb.companyDone, '2 · Company onboarding', `Fills the company operating profile — the shared custom instruction for the whole team.${onb.companyTodos ? ' Currently ' + onb.companyTodos + ' TODO placeholders open.' : ''}`, '/company-onboarding')}
+      ${step(onb.memoryDone, '3 · Memory setup', 'Required local memory paths exist: memory/MEMORY.md and memory/daily/. Create them in Settings → Memory.', '')}
       <div class="onb-actions">
         <button class="btn btn-primary btn-small" data-onb="settings">Open Settings</button>
         <button class="btn btn-ghost btn-small" data-onb="later">${onb.complete ? 'Close' : 'Remind me later'}</button>

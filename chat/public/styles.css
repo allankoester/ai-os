@@ -95,6 +95,7 @@ select#agent {
 .meta { font-family: var(--fm); font-size: 10px; color: var(--muted); margin-top: 6px; }
 .gate { margin-top: 8px; padding: 8px 10px; border-radius: 8px; font-family: var(--fm); font-size: 11px; }
 .gate.warn { background: var(--warn-soft); color: var(--warn); }
+.gate.note { background: var(--panel); color: var(--muted); border: 1px dashed var(--border); }
 
 .composer-wrap { padding: 14px 20px 10px; }
 .composer {
@@ -192,6 +193,13 @@ select#model { border: none; background: none; color: var(--muted); font-size: 1
 .conv-item.active { background: var(--green-soft); }
 .conv-title { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conv-meta { font-family: var(--fm); font-size: 9px; color: var(--muted); margin-top: 3px; display: flex; gap: 8px; }
+.run-badge {
+  color: #0A4D23;
+  background: var(--green-soft);
+  border: 1px solid rgba(20, 138, 63, .25);
+  border-radius: 999px;
+  padding: 0 6px;
+}
 .conv-snippet { font-size: 10px; color: var(--muted); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conv-actions { display: none; gap: 10px; margin-top: 5px; }
 .conv-item:hover .conv-actions { display: flex; }

@@ -30,18 +30,55 @@ const MARKETPLACE_REPO = 'ComposioHQ/awesome-claude-skills';
 const MARKETPLACE_README = `https://raw.githubusercontent.com/${MARKETPLACE_REPO}/master/README.md`;
 const MARKETPLACE_CACHE_MS = 60 * 60 * 1000;
 
+function unquote(v) {
+  const s = String(v ?? '').trim();
+  return s.replace(/^"(.*)"$/s, '$1').replace(/^'(.*)'$/s, '$1');
+}
+
+function parseCsvOrList(v) {
+  if (Array.isArray(v)) return v.map((x) => unquote(x)).filter(Boolean);
+  const s = unquote(v);
+  if (!s) return [];
+  const inline = s.match(/^\[(.*)\]$/s);
+  const body = inline ? inline[1] : s;
+  return body.split(',').map((x) => unquote(x)).map((x) => x.trim()).filter(Boolean);
+}
+
+function skillMetaFromFrontmatter(fm = {}) {
+  const requiresPlugins = parseCsvOrList(fm['requires-plugins'] ?? fm.requires_plugins);
+  const knowledge = parseCsvOrList(fm.knowledge);
+  const capabilities = parseCsvOrList(fm.capabilities);
+  return { requiresPlugins, knowledge, capabilities };
+}
+
 function parseFrontmatter(text) {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!m) return {};
   const out = {};
-  for (const line of m[1].split(/\r?\n/)) {
-    const i = line.indexOf(':');
-    if (i > 0) out[line.slice(0, i).trim()] = line.slice(i + 1).trim().replace(/^"(.*)"$/s, '$1');
+  const lines = m[1].split(/\r?\n/);
+  for (let idx = 0; idx < lines.length; idx++) {
+    const line = lines[idx];
+    const kv = line.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
+    if (!kv) continue;
+    const key = kv[1].trim();
+    const value = kv[2].trim();
+    if (value) {
+      out[key] = unquote(value);
+      continue;
+    }
+    const list = [];
+    for (let j = idx + 1; j < lines.length; j++) {
+      const item = lines[j].match(/^\s*-\s*(.+)$/);
+      if (!item) break;
+      list.push(unquote(item[1]));
+      idx = j;
+    }
+    out[key] = list.length ? list : '';
   }
   return out;
 }
 
-export function createSkillHub({ rootDir }) {
+export function createSkillHub({ rootDir, listEnabledPlugins = () => [] }) {
   const libraryDir = path.join(rootDir, 'skills');
   const activeDir = path.join(rootDir, '.claude', 'skills');
   const profileFile = path.join(rootDir, '.skill-profile');
@@ -50,6 +87,7 @@ export function createSkillHub({ rootDir }) {
   for (const scope of BASE_SCOPES) fs.mkdirSync(path.join(libraryDir, scope), { recursive: true });
 
   const validName = (name) => /^[a-z0-9][a-z0-9-]*$/.test(name);
+  const isPersonalScope = (scope) => scope === 'personal' || PERSONAL_WORKSPACE.test(scope);
   const activePath = (name) => path.join(activeDir, name);
 
   // company + personal + every personal-<name> workspace found on disk
@@ -161,13 +199,43 @@ export function createSkillHub({ rootDir }) {
     for (const name of librarySkillDirs(scope)) {
       const skillFile = path.join(dir, name, 'SKILL.md');
       const fm = parseFrontmatter(await fsp.readFile(skillFile, 'utf8'));
-      skills.push({
+      const meta = skillMetaFromFrontmatter(fm);
+      const skill = {
         name,
         scope,
         description: fm.description || null,
+        version: fm.version || null,
+        requiresPlugins: meta.requiresPlugins,
+        knowledge: meta.knowledge,
+        capabilities: meta.capabilities,
         active: skillIsActiveInProfile(profile, scope, name),
         path: path.relative(rootDir, skillFile),
-      });
+      };
+
+      const metaFile = path.join(dir, name, '.install.json');
+      if (fs.existsSync(metaFile)) {
+        let meta = {};
+        try { meta = JSON.parse(await fsp.readFile(metaFile, 'utf8')); } catch {}
+        skill.sha = meta.sha || null;
+        skill.installedAt = meta.installedAt || null;
+        skill.source = meta.source || null;
+        skill.owner = meta.owner || null;
+        skill.repo = meta.repo || null;
+        skill.ref = meta.ref || null;
+        skill.subpath = meta.subpath || null;
+        if (typeof meta.installedAt === 'string') {
+          try {
+            const st = await fsp.stat(skillFile);
+            skill.localModified = st.mtime.toISOString() > meta.installedAt;
+          } catch {
+            skill.localModified = null;
+          }
+        } else {
+          skill.localModified = null;
+        }
+      }
+
+      skills.push(skill);
     }
     return skills;
   }
@@ -347,6 +415,24 @@ export function createSkillHub({ rootDir }) {
       if (!fs.existsSync(path.join(libraryDir, scope, name, 'SKILL.md'))) {
         return { errors: [`skill not found in library: skills/${scope}/${name}`] };
       }
+
+      if (active) {
+        const skillFile = path.join(libraryDir, scope, name, 'SKILL.md');
+        const fm = parseFrontmatter(await fsp.readFile(skillFile, 'utf8'));
+        const required = skillMetaFromFrontmatter(fm).requiresPlugins;
+        if (required.length) {
+          const enabled = new Set(await Promise.resolve(listEnabledPlugins()));
+          const missing = required.filter((id) => !enabled.has(id));
+          if (missing.length) {
+            return {
+              errors: [`cannot activate /${name}: required plugins not enabled — ${missing.join(', ')}`],
+              blockedByDependencies: true,
+              missingPlugins: missing,
+            };
+          }
+        }
+      }
+
       const profile = readProfile() || defaultProfile();
       const key = `${scope}/${name}`;
       if (active) {
@@ -359,6 +445,39 @@ export function createSkillHub({ rootDir }) {
       await writeProfile(profile);
       await syncActiveDir(profile);
       return { ok: true, active };
+    },
+
+    async createPersonalSkill({ scope, name, content }) {
+      if (!isPersonalScope(scope)) return { errors: ['scope must be personal or personal-<name>'] };
+      if (!validName(name)) return { errors: ['invalid skill name'] };
+      if (content !== undefined && typeof content !== 'string') return { errors: ['content must be a string when provided'] };
+
+      const scopeDir = path.join(libraryDir, scope);
+      const skillDir = path.join(scopeDir, name);
+      const skillFile = path.join(skillDir, 'SKILL.md');
+      if (fs.existsSync(skillDir)) return { errors: [`skills/${scope}/${name} already exists`] };
+
+      const initial = typeof content === 'string'
+        ? content
+        : `---\nname: ${name}\ndescription: TODO\n---\n\n# ${name}\n\nDescribe what this skill does and when to use it.\n`;
+
+      await fsp.mkdir(skillDir, { recursive: true });
+      await fsp.writeFile(skillFile, initial, 'utf8');
+      personalGitSnapshot(scope, `create ${name}`);
+      return { ok: true, scope, name, path: `skills/${scope}/${name}/SKILL.md` };
+    },
+
+    async savePersonalSkillContent({ scope, name, content }) {
+      if (!isPersonalScope(scope)) return { errors: ['scope must be personal or personal-<name>'] };
+      if (!validName(name)) return { errors: ['invalid skill name'] };
+      if (typeof content !== 'string') return { errors: ['content must be a string'] };
+
+      const skillFile = path.join(libraryDir, scope, name, 'SKILL.md');
+      if (!fs.existsSync(skillFile)) return { errors: [`skill not found: skills/${scope}/${name}/SKILL.md`] };
+
+      await fsp.writeFile(skillFile, content, 'utf8');
+      personalGitSnapshot(scope, `customize ${name}`);
+      return { ok: true, scope, name, path: `skills/${scope}/${name}/SKILL.md`, mtime: (await fsp.stat(skillFile)).mtimeMs };
     },
 
     marketplace,

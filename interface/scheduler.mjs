@@ -12,6 +12,8 @@ import { randomUUID } from 'node:crypto';
 
 const TICK_MS = 20_000;
 const MAX_RUNS_KEPT = 200;
+const SCHEDULER_PERMISSION_MODE = process.env.SCHEDULER_PERMISSION_MODE || 'default';
+const SCHEDULER_ALLOWED_TOOLS = process.env.SCHEDULER_ALLOWED_TOOLS || 'Task,Read,Glob,Grep,Skill,WebFetch';
 
 // Locate the Claude Code CLI. The binary is not always on PATH (e.g. when the
 // CLI ships inside the VS Code extension), so try in order:
@@ -102,6 +104,7 @@ export function createScheduler({ rootDir }) {
   const logsDir = path.join(stateDir, 'logs');
   const jobsFile = path.join(stateDir, 'jobs.json');
   const runsFile = path.join(stateDir, 'runs.json');
+  const usageLogFile = path.join(rootDir, 'runs', 'usage.jsonl');
 
   fs.mkdirSync(logsDir, { recursive: true });
 
@@ -158,6 +161,47 @@ export function createScheduler({ rootDir }) {
     await writeJson(runsFile, runs);
   }
 
+  function appendUsageEntry(entry) {
+    try {
+      fs.mkdirSync(path.dirname(usageLogFile), { recursive: true });
+      fs.appendFileSync(usageLogFile, JSON.stringify(entry) + '\n', 'utf8');
+    } catch {
+      // scheduler telemetry must never break run execution
+    }
+  }
+
+  function logSchedulerUsage(run, job) {
+    appendUsageEntry({
+      source: 'scheduler',
+      timestamp: new Date().toISOString(),
+      start: run.startedAt ? new Date(run.startedAt).toISOString() : null,
+      end: run.endedAt ? new Date(run.endedAt).toISOString() : null,
+      started_at: run.startedAt ? new Date(run.startedAt).toISOString() : null,
+      ended_at: run.endedAt ? new Date(run.endedAt).toISOString() : null,
+      duration: run.startedAt && run.endedAt ? Math.max(0, run.endedAt - run.startedAt) : null,
+      duration_ms: run.startedAt && run.endedAt ? Math.max(0, run.endedAt - run.startedAt) : null,
+      status: run.status,
+      is_error: run.status === 'error' || run.status === 'timeout',
+      trigger: run.trigger,
+      run_id: run.id,
+      jobId: run.jobId,
+      jobName: run.jobName,
+      job_id: run.jobId,
+      job_name: run.jobName,
+      model: job.model || null,
+      session_id: null,
+      selected_agent: job.agent || null,
+      mode: 'scheduler',
+      num_turns: null,
+      cost_usd: null,
+      input_tokens: null,
+      output_tokens: null,
+      cache_creation_input_tokens: null,
+      cache_read_input_tokens: null,
+      total_tokens: null,
+    });
+  }
+
   function buildPrompt(job) {
     const parts = [];
     const workflowId = String(job.workflow || '').replace(/_workflow$/, '');
@@ -195,6 +239,8 @@ export function createScheduler({ rootDir }) {
 
     const logFile = path.join(logsDir, `${run.id}.log`);
     const args = ['-p', buildPrompt(job), '--output-format', 'text',
+      '--permission-mode', SCHEDULER_PERMISSION_MODE,
+      '--allowedTools', SCHEDULER_ALLOWED_TOOLS,
       // curated long-term memory is draft-only for unattended runs — same
       // block as the chat runtime (Simon audit, phase 6)
       '--disallowedTools', 'Write(./memory/MEMORY.md),Edit(./memory/MEMORY.md)'];
@@ -227,6 +273,7 @@ export function createScheduler({ rootDir }) {
       run.summary = `failed to start claude CLI (${claudeBin}): ${err.message}`;
       await fsp.writeFile(logFile, run.summary + '\n', 'utf8').catch(() => {});
       await persistRuns();
+      logSchedulerUsage(run, job);
     });
 
     child.on('close', async (code) => {
@@ -244,6 +291,7 @@ export function createScheduler({ rootDir }) {
         await persistJobs();
       }
       await persistRuns();
+      logSchedulerUsage(run, job);
     });
 
     return { run };
