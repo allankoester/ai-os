@@ -2672,7 +2672,7 @@ async function openFileEditorDrawer(path, { title = 'Edit File', hint = '', temp
 
 // ---------------------------------------------------------------- Artifacts / Settings
 
-const artState = { q: '', range: 'all' };
+const artState = { q: '', range: 'all', type: 'all', layout: 'grid' };
 
 const ART_RANGES = [
   ['24h', 24 * 3600e3, 'Last 24h'],
@@ -2680,6 +2680,51 @@ const ART_RANGES = [
   ['30d', 30 * 24 * 3600e3, 'Last 30 days'],
   ['all', Infinity, 'All time'],
 ];
+
+// File-type taxonomy: extension → category. Each category has a label, a
+// minimal line icon and a tone (drives the tile tint) so artifacts are
+// scannable by type. Tones stay within the brand palette (green / apricot /
+// neutral) instead of a rainbow of file-manager colors.
+const ART_TYPES = {
+  pdf:      { label: 'PDF',      tone: 'apricot', exts: ['pdf'],
+              icon: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 15h6"/><path d="M9 18h4"/>' },
+  word:     { label: 'Word',     tone: 'green',   exts: ['doc', 'docx', 'rtf', 'odt', 'pages'],
+              icon: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13l1.5 5 2-4 2 4 1.5-5"/>' },
+  sheet:    { label: 'Sheet',    tone: 'green',   exts: ['xls', 'xlsx', 'csv', 'ods', 'numbers'],
+              icon: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16"/><path d="M4 15h16"/><path d="M10 4v16"/>' },
+  slides:   { label: 'Slides',   tone: 'apricot', exts: ['ppt', 'pptx', 'key', 'odp'],
+              icon: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8"/><path d="M12 16v4"/>' },
+  image:    { label: 'Image',    tone: 'green',   exts: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'avif', 'heic'],
+              icon: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.6"/><path d="m21 15-5-5L5 21"/>' },
+  markdown: { label: 'Markdown', tone: 'neutral', exts: ['md', 'markdown'],
+              icon: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 15V9l2.5 3L12 9v6"/><path d="M16 9v4"/><path d="m14.5 12 1.5 2 1.5-2"/>' },
+  html:     { label: 'HTML',     tone: 'apricot', exts: ['html', 'htm'],
+              icon: '<path d="m9 9-3 3 3 3"/><path d="m15 9 3 3-3 3"/><path d="M4 4h16v16H4z"/>' },
+  data:     { label: 'Data',     tone: 'neutral', exts: ['json', 'yaml', 'yml', 'xml', 'toml'],
+              icon: '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>' },
+  archive:  { label: 'Archive',  tone: 'neutral', exts: ['zip', 'tar', 'gz', 'rar', '7z'],
+              icon: '<path d="M21 8v13H3V8"/><rect x="1" y="3" width="22" height="5" rx="1"/><path d="M10 12h4"/>' },
+  text:     { label: 'Text',     tone: 'neutral', exts: ['txt', 'log'],
+              icon: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h8"/>' },
+};
+const ART_TYPE_FALLBACK = { label: 'File', tone: 'neutral',
+  icon: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>' };
+
+function artExt(name) {
+  return name.includes('.') ? name.split('.').pop().toLowerCase() : '';
+}
+function artTypeId(name) {
+  const ext = artExt(name);
+  for (const [id, t] of Object.entries(ART_TYPES)) if (t.exts.includes(ext)) return id;
+  return 'file';
+}
+function artTypeMeta(id) {
+  return ART_TYPES[id] || ART_TYPE_FALLBACK;
+}
+function artTileHtml(a) {
+  const t = artTypeMeta(artTypeId(a.name));
+  return `<span class="art-tile art-tone-${t.tone}"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${t.icon}</svg></span>`;
+}
 
 function renderArtifacts(el) {
   paintArtifacts(el);
@@ -2693,12 +2738,50 @@ function renderArtifacts(el) {
 function paintArtifacts(el) {
   const rangeMs = ART_RANGES.find(([id]) => id === artState.range)[1];
   const q = artState.q.toLowerCase();
-  const items = [...state.system.artifacts]
+  // filter by range + search first; type filter is applied after so the type
+  // tabs always reflect what's available in the current range/search scope
+  const scoped = [...state.system.artifacts]
     .sort((a, b) => (b.ctime || b.mtime) - (a.ctime || a.mtime)) // newest generated first
     .filter((a) => (a.ctime || a.mtime) >= Date.now() - rangeMs)
     .filter((a) => !q || (a.name + ' ' + (a.folder || '')).toLowerCase().includes(q));
 
-  el.innerHTML = `<div class="view-pad simple-list" style="max-width:860px">
+  // counts per type present in scope, for the type tabs
+  const typeCounts = {};
+  for (const a of scoped) { const id = artTypeId(a.name); typeCounts[id] = (typeCounts[id] || 0) + 1; }
+  const presentTypes = Object.keys(ART_TYPES).concat('file').filter((id) => typeCounts[id]);
+  // reset a type filter that no longer has matches
+  if (artState.type !== 'all' && !typeCounts[artState.type]) artState.type = 'all';
+
+  const items = scoped.filter((a) => artState.type === 'all' || artTypeId(a.name) === artState.type);
+
+  const typeTab = (id, label, count) =>
+    `<button class="filter-tab ${artState.type === id ? 'active' : ''}" data-type="${id}">${esc(label)} <span class="ft-count">${count}</span></button>`;
+
+  const gridHtml = items.map((a) => `
+    <button class="art-card" data-art-open="${esc(a.path)}" title="${esc(a.name)}">
+      ${artTileHtml(a)}
+      <span class="art-name">${esc(a.name)}</span>
+      <span class="art-folder">${esc(a.folder || 'artifacts')}/</span>
+      <span class="art-card-meta">
+        <span>${esc(artTypeMeta(artTypeId(a.name)).label)}</span>
+        <span>${(a.size / 1024).toFixed(1)} KB</span>
+      </span>
+      <span class="art-card-time" title="${new Date(a.ctime || a.mtime).toLocaleString()}">${timeAgo(a.ctime || a.mtime)}</span>
+    </button>`).join('');
+
+  const listHtml = items.map((a) => `
+    <button class="art-list-row" data-art-open="${esc(a.path)}">
+      ${artTileHtml(a)}
+      <span class="art-list-main">
+        <span class="art-list-name">${esc(a.name)}</span>
+        <span class="art-folder">${esc(a.folder || 'artifacts')}/</span>
+      </span>
+      <span class="badge badge-gray">${esc(artTypeMeta(artTypeId(a.name)).label)}</span>
+      <span class="list-meta">${(a.size / 1024).toFixed(1)} KB</span>
+      <span class="list-meta" title="${new Date(a.ctime || a.mtime).toLocaleString()}">${timeAgo(a.ctime || a.mtime)}</span>
+    </button>`).join('');
+
+  el.innerHTML = `<div class="view-pad simple-list" style="max-width:1040px">
     <div class="card">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <div class="section-title" style="margin:0">Artifacts <span class="list-meta">${items.length} of ${state.system.artifacts.length}</span></div>
@@ -2706,22 +2789,24 @@ function paintArtifacts(el) {
         <span class="filter-tabs">
           ${ART_RANGES.map(([id, , label]) => `<button class="filter-tab ${artState.range === id ? 'active' : ''}" data-range="${id}">${label}</button>`).join('')}
         </span>
+        <span class="filter-tabs" title="View">
+          <button class="filter-tab ${artState.layout === 'grid' ? 'active' : ''}" data-layout="grid">Grid</button>
+          <button class="filter-tab ${artState.layout === 'list' ? 'active' : ''}" data-layout="list">List</button>
+        </span>
       </div>
-      <div class="stat-note" style="margin-top:6px;white-space:normal">Generated files under <code>artifacts/</code> and <code>knowledge/**/_artifacts/**</code>, newest first by creation date.</div>
+      ${presentTypes.length ? `<div class="art-type-tabs">
+        <span class="filter-tabs">
+          ${typeTab('all', 'All', scoped.length)}
+          ${presentTypes.map((id) => typeTab(id, artTypeMeta(id).label, typeCounts[id])).join('')}
+        </span>
+      </div>` : ''}
+      <div class="stat-note" style="margin-top:8px">Generated files under <code>artifacts/</code> and <code>knowledge/**/_artifacts/**</code>, newest first by creation date.</div>
     </div>
-    ${items.length ? items.map((a) => `
-      <div class="card">
-        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
-          <span class="badge badge-gray">${esc((a.name.includes('.') ? a.name.split('.').pop() : 'file').toUpperCase())}</span>
-          <span style="flex:1;min-width:180px">
-            <span style="display:block;font-weight:600;color:var(--headline)">${esc(a.name)}</span>
-            <span class="list-meta">${esc(a.folder || 'artifacts')}/</span>
-          </span>
-          <span class="list-meta">${(a.size / 1024).toFixed(1)} KB</span>
-          <span class="list-meta" title="${new Date(a.ctime || a.mtime).toLocaleString()}">created ${timeAgo(a.ctime || a.mtime)}</span>
-          <button class="chip" data-art-open="${esc(a.path)}">OPEN</button>
-        </div>
-      </div>`).join('') : `<div class="card">${state.system.artifacts.length ? 'No artifacts match the current filter.' : 'No artifacts yet - agent runs place generated files under artifacts/ or knowledge/**/_artifacts/**.'}</div>`}
+    ${items.length
+      ? (artState.layout === 'grid'
+          ? `<div class="art-grid">${gridHtml}</div>`
+          : `<div class="card art-list">${listHtml}</div>`)
+      : `<div class="card">${state.system.artifacts.length ? 'No artifacts match the current filter.' : 'No artifacts yet — agent runs place generated files under artifacts/ or knowledge/**/_artifacts/**.'}</div>`}
   </div>`;
 
   const search = $('#art-search', el);
@@ -2734,6 +2819,8 @@ function paintArtifacts(el) {
     s2.setSelectionRange(pos, pos);
   });
   $$('[data-range]', el).forEach((b) => b.addEventListener('click', () => { artState.range = b.dataset.range; paintArtifacts(el); }));
+  $$('[data-type]', el).forEach((b) => b.addEventListener('click', () => { artState.type = b.dataset.type; paintArtifacts(el); }));
+  $$('[data-layout]', el).forEach((b) => b.addEventListener('click', () => { artState.layout = b.dataset.layout; paintArtifacts(el); }));
   $$('[data-art-open]', el).forEach((b) => b.addEventListener('click', () => {
     window.open('/api/artifact?path=' + encodeURIComponent(b.dataset.artOpen), '_blank');
   }));
