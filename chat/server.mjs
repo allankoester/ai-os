@@ -1647,9 +1647,9 @@ function staticSecurityHeaders(extra = {}) {
   const csp = [
     "default-src 'self'",
     "script-src 'self'",
-    "style-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "img-src 'self' data:",
-    "font-src 'self' data:",
+    "font-src 'self' data: https://fonts.gstatic.com",
     "connect-src 'self' ws://localhost:* ws://127.0.0.1:*",
     'frame-ancestors http://localhost:4011 http://127.0.0.1:4011',
   ].join('; ');

@@ -11,16 +11,30 @@
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%230B2218'/><circle cx='8' cy='8' r='3' fill='%232EE66A'/></svg>" />
 </head>
 <body>
+  <!-- ===== Slim dark top strip: brand · view title · search ===== -->
+  <header class="topstrip">
+    <div class="ts-brand">
+      <span class="ts-name">Steadymade&nbsp;AI&nbsp;OS</span>
+      <span class="ts-sub">AGENT SYSTEM / KNOWLEDGE MAP</span>
+    </div>
+    <span class="ts-divider"></span>
+    <h1 id="view-title">Command Center</h1>
+    <div class="ts-right">
+      <div id="chat-mode-switch" class="chat-mode-switch hidden" role="group" aria-label="Chat runtime mode">
+        <button class="chat-mode-btn active" type="button" data-chat-mode="chat">Chat</button>
+        <button class="chat-mode-btn" type="button" data-chat-mode="cli">CLI</button>
+      </div>
+      <div class="search-wrap">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="search" type="text" placeholder="Search agents, docs, workflows…" autocomplete="off" />
+        <div id="search-results" class="search-results hidden"></div>
+      </div>
+    </div>
+  </header>
+
   <div id="app">
     <!-- ===== Left Sidebar ===== -->
     <aside class="sidebar">
-      <div class="sidebar-brand">
-        <div>
-          <div class="brand-name">Steadymade&nbsp;AI&nbsp;OS</div>
-          <div class="brand-sub">AGENT SYSTEM / KNOWLEDGE MAP</div>
-        </div>
-      </div>
-
       <nav class="sidebar-nav" id="nav">
         <button class="nav-item" data-view="chat">Chat</button>
         <button class="nav-item active" data-view="command">Command Center</button>
@@ -45,25 +59,6 @@
 
     <!-- ===== Main column ===== -->
     <div class="main-col">
-      <header class="topbar">
-        <div class="topbar-left">
-          <h1 id="view-title">Command Center</h1>
-        </div>
-        <div class="topbar-center">
-          <div class="search-wrap">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-            <input id="search" type="text" placeholder="Search agents, docs, workflows…" autocomplete="off" />
-            <div id="search-results" class="search-results hidden"></div>
-          </div>
-        </div>
-        <div class="topbar-right">
-          <div id="chat-mode-switch" class="chat-mode-switch hidden" role="group" aria-label="Chat runtime mode">
-            <button class="chat-mode-btn active" type="button" data-chat-mode="chat">Chat</button>
-            <button class="chat-mode-btn" type="button" data-chat-mode="cli">CLI</button>
-          </div>
-        </div>
-      </header>
-
       <main id="view" class="view"></main>
       <div id="chat-holder" class="chat-holder hidden"></div>
     </div>

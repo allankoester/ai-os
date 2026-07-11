@@ -1755,47 +1755,30 @@ function openWorkflowDrawer(flow) {
 
 // ---------------------------------------------------------------- Departments
 
-// Minimal line icons (24px grid, 1.5px stroke) — one per department.
-const DEPT_ICON_SVG = {
-  core: '<circle cx="12" cy="12" r="2.6"/><circle cx="12" cy="12" r="8.4" stroke-dasharray="2.6 3.4"/>',
-  strategy: '<circle cx="12" cy="12" r="9"/><path d="M15.2 8.8l-1.9 4.5-4.5 1.9 1.9-4.5 4.5-1.9z"/>',
-  knowledge: '<path d="M4 19a2.5 2.5 0 0 1 2.5-2.5H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
-  marketing: '<path d="M3 10v4a1 1 0 0 0 1 1h2l4 4V5L6 9H4a1 1 0 0 0-1 1z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 6a9 9 0 0 1 0 12"/>',
-  sales: '<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><circle cx="7" cy="7" r="1" fill="currentColor" stroke="none"/>',
-  documents: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/>',
-  creative: '<path d="M12 3l1.9 5.4L19.5 10l-5.6 1.6L12 17l-1.9-5.4L4.5 10l5.6-1.6L12 3z"/><path d="M18.5 16.5l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7.7-2z"/>',
-  it: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
-};
-
-function deptIconHtml(id) {
-  const paths = DEPT_ICON_SVG[id];
-  if (!paths) return '';
-  return `<span class="dept-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${paths}</svg></span>`;
-}
-
 function renderDepartments(el) {
-  el.innerHTML = `<div class="view-pad"><div class="dept-grid">
-    ${DEPARTMENTS.map((d) => {
+  el.innerHTML = `<div class="view-pad dept-list">
+    ${DEPARTMENTS.map((d, i) => {
       const members = AGENTS.filter((a) => a.dept === d.id);
-      return `<div class="card dept-card">
-        <div class="dept-head">
-          ${deptIconHtml(d.id)}
-          <span>
-            <div class="dept-name">${esc(d.name)}</div>
-            <div class="dept-sub">${esc(d.note)} · ${members.length} agent${members.length === 1 ? '' : 's'}</div>
-          </span>
+      return `<div class="card dept-row">
+        <div class="dept-info">
+          <div class="dept-idx">${String(i + 1).padStart(2, '0')}</div>
+          <div class="dept-name">${esc(d.name)}</div>
+          <div class="dept-sub">${esc(d.note)}</div>
+          <div class="dept-count">${members.length} AGENT${members.length === 1 ? '' : 'S'}</div>
         </div>
-        ${members.map((a) => `
-          <button class="dept-agent-row" data-agent="${a.id}">
-            <span class="dept-agent-avatar">${a.name[0]}</span>
-            <span>
-              <div class="dept-agent-name">${esc(a.name)} — ${esc(a.title)}</div>
-              <div class="dept-agent-role">${esc(a.role)}</div>
-            </span>
-          </button>`).join('')}
+        <div class="dept-agents">
+          ${members.map((a) => `
+            <button class="dept-agent-row" data-agent="${a.id}">
+              <span class="dept-agent-avatar">${a.name[0]}</span>
+              <span>
+                <div class="dept-agent-name">${esc(a.name)} — ${esc(a.title)}</div>
+                <div class="dept-agent-role">${esc(a.role)}</div>
+              </span>
+            </button>`).join('')}
+        </div>
       </div>`;
     }).join('')}
-  </div></div>`;
+  </div>`;
   $$('[data-agent]', el).forEach((b) => b.addEventListener('click', () => openAgentDrawer(b.dataset.agent)));
 }
 
