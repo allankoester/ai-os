@@ -1755,13 +1755,36 @@ function openWorkflowDrawer(flow) {
 
 // ---------------------------------------------------------------- Departments
 
+// Minimal line icons (24px grid, 1.5px stroke) — one per department.
+const DEPT_ICON_SVG = {
+  core: '<circle cx="12" cy="12" r="2.6"/><circle cx="12" cy="12" r="8.4" stroke-dasharray="2.6 3.4"/>',
+  strategy: '<circle cx="12" cy="12" r="9"/><path d="M15.2 8.8l-1.9 4.5-4.5 1.9 1.9-4.5 4.5-1.9z"/>',
+  knowledge: '<path d="M4 19a2.5 2.5 0 0 1 2.5-2.5H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
+  marketing: '<path d="M3 10v4a1 1 0 0 0 1 1h2l4 4V5L6 9H4a1 1 0 0 0-1 1z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 6a9 9 0 0 1 0 12"/>',
+  sales: '<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><circle cx="7" cy="7" r="1" fill="currentColor" stroke="none"/>',
+  documents: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/>',
+  creative: '<path d="M12 3l1.9 5.4L19.5 10l-5.6 1.6L12 17l-1.9-5.4L4.5 10l5.6-1.6L12 3z"/><path d="M18.5 16.5l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7.7-2z"/>',
+  it: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+};
+
+function deptIconHtml(id) {
+  const paths = DEPT_ICON_SVG[id];
+  if (!paths) return '';
+  return `<span class="dept-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${paths}</svg></span>`;
+}
+
 function renderDepartments(el) {
   el.innerHTML = `<div class="view-pad"><div class="dept-grid">
     ${DEPARTMENTS.map((d) => {
       const members = AGENTS.filter((a) => a.dept === d.id);
       return `<div class="card dept-card">
-        <div class="dept-name">${esc(d.name)}</div>
-        <div class="dept-sub">${esc(d.note)} · ${members.length} agent${members.length === 1 ? '' : 's'}</div>
+        <div class="dept-head">
+          ${deptIconHtml(d.id)}
+          <span>
+            <div class="dept-name">${esc(d.name)}</div>
+            <div class="dept-sub">${esc(d.note)} · ${members.length} agent${members.length === 1 ? '' : 's'}</div>
+          </span>
+        </div>
         ${members.map((a) => `
           <button class="dept-agent-row" data-agent="${a.id}">
             <span class="dept-agent-avatar">${a.name[0]}</span>
@@ -2337,24 +2360,31 @@ function skillBodyHtml() {
         <span class="badge badge-gray">${activeCount} ACTIVE</span>
       </div>
       <div class="stat-note" style="margin-bottom:8px">${esc(notes[scope.name] || `skills/${scope.name}/ — personal workspace on the shared drive, gitignored.`)}</div>
-      ${visible.length ? visible.map((s) => `
-        <div class="list-row" style="cursor:default;align-items:flex-start">
-          <span class="badge ${s.active ? 'badge-green' : 'badge-gray'}">${s.active ? 'ACTIVE' : 'OFF'}</span>
-          <span style="flex:1;min-width:0">
-            <span class="list-title" style="display:block">/${esc(s.name)} ${updateBadgesHtml(s)}</span>
-            <span class="list-meta" style="display:block">${skillTypeBadgesHtml(s)}</span>
-            <span class="stat-note" style="display:block;white-space:normal">${esc((s.description || 'No description in SKILL.md frontmatter.').slice(0, 220))}</span>
-            <span class="list-meta" style="display:block">Version: ${esc(s.version || '—')}</span>
-            ${(s.sha || s.installedAt)
-              ? `<span class="list-meta" style="display:block">Installed: ${esc(shortSha(s.sha))} · ${esc(formatInstalledDate(s.installedAt))}</span>`
-              : ''}
-          </span>
-          <span style="display:flex;gap:6px;flex-shrink:0">
+      ${visible.length ? visible.map((s) => {
+        const caps = skillCapabilitySummary(s);
+        const type = ['PROMPT', caps.tools ? '+TOOLS' : null, caps.knowledge ? '+KNOWLEDGE' : null].filter(Boolean).join(' ');
+        const meta = [
+          `v${s.version || '—'}`,
+          type,
+          (s.sha || s.installedAt) ? `Installed ${shortSha(s.sha)} · ${formatInstalledDate(s.installedAt)}` : null,
+        ].filter(Boolean).join(' · ');
+        return `
+        <div class="skill-row">
+          <button class="skill-toggle ${s.active ? 'on' : ''}" data-skill="${esc(s.scope)}:${esc(s.name)}" data-active="${s.active ? '1' : ''}" title="${s.active ? 'Deactivate' : 'Activate'} /${esc(s.name)}" role="switch" aria-checked="${s.active ? 'true' : 'false'}"><i></i></button>
+          <div class="skill-main">
+            <div class="skill-title-row">
+              <span class="skill-name">/${esc(s.name)}</span>
+              ${updateBadgesHtml(s)}
+            </div>
+            <div class="skill-desc">${esc((s.description || 'No description in SKILL.md frontmatter.').slice(0, 220))}</div>
+            <div class="skill-meta">${esc(meta)}</div>
+          </div>
+          <span class="skill-actions">
             <button class="chip" data-configure-skill="${esc(s.scope)}:${esc(s.name)}">CONFIGURE</button>
             <button class="chip" data-customize="${esc(s.path)}" data-customize-scope="${esc(s.scope)}" data-customize-name="${esc(s.name)}">CUSTOMIZE</button>
-            <button class="chip" data-skill="${esc(s.scope)}:${esc(s.name)}" data-active="${s.active ? '1' : ''}">${s.active ? 'DEACTIVATE' : 'ACTIVATE'}</button>
           </span>
-        </div>`).join('') : `<div class="stat-note">${esc(skills.length ? 'No skills match the current filter.' : empties[scope.name] || 'No skills in this workspace yet.')}</div>`}
+        </div>`;
+      }).join('') : `<div class="stat-note">${esc(skills.length ? 'No skills match the current filter.' : empties[scope.name] || 'No skills in this workspace yet.')}</div>`}
     </div>`;
   }).join('');
 }
@@ -2425,8 +2455,8 @@ function paintSkills() {
           ${['all', 'active', 'inactive'].map((f) => `<button class="filter-tab ${skillState.filter === f ? 'active' : ''}" data-filter="${f}">${f === 'all' ? 'All' : f === 'active' ? 'Active' : 'Inactive'}</button>`).join('')}
         </span>
         <span class="list-meta" id="sk-count"></span>
-        <button class="btn btn-small" data-act="check-updates">${skillState.updatesLoading ? 'CHECKING…' : 'CHECK UPDATES'}</button>
-        ${personalScopes.length ? '<button class="btn btn-primary btn-small" data-act="new-skill">NEW SKILL</button>' : ''}
+        <button class="btn btn-small" data-act="check-updates">${skillState.updatesLoading ? 'Checking…' : 'Check Updates'}</button>
+        ${personalScopes.length ? '<button class="btn btn-primary btn-small" data-act="new-skill">New Skill</button>' : ''}
         <button class="btn btn-ghost btn-small" data-act="market">${skillState.marketOpen ? 'Hide Marketplace' : 'Browse Marketplace'}</button>
       </div>
       ${skillState.updatesCheckedAt ? `<div class="stat-note" style="margin-top:8px">Update status checked ${esc(timeAgo(Date.parse(skillState.updatesCheckedAt)))}</div>` : ''}
