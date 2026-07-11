@@ -1,15 +1,20 @@
 #!/usr/bin/env node
 import http from 'node:http';
 import { spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import nodePty from 'node-pty';
+import { WebSocketServer, WebSocket } from 'ws';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const PUBLIC = path.join(__dirname, 'public');
 const PORT = Number(process.env.CHAT_PORT || 4012);
+const CHAT_CLI_BRIDGE_ENABLED = /^(1|true|yes|on)$/i.test(String(process.env.CHAT_CLI_BRIDGE_ENABLED || '').trim());
+const CHAT_CLI_TOKEN = String(process.env.CHAT_CLI_TOKEN || '').trim();
 const LEGACY_USAGE_LOG = path.join(ROOT, 'runs', 'chat-usage.jsonl');
 const USAGE_LOG = path.join(ROOT, 'runs', 'usage.jsonl');
 // Product-owned chat history (gitignored): one JSONL per conversation plus a
@@ -29,6 +34,12 @@ const ALLOWED_TOOLS = process.env.CHAT_ALLOWED_TOOLS || 'Task,Read,Glob,Grep,Ski
 // writable at all (memory/**, runs/**).
 const DISALLOWED_TOOLS = process.env.CHAT_DISALLOWED_TOOLS
   ?? 'Write(./memory/MEMORY.md),Edit(./memory/MEMORY.md)';
+const MAX_JSON_BODY_BYTES = Math.max(1024, Number(process.env.CHAT_JSON_MAX_BYTES || 64 * 1024) || 64 * 1024);
+const CLI_INPUT_MAX_LINE = Math.max(64, Number(process.env.CHAT_CLI_MAX_INPUT_LINE || 4096) || 4096);
+const CLI_MAX_SUBSCRIBERS = Math.max(1, Number(process.env.CHAT_CLI_MAX_SUBSCRIBERS || 8) || 8);
+const CLI_MAX_RUNTIME_MS = Math.max(1000, Number(process.env.CHAT_CLI_MAX_RUNTIME_MS || 10 * 60 * 1000) || 10 * 60 * 1000);
+
+const COMMON_LOCAL_BIN_DIRS = discoverCommonLocalBinDirs();
 
 const AGENT_FILE_ALIASES = {
   atlas: 'atlas-strategic-advisor.md',
@@ -106,6 +117,155 @@ function findClaudeBin() {
   return 'claude';
 }
 const CLAUDE_BIN = findClaudeBin();
+const OPENCODE_BIN = process.env.OPENCODE_BIN || 'opencode';
+
+function expandHome(rawPath) {
+  const value = String(rawPath || '').trim();
+  if (!value) return '';
+  if (value === '~') return os.homedir();
+  if (value.startsWith('~/')) return path.join(os.homedir(), value.slice(2));
+  return value;
+}
+
+function isExecutable(file) {
+  if (!file) return false;
+  try {
+    fs.accessSync(file, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function uniquePaths(items) {
+  return [...new Set(items.filter(Boolean).map((p) => path.resolve(expandHome(String(p)))))];
+}
+
+function sortedVersionLike(entries) {
+  return [...entries].sort((a, b) => b.localeCompare(a, undefined, { numeric: true, sensitivity: 'base' }));
+}
+
+function discoverVersionedBinDirs(baseDir, suffix) {
+  try {
+    const entries = fs.readdirSync(baseDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+    return sortedVersionLike(entries).map((name) => path.join(baseDir, name, ...suffix));
+  } catch {
+    return [];
+  }
+}
+
+function discoverCommonLocalBinDirs() {
+  const home = os.homedir();
+  const dirs = [
+    path.join(home, '.local', 'bin'),
+    path.join(home, '.npm-global', 'bin'),
+    path.join(home, '.volta', 'bin'),
+    path.join(home, '.bun', 'bin'),
+    path.join(home, '.asdf', 'shims'),
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+  ];
+  dirs.push(...discoverVersionedBinDirs(path.join(home, '.nvm', 'versions', 'node'), ['bin']));
+  dirs.push(...discoverVersionedBinDirs(path.join(home, '.fnm', 'node-versions'), ['installation', 'bin']));
+  return uniquePaths(dirs);
+}
+
+function resolveBinaryCommand(command, fallbackName) {
+  const configuredRaw = String(command || '').trim();
+  const configured = expandHome(configuredRaw || fallbackName);
+  const hasPathSegment = configured.includes(path.sep);
+  const diagnostics = {
+    configured: configuredRaw || fallbackName,
+    resolvedPath: null,
+    availablePaths: [],
+    reason: null,
+  };
+
+  const candidates = [];
+  if (hasPathSegment) {
+    candidates.push(path.resolve(configured));
+    if (!path.isAbsolute(configured)) candidates.push(path.resolve(ROOT, configured));
+  } else {
+    const searchDirs = uniquePaths([
+      ...String(process.env.PATH || '').split(path.delimiter),
+      ...COMMON_LOCAL_BIN_DIRS,
+    ]);
+    for (const dir of searchDirs) candidates.push(path.join(dir, configured));
+  }
+
+  for (const candidate of uniquePaths(candidates)) {
+    if (isExecutable(candidate)) diagnostics.availablePaths.push(candidate);
+  }
+  diagnostics.resolvedPath = diagnostics.availablePaths[0] || null;
+
+  if (!diagnostics.resolvedPath) {
+    if (hasPathSegment) {
+      diagnostics.reason = `configured path is not executable: ${diagnostics.configured}`;
+    } else {
+      diagnostics.reason = `${diagnostics.configured} binary not found in PATH/local bins`;
+    }
+  }
+
+  return diagnostics;
+}
+
+const CLI_TARGETS = {
+  claude: { cmd: CLAUDE_BIN, args: [] },
+  opencode: { cmd: OPENCODE_BIN, args: [] },
+};
+const CLI_OPEN_TERMINAL_TARGETS = new Set(['opencode', 'claude']);
+const TERMINAL_ALLOWED_TARGETS = new Set(['claude', 'opencode']);
+const TERMINAL_INPUT_MAX_BYTES = Math.max(64, Number(process.env.CHAT_TERMINAL_MAX_INPUT_BYTES || 64 * 1024) || 64 * 1024);
+const TERMINAL_DEFAULT_COLS = Math.max(20, Number(process.env.CHAT_TERMINAL_DEFAULT_COLS || 120) || 120);
+const TERMINAL_DEFAULT_ROWS = Math.max(8, Number(process.env.CHAT_TERMINAL_DEFAULT_ROWS || 30) || 30);
+const TERMINAL_MAX_SESSIONS = Math.max(1, Number(process.env.CHAT_TERMINAL_MAX_SESSIONS || 12) || 12);
+const TERMINAL_MAX_CLIENTS_PER_SESSION = Math.max(1, Number(process.env.CHAT_TERMINAL_MAX_CLIENTS || 6) || 6);
+const TERMINAL_MAX_RUNTIME_MS = Math.max(5 * 60 * 1000, Number(process.env.CHAT_TERMINAL_MAX_RUNTIME_MS || 2 * 60 * 60 * 1000) || 2 * 60 * 60 * 1000);
+const TERMINAL_NO_CLIENT_GRACE_MS = Math.max(15 * 1000, Number(process.env.CHAT_TERMINAL_NO_CLIENT_GRACE_MS || 5 * 60 * 1000) || 5 * 60 * 1000);
+const TERMINAL_EXIT_TTL_MS = Math.max(30 * 1000, Number(process.env.CHAT_TERMINAL_EXIT_TTL_MS || 2 * 60 * 1000) || 2 * 60 * 1000);
+const TERMINAL_WS_MAX_PAYLOAD = TERMINAL_INPUT_MAX_BYTES + 2048;
+
+const { spawn: spawnPty } = nodePty;
+
+const CLI_STATE = {
+  run: null,
+  subscribers: new Set(),
+};
+
+const TERMINAL_STATE = {
+  sessions: new Map(),
+};
+
+const CLI_ENV_ALLOWLIST = [
+  'PATH',
+  'HOME',
+  'SHELL',
+  'TERM',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'COLORTERM',
+  'TMPDIR',
+  'TMP',
+  'TEMP',
+  'USER',
+  'LOGNAME',
+  'XDG_CONFIG_HOME',
+  'XDG_DATA_HOME',
+  'XDG_CACHE_HOME',
+  'NO_COLOR',
+  'FORCE_COLOR',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
+  'NODE_EXTRA_CA_CERTS',
+];
+
+const CHAT_PROVIDER_ENV_RE = /^(ANTHROPIC_|OPENCODE_|OPENAI_|AZURE_OPENAI_|CLAUDE_)/;
 
 function sse(res, event, data) {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -194,11 +354,83 @@ function requireTrustedLocalJsonMutation(req, res) {
   return true;
 }
 
-function readBody(req) {
+function requireTrustedLocalRead(req, res) {
+  if (!isTrustedLocalWebRequest(req, PORT)) {
+    sendJson(res, 403, { error: 'forbidden: untrusted origin/referer' });
+    return false;
+  }
+  return true;
+}
+
+function cliUnavailablePayload() {
+  const diagnostics = inspectCliTargets();
+  return {
+    error: 'cli bridge unavailable',
+    unavailable: true,
+    bridgeEnabled: false,
+    reason: 'bridge disabled: set CHAT_CLI_BRIDGE_ENABLED=1 (or enable it in Settings → AI Provider) and restart',
+    available: diagnostics.available,
+    commands: diagnostics.commands,
+    availableBinaries: diagnostics.availableBinaries,
+    resolvedCommands: diagnostics.resolvedCommands,
+  };
+}
+
+function cliAuthTokenFromRequest(req, url) {
+  const auth = String(req.headers.authorization || '').trim();
+  if (/^bearer\s+/i.test(auth)) return auth.replace(/^bearer\s+/i, '').trim();
+  const headerToken = String(req.headers['x-cli-token'] || '').trim();
+  if (headerToken) return headerToken;
+  return String(url.searchParams.get('token') || '').trim();
+}
+
+function requireCliToken(req, res, url) {
+  if (!CHAT_CLI_TOKEN) return true;
+  const token = cliAuthTokenFromRequest(req, url);
+  if (token !== CHAT_CLI_TOKEN) {
+    sendJson(res, 401, { error: 'unauthorized: missing or invalid CLI token' });
+    return false;
+  }
+  return true;
+}
+
+function readBody(req, res, { limitBytes = MAX_JSON_BODY_BYTES } = {}) {
   return new Promise((resolve) => {
-    let body = '';
-    req.on('data', (c) => { body += c; });
-    req.on('end', () => { try { resolve(JSON.parse(body || '{}')); } catch { resolve({}); } });
+    let done = false;
+    let size = 0;
+    const chunks = [];
+    const settle = (value) => {
+      if (done) return;
+      done = true;
+      resolve(value);
+    };
+
+    req.on('error', () => {
+      if (!res.writableEnded) sendJson(res, 400, { error: 'invalid request body' });
+      settle(null);
+    });
+
+    req.on('data', (chunk) => {
+      if (done) return;
+      size += chunk.length;
+      if (size > limitBytes) {
+        if (!res.writableEnded) sendJson(res, 413, { error: `payload too large (max ${limitBytes} bytes)` });
+        settle(null);
+        return;
+      }
+      chunks.push(chunk);
+    });
+
+    req.on('end', () => {
+      if (done) return;
+      try {
+        const raw = Buffer.concat(chunks).toString('utf8');
+        settle(JSON.parse(raw || '{}'));
+      } catch {
+        if (!res.writableEnded) sendJson(res, 400, { error: 'invalid JSON body' });
+        settle(null);
+      }
+    });
   });
 }
 
@@ -281,7 +513,8 @@ function getSession(res, id) {
 }
 
 async function patchSession(req, res, field) {
-  const body = await readBody(req);
+  const body = await readBody(req, res);
+  if (!body) return;
   const id = String(body.id || '');
   if (!SAFE_ID.test(id)) return sendJson(res, 400, { error: 'invalid id' });
   const sessions = readSessions();
@@ -336,6 +569,669 @@ function openSse(res) {
     Connection: 'keep-alive',
     'X-Accel-Buffering': 'no',
   });
+}
+
+function inspectCliTargets() {
+  const commands = {
+    claude: resolveBinaryCommand(CLI_TARGETS.claude.cmd, 'claude'),
+    opencode: resolveBinaryCommand(CLI_TARGETS.opencode.cmd, 'opencode'),
+  };
+  const available = {
+    claude: Boolean(commands.claude.resolvedPath),
+    opencode: Boolean(commands.opencode.resolvedPath),
+  };
+  const availableBinaries = {
+    claude: commands.claude.availablePaths,
+    opencode: commands.opencode.availablePaths,
+  };
+  const resolvedCommands = {
+    claude: commands.claude.resolvedPath,
+    opencode: commands.opencode.resolvedPath,
+  };
+  return {
+    bridgeEnabled: CHAT_CLI_BRIDGE_ENABLED,
+    available,
+    commands,
+    availableBinaries,
+    resolvedCommands,
+  };
+}
+
+function cliSnapshot(extra = {}) {
+  const run = CLI_STATE.run;
+  const diagnostics = inspectCliTargets();
+  const reason = !CHAT_CLI_BRIDGE_ENABLED
+    ? 'bridge disabled: set CHAT_CLI_BRIDGE_ENABLED=1 (or enable it in Settings → AI Provider) and restart'
+    : null;
+  return {
+    type: 'snapshot',
+    bridgeEnabled: CHAT_CLI_BRIDGE_ENABLED,
+    reason,
+    running: !!run?.active,
+    target: run?.target || null,
+    pid: run?.child?.pid || null,
+    available: diagnostics.available,
+    commands: diagnostics.commands,
+    availableBinaries: diagnostics.availableBinaries,
+    resolvedCommands: diagnostics.resolvedCommands,
+    ...extra,
+  };
+}
+
+function cliEmit(event, payload) {
+  for (const sub of [...CLI_STATE.subscribers]) {
+    if (sub.writableEnded || sub.destroyed) {
+      CLI_STATE.subscribers.delete(sub);
+      continue;
+    }
+    sse(sub, event, payload);
+  }
+}
+
+function buildCliChildEnv() {
+  const env = {};
+  for (const key of CLI_ENV_ALLOWLIST) {
+    const val = process.env[key];
+    if (typeof val === 'string' && val.length) env[key] = val;
+  }
+  return env;
+}
+
+function buildChatChildEnv() {
+  const env = buildCliChildEnv();
+  for (const [key, val] of Object.entries(process.env)) {
+    if (!CHAT_PROVIDER_ENV_RE.test(key)) continue;
+    if (typeof val === 'string' && val.length) env[key] = val;
+  }
+  return env;
+}
+
+function clearCliRunTimer(run) {
+  if (!run?.runtimeTimer) return;
+  clearTimeout(run.runtimeTimer);
+  run.runtimeTimer = null;
+}
+
+function finalizeCliRun(run, payload = {}) {
+  if (!run || run.finalized) return;
+  run.finalized = true;
+  run.active = false;
+  run.closed = true;
+  clearCliRunTimer(run);
+  if (CLI_STATE.run === run) CLI_STATE.run = null;
+  cliEmit('status', cliSnapshot({ running: false, target: run.target, ...payload }));
+}
+
+function cliStopRunSignals(run) {
+  if (!run?.active) return;
+  run.stopping = true;
+  run.active = false;
+  clearCliRunTimer(run);
+  try { run.child.kill('SIGTERM'); } catch {}
+  setTimeout(() => {
+    if (run.closed || run.finalized) return;
+    try { run.child.kill('SIGKILL'); } catch {}
+  }, 1200);
+}
+
+function handleCliStatus(res) {
+  sendJson(res, 200, cliSnapshot());
+}
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, `'"'"'`)}'`;
+}
+
+function appleScriptString(value) {
+  return `"${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+function resolvedCliCommandForTarget(target, diagnostics) {
+  const spec = CLI_TARGETS[target];
+  const resolvedPath = diagnostics.commands[target]?.resolvedPath;
+  if (!spec || !resolvedPath) return null;
+  const argv = [resolvedPath, ...(Array.isArray(spec.args) ? spec.args : [])];
+  return argv.map(shellQuote).join(' ');
+}
+
+function runOsaScriptOpenTerminal(commandLine) {
+  return new Promise((resolve) => {
+    const args = [
+      '-e', 'tell application "Terminal"',
+      '-e', 'activate',
+      '-e', `do script ${appleScriptString(commandLine)}`,
+      '-e', 'end tell',
+    ];
+    const child = spawn('osascript', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const settle = (payload) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve(payload);
+    };
+    const timeout = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch {}
+      settle({ ok: false, reason: 'osascript launch timed out', stdout: stdout.trim(), stderr: stderr.trim() });
+    }, 10000);
+    child.stdout.on('data', (chunk) => { stdout += String(chunk || ''); });
+    child.stderr.on('data', (chunk) => { stderr += String(chunk || ''); });
+    child.on('error', (err) => {
+      settle({ ok: false, reason: err.message || 'failed to launch osascript', stdout: stdout.trim(), stderr: stderr.trim() });
+    });
+    child.on('close', (code) => {
+      if (code === 0) {
+        settle({ ok: true, code: 0, stdout: stdout.trim(), stderr: stderr.trim() });
+        return;
+      }
+      settle({ ok: false, code, reason: stderr.trim() || stdout.trim() || `osascript exited with code ${code}`, stdout: stdout.trim(), stderr: stderr.trim() });
+    });
+  });
+}
+
+function runOpenCommandFile(commandLine) {
+  const stamp = Date.now();
+  const rand = Math.random().toString(36).slice(2, 8);
+  const file = path.join(os.tmpdir(), `steadymade-cli-launch-${stamp}-${rand}.command`);
+  const script = ['#!/bin/bash', 'set -euo pipefail', commandLine].join('\n') + '\n';
+  try {
+    fs.writeFileSync(file, script, { encoding: 'utf8', mode: 0o700 });
+    fs.chmodSync(file, 0o700);
+  } catch (err) {
+    return { ok: false, reason: `failed to create launcher file: ${err.message || String(err)}` };
+  }
+
+  return new Promise((resolve) => {
+    const child = spawn('open', ['-a', 'Terminal', file], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += String(chunk || ''); });
+    child.stderr.on('data', (chunk) => { stderr += String(chunk || ''); });
+    child.on('error', (err) => {
+      resolve({ ok: false, reason: err.message || 'failed to launch Terminal via open', stdout: stdout.trim(), stderr: stderr.trim(), file });
+    });
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve({ ok: true, code: 0, stdout: stdout.trim(), stderr: stderr.trim(), file });
+        return;
+      }
+      resolve({ ok: false, code, reason: stderr.trim() || stdout.trim() || `open exited with code ${code}`, stdout: stdout.trim(), stderr: stderr.trim(), file });
+    });
+  });
+}
+
+async function handleCliOpenTerminal(req, res) {
+  const body = await readBody(req, res);
+  if (!body) return;
+  const target = String(body.target || '').trim().toLowerCase();
+  if (!CLI_OPEN_TERMINAL_TARGETS.has(target)) {
+    return sendJson(res, 400, { ok: false, error: 'invalid target', reason: 'allowed targets: opencode, claude' });
+  }
+  if (process.platform !== 'darwin') {
+    return sendJson(res, 501, { ok: false, error: 'unsupported platform', reason: 'open-terminal currently supports macOS Terminal.app only', platform: process.platform, target });
+  }
+
+  const diagnostics = inspectCliTargets();
+  if (!diagnostics.available[target]) {
+    const reason = diagnostics.commands[target]?.reason || `${target} binary not found`;
+    return sendJson(res, 400, {
+      ok: false,
+      error: 'target unavailable',
+      reason,
+      target,
+      available: diagnostics.available,
+      commands: diagnostics.commands,
+      resolvedCommands: diagnostics.resolvedCommands,
+    });
+  }
+
+  const resolvedCommand = resolvedCliCommandForTarget(target, diagnostics);
+  if (!resolvedCommand) {
+    return sendJson(res, 500, { ok: false, error: 'resolve failed', reason: `could not resolve command for ${target}`, target });
+  }
+  const commandLine = `cd ${shellQuote(ROOT)} && ${resolvedCommand}`;
+  let launch = await runOsaScriptOpenTerminal(commandLine);
+  let method = 'osascript';
+  if (!launch.ok) {
+    const fallback = await runOpenCommandFile(commandLine);
+    if (fallback.ok) {
+      launch = fallback;
+      method = 'open-command-file';
+    } else {
+      return sendJson(res, 500, {
+        ok: false,
+        error: 'launch failed',
+        reason: launch.reason || fallback.reason || 'Terminal launch failed',
+        platform: process.platform,
+        target,
+        code: launch.code ?? fallback.code ?? null,
+      });
+    }
+  }
+
+  return sendJson(res, 200, {
+    ok: true,
+    launched: true,
+    target,
+    platform: process.platform,
+    method,
+    launcherFile: launch.file || null,
+    message: 'Opened Terminal.app with fixed command shape: cd <ROOT> && <resolvedCommand>',
+  });
+}
+
+async function handleCliStart(req, res) {
+  const body = await readBody(req, res);
+  if (!body) return;
+  const target = String(body.target || '').trim().toLowerCase();
+  if (!Object.prototype.hasOwnProperty.call(CLI_TARGETS, target)) {
+    return sendJson(res, 400, { error: 'invalid target' });
+  }
+  if (CLI_STATE.run?.active) {
+    return sendJson(res, 409, { error: 'cli session already running', ...cliSnapshot() });
+  }
+  const diagnostics = inspectCliTargets();
+  if (!diagnostics.available[target]) {
+    const reason = diagnostics.commands[target]?.reason || `${target} binary not found`;
+    return sendJson(res, 400, { error: reason, ...cliSnapshot({ reason }) });
+  }
+
+  const spec = CLI_TARGETS[target];
+  const cmd = diagnostics.commands[target].resolvedPath;
+  const env = buildCliChildEnv();
+
+  const child = spawn(cmd, spec.args, {
+    cwd: ROOT,
+    env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+
+  const run = {
+    target,
+    child,
+    active: true,
+    closed: false,
+    stopping: false,
+    finalized: false,
+    runtimeTimer: null,
+    startedAt: Date.now(),
+  };
+  CLI_STATE.run = run;
+
+  run.runtimeTimer = setTimeout(() => {
+    if (!run.active) return;
+    cliEmit('status', cliSnapshot({
+      type: 'timeout',
+      running: false,
+      target,
+      message: `cli session exceeded max runtime (${CLI_MAX_RUNTIME_MS}ms); stopping`,
+    }));
+    run.stopReason = 'timeout';
+    cliStopRunSignals(run);
+  }, CLI_MAX_RUNTIME_MS);
+
+  child.on('error', (err) => {
+    finalizeCliRun(run, {
+      type: 'error',
+      message: `spawn error: ${err.message}`,
+    });
+  });
+
+  child.stdout.on('data', (chunk) => {
+    cliEmit('stdout', { text: String(chunk) });
+  });
+
+  child.stderr.on('data', (chunk) => {
+    cliEmit('stderr', { text: String(chunk) });
+  });
+
+  child.on('close', (code) => {
+    run.closed = true;
+    finalizeCliRun(run, {
+      type: run.stopReason === 'timeout' ? 'timeout' : 'stopped',
+      code,
+    });
+  });
+
+  cliEmit('status', cliSnapshot({
+    type: 'started',
+    running: true,
+    target,
+    pid: child.pid,
+  }));
+  if (target === 'claude') {
+    cliEmit('status', cliSnapshot({
+      type: 'notice',
+      message: 'Claude CLI is bridged without PTY. Full TUI/auth interactions can be limited; raw output/input line streaming still works.',
+      running: true,
+      target,
+      pid: child.pid,
+    }));
+  }
+  sendJson(res, 200, {
+    ok: true,
+    running: true,
+    target,
+    pid: child.pid,
+    ...cliSnapshot({ running: true, target, pid: child.pid }),
+  });
+}
+
+async function handleCliInput(req, res) {
+  const run = CLI_STATE.run;
+  if (!run?.active || run.child.stdin.destroyed) {
+    return sendJson(res, 404, { error: 'no active cli session', ...cliSnapshot() });
+  }
+  const body = await readBody(req, res);
+  if (!body) return;
+  const line = typeof body.line === 'string' ? body.line : '';
+  if (!line.trim()) return sendJson(res, 400, { error: 'line required' });
+  if (line.length > CLI_INPUT_MAX_LINE) {
+    return sendJson(res, 400, { error: `line too long (max ${CLI_INPUT_MAX_LINE} chars)` });
+  }
+  try {
+    run.child.stdin.write(`${line}\n`);
+    sendJson(res, 200, { ok: true });
+  } catch (err) {
+    sendJson(res, 500, { error: err.message || 'failed to write stdin' });
+  }
+}
+
+async function handleCliStop(_req, res) {
+  const run = CLI_STATE.run;
+  if (!run?.active) return sendJson(res, 200, { ok: true, ...cliSnapshot() });
+  cliStopRunSignals(run);
+  sendJson(res, 200, {
+    ok: true,
+    running: false,
+    target: run.target,
+    ...cliSnapshot({ running: false, target: run.target }),
+  });
+}
+
+function handleCliStream(_req, res) {
+  for (const sub of [...CLI_STATE.subscribers]) {
+    if (sub.writableEnded || sub.destroyed) CLI_STATE.subscribers.delete(sub);
+  }
+  if (CLI_STATE.subscribers.size >= CLI_MAX_SUBSCRIBERS) {
+    return sendJson(res, 429, {
+      error: 'too many cli stream subscribers',
+      limit: CLI_MAX_SUBSCRIBERS,
+      running: !!CLI_STATE.run?.active,
+    });
+  }
+  openSse(res);
+  CLI_STATE.subscribers.add(res);
+  sse(res, 'status', cliSnapshot());
+  res.on('close', () => {
+    CLI_STATE.subscribers.delete(res);
+  });
+}
+
+function terminalUnavailablePayload() {
+  const diagnostics = inspectCliTargets();
+  return {
+    error: 'terminal bridge unavailable',
+    unavailable: true,
+    bridgeEnabled: false,
+    reason: 'bridge disabled: set CHAT_CLI_BRIDGE_ENABLED=1 (or enable it in Settings → AI Provider) and restart',
+    available: diagnostics.available,
+    commands: diagnostics.commands,
+    availableBinaries: diagnostics.availableBinaries,
+    resolvedCommands: diagnostics.resolvedCommands,
+  };
+}
+
+function parsePositiveInt(value, fallback, { min = 1, max = 1000 } = {}) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(n)));
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function terminalSnapshot(session) {
+  return {
+    id: session.id,
+    target: session.target,
+    pid: session.pty?.pid || null,
+    running: !!session.running,
+    cols: session.cols,
+    rows: session.rows,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    exitCode: session.exitCode,
+    signal: session.signal,
+    clientCount: session.clients.size,
+  };
+}
+
+function clearTerminalTimer(session, key) {
+  if (!session?.[key]) return;
+  clearTimeout(session[key]);
+  session[key] = null;
+}
+
+function clearTerminalTimers(session) {
+  clearTerminalTimer(session, 'runtimeTimer');
+  clearTerminalTimer(session, 'noClientTimer');
+  clearTerminalTimer(session, 'reapTimer');
+}
+
+function scheduleTerminalReap(session) {
+  clearTerminalTimer(session, 'reapTimer');
+  session.reapTimer = setTimeout(() => {
+    if (session.clients.size > 0) return;
+    TERMINAL_STATE.sessions.delete(session.id);
+  }, TERMINAL_EXIT_TTL_MS);
+}
+
+function scheduleNoClientStop(session) {
+  clearTerminalTimer(session, 'noClientTimer');
+  if (!session.running || session.clients.size > 0) return;
+  session.noClientTimer = setTimeout(() => {
+    if (!session.running || session.clients.size > 0) return;
+    stopTerminalSessionSignals(session);
+  }, TERMINAL_NO_CLIENT_GRACE_MS);
+}
+
+function armTerminalRuntimeStop(session) {
+  clearTerminalTimer(session, 'runtimeTimer');
+  if (!session.running) return;
+  session.runtimeTimer = setTimeout(() => {
+    if (!session.running) return;
+    stopTerminalSessionSignals(session);
+  }, TERMINAL_MAX_RUNTIME_MS);
+}
+
+function listTerminalSessionSnapshots() {
+  return [...TERMINAL_STATE.sessions.values()]
+    .map((session) => terminalSnapshot(session))
+    .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+}
+
+function sendTerminalWs(session, payload) {
+  const text = JSON.stringify(payload);
+  for (const ws of [...session.clients]) {
+    if (ws.readyState !== WebSocket.OPEN) {
+      session.clients.delete(ws);
+      continue;
+    }
+    try {
+      ws.send(text);
+    } catch {
+      session.clients.delete(ws);
+    }
+  }
+}
+
+function terminalSessionById(sessionId) {
+  if (!SAFE_ID.test(String(sessionId || ''))) return null;
+  return TERMINAL_STATE.sessions.get(String(sessionId).trim()) || null;
+}
+
+function stopTerminalSessionSignals(session) {
+  if (!session?.running || !session.pty) return;
+  session.running = false;
+  session.updatedAt = nowIso();
+  clearTerminalTimers(session);
+  try { session.pty.kill('SIGTERM'); } catch {}
+  setTimeout(() => {
+    if (session.exited) return;
+    try { session.pty.kill('SIGKILL'); } catch {}
+  }, 1200);
+}
+
+function createTerminalSession({ target, cols, rows }) {
+  const diagnostics = inspectCliTargets();
+  if (!TERMINAL_ALLOWED_TARGETS.has(target)) {
+    return { error: 'invalid target', code: 400 };
+  }
+  if (!diagnostics.available[target]) {
+    return {
+      error: diagnostics.commands[target]?.reason || `${target} binary not found`,
+      code: 400,
+      diagnostics,
+    };
+  }
+  if (TERMINAL_STATE.sessions.size >= TERMINAL_MAX_SESSIONS) {
+    return {
+      error: `terminal session limit reached (max ${TERMINAL_MAX_SESSIONS})`,
+      code: 429,
+    };
+  }
+
+  const resolvedPath = diagnostics.commands[target].resolvedPath;
+  const args = CLI_TARGETS[target]?.args || [];
+  const session = {
+    id: crypto.randomUUID(),
+    target,
+    pty: null,
+    running: true,
+    cols: parsePositiveInt(cols, TERMINAL_DEFAULT_COLS, { min: 20, max: 500 }),
+    rows: parsePositiveInt(rows, TERMINAL_DEFAULT_ROWS, { min: 8, max: 300 }),
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+    exited: false,
+    exitCode: null,
+    signal: null,
+    clients: new Set(),
+    runtimeTimer: null,
+    noClientTimer: null,
+    reapTimer: null,
+  };
+
+  const env = buildCliChildEnv();
+  session.pty = spawnPty(resolvedPath, args, {
+    name: env.TERM || 'xterm-256color',
+    cols: session.cols,
+    rows: session.rows,
+    cwd: ROOT,
+    env,
+  });
+
+  session.pty.onData((data) => {
+    session.updatedAt = nowIso();
+    sendTerminalWs(session, { type: 'output', sessionId: session.id, data: String(data || '') });
+  });
+
+  session.pty.onExit((ev = {}) => {
+    session.updatedAt = nowIso();
+    session.exited = true;
+    session.running = false;
+    session.exitCode = ev.exitCode ?? null;
+    session.signal = ev.signal ?? null;
+    clearTerminalTimer(session, 'runtimeTimer');
+    clearTerminalTimer(session, 'noClientTimer');
+    scheduleTerminalReap(session);
+    sendTerminalWs(session, { type: 'status', session: terminalSnapshot(session) });
+  });
+
+  TERMINAL_STATE.sessions.set(session.id, session);
+  armTerminalRuntimeStop(session);
+  scheduleNoClientStop(session);
+  return { session: terminalSnapshot(session), diagnostics };
+}
+
+function handleTerminalSessionsList(req, res) {
+  if (!requireTrustedLocalRead(req, res)) return;
+  sendJson(res, 200, {
+    bridgeEnabled: CHAT_CLI_BRIDGE_ENABLED,
+    sessions: listTerminalSessionSnapshots(),
+    allowedTargets: [...TERMINAL_ALLOWED_TARGETS],
+  });
+}
+
+async function handleTerminalSessionCreate(req, res) {
+  if (!requireTrustedLocalJsonMutation(req, res)) return;
+  const body = await readBody(req, res);
+  if (!body) return;
+  const target = String(body.target || '').trim().toLowerCase();
+  const created = createTerminalSession({ target, cols: body.cols, rows: body.rows });
+  if (created.error) {
+    return sendJson(res, created.code || 400, {
+      error: created.error,
+      bridgeEnabled: CHAT_CLI_BRIDGE_ENABLED,
+      available: created.diagnostics?.available,
+      commands: created.diagnostics?.commands,
+    });
+  }
+  sendJson(res, 200, {
+    ok: true,
+    session: created.session,
+    sessions: listTerminalSessionSnapshots(),
+  });
+}
+
+async function handleTerminalSessionStop(req, res, sessionId) {
+  if (!requireTrustedLocalJsonMutation(req, res)) return;
+  const session = terminalSessionById(sessionId);
+  if (!session) return sendJson(res, 404, { error: 'terminal session not found' });
+  stopTerminalSessionSignals(session);
+  sendJson(res, 200, { ok: true, session: terminalSnapshot(session), sessions: listTerminalSessionSnapshots() });
+}
+
+async function handleTerminalSessionInput(req, res, sessionId) {
+  if (!requireTrustedLocalJsonMutation(req, res)) return;
+  const session = terminalSessionById(sessionId);
+  if (!session) return sendJson(res, 404, { error: 'terminal session not found' });
+  if (!session.running || !session.pty) return sendJson(res, 409, { error: 'terminal session is not running', session: terminalSnapshot(session) });
+  const body = await readBody(req, res, { limitBytes: TERMINAL_INPUT_MAX_BYTES + 2048 });
+  if (!body) return;
+  const data = typeof body.data === 'string' ? body.data : '';
+  if (!data) return sendJson(res, 400, { error: 'data required' });
+  if (Buffer.byteLength(data, 'utf8') > TERMINAL_INPUT_MAX_BYTES) {
+    return sendJson(res, 400, { error: `data too large (max ${TERMINAL_INPUT_MAX_BYTES} bytes)` });
+  }
+  try {
+    session.pty.write(data);
+    session.updatedAt = nowIso();
+    sendJson(res, 200, { ok: true });
+  } catch (err) {
+    sendJson(res, 500, { error: err?.message || 'failed to write terminal input' });
+  }
+}
+
+async function handleTerminalSessionResize(req, res, sessionId) {
+  if (!requireTrustedLocalJsonMutation(req, res)) return;
+  const session = terminalSessionById(sessionId);
+  if (!session) return sendJson(res, 404, { error: 'terminal session not found' });
+  const body = await readBody(req, res);
+  if (!body) return;
+  const cols = parsePositiveInt(body.cols, session.cols, { min: 20, max: 500 });
+  const rows = parsePositiveInt(body.rows, session.rows, { min: 8, max: 300 });
+  session.cols = cols;
+  session.rows = rows;
+  session.updatedAt = nowIso();
+  if (session.running && session.pty) {
+    try { session.pty.resize(cols, rows); } catch {}
+  }
+  sendTerminalWs(session, { type: 'status', session: terminalSnapshot(session) });
+  sendJson(res, 200, { ok: true, session: terminalSnapshot(session) });
 }
 
 function resolveAgent(selectedId) {
@@ -471,7 +1367,8 @@ function handleAttach(req, res, url) {
 }
 
 async function handleStop(req, res) {
-  const body = await readBody(req);
+  const body = await readBody(req, res);
+  if (!body) return;
   const conversationId = String(body.conversationId || '').trim();
   if (!SAFE_ID.test(conversationId)) return sendJson(res, 400, { error: 'invalid conversationId' });
   const run = RUN_REGISTRY.get(conversationId);
@@ -500,12 +1397,9 @@ function toolDetail(block) {
   }
 }
 
-function handleChat(req, res) {
-  let body = '';
-  req.on('data', (chunk) => { body += chunk; });
-  req.on('end', () => {
-    let payload = {};
-    try { payload = JSON.parse(body || '{}'); } catch {}
+async function handleChat(req, res) {
+  const payload = await readBody(req, res);
+  if (!payload) return;
 
     const message = typeof payload.message === 'string' ? payload.message.trim() : '';
     const legacySessionId = typeof payload.sessionId === 'string' ? payload.sessionId.trim() : '';
@@ -593,7 +1487,7 @@ function handleChat(req, res) {
     if (resumeId) args.push('--resume', resumeId);
     if (model && model !== 'default') args.push('--model', model);
 
-    const env = { ...process.env };
+    const env = buildChatChildEnv();
     delete env.CLAUDECODE;
     delete env.CLAUDE_CODE_ENTRYPOINT;
     delete env.CLAUDE_CODE_SSE_PORT;
@@ -739,7 +1633,6 @@ function handleChat(req, res) {
         emitRunEvent(run, 'gate', { issues: CONTENT_AGENTS.has(selectedAgent) ? lintText(text) : [] });
       }
     }
-  });
 }
 
 const MIME = {
@@ -750,10 +1643,55 @@ const MIME = {
   '.png': 'image/png',
 };
 
+function staticSecurityHeaders(extra = {}) {
+  const csp = [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:",
+    "font-src 'self' data:",
+    "connect-src 'self' ws://localhost:* ws://127.0.0.1:*",
+    'frame-ancestors http://localhost:4011 http://127.0.0.1:4011',
+  ].join('; ');
+  return {
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'no-referrer',
+    'Content-Security-Policy': csp,
+    ...extra,
+  };
+}
+
 function serveStatic(req, res) {
   let reqPath = req.url.split('?')[0] || '/';
   if (reqPath === '/') reqPath = '/index.html';
-  const decoded = decodeURIComponent(reqPath);
+  if (reqPath === '/vendor/xterm/xterm.js') {
+    const file = path.join(ROOT, 'node_modules', 'xterm', 'lib', 'xterm.js');
+    if (!fs.existsSync(file)) return res.writeHead(404).end('not found');
+    res.writeHead(200, staticSecurityHeaders({ 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' }));
+    fs.createReadStream(file).pipe(res);
+    return;
+  }
+  if (reqPath === '/vendor/xterm/xterm.css') {
+    const file = path.join(ROOT, 'node_modules', 'xterm', 'css', 'xterm.css');
+    if (!fs.existsSync(file)) return res.writeHead(404).end('not found');
+    res.writeHead(200, staticSecurityHeaders({ 'Content-Type': 'text/css; charset=utf-8', 'Cache-Control': 'no-store' }));
+    fs.createReadStream(file).pipe(res);
+    return;
+  }
+  if (reqPath === '/vendor/xterm-addon-fit/addon-fit.js') {
+    const file = path.join(ROOT, 'node_modules', '@xterm', 'addon-fit', 'lib', 'addon-fit.js');
+    if (!fs.existsSync(file)) return res.writeHead(404).end('not found');
+    res.writeHead(200, staticSecurityHeaders({ 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' }));
+    fs.createReadStream(file).pipe(res);
+    return;
+  }
+  let decoded = reqPath;
+  try {
+    decoded = decodeURIComponent(reqPath);
+  } catch {
+    res.writeHead(400).end('bad request');
+    return;
+  }
   const normalized = path.normalize(decoded).replace(/^\/+/, '');
   const file = path.join(PUBLIC, normalized);
   if (!file.startsWith(PUBLIC + path.sep) && file !== path.join(PUBLIC, 'index.html')) {
@@ -765,17 +1703,70 @@ function serveStatic(req, res) {
     return;
   }
   res.writeHead(200, {
-    'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
-    'Cache-Control': 'no-store',
+    ...staticSecurityHeaders({
+      'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
+      'Cache-Control': 'no-store',
+    }),
   });
   fs.createReadStream(file).pipe(res);
 }
 
-http.createServer((req, res) => {
+const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
+  if (url.pathname.startsWith('/api/terminal/')) {
+    if (!CHAT_CLI_BRIDGE_ENABLED) {
+      return sendJson(res, 503, terminalUnavailablePayload());
+    }
+    if (!requireCliToken(req, res, url)) return;
+  }
+  if (url.pathname.startsWith('/api/cli/')) {
+    if (!CHAT_CLI_BRIDGE_ENABLED) {
+      return sendJson(res, 503, cliUnavailablePayload());
+    }
+    if (!requireCliToken(req, res, url)) return;
+  }
+  if (req.method === 'GET' && url.pathname === '/api/cli/status') {
+    if (!requireTrustedLocalRead(req, res)) return;
+    return handleCliStatus(res);
+  }
+  if (req.method === 'GET' && url.pathname === '/api/cli/stream') {
+    if (!requireTrustedLocalRead(req, res)) return;
+    return handleCliStream(req, res);
+  }
+  if (req.method === 'POST' && url.pathname === '/api/cli/start') {
+    if (!requireTrustedLocalJsonMutation(req, res)) return;
+    return void handleCliStart(req, res);
+  }
+  if (req.method === 'POST' && url.pathname === '/api/cli/input') {
+    if (!requireTrustedLocalJsonMutation(req, res)) return;
+    return void handleCliInput(req, res);
+  }
+  if (req.method === 'POST' && url.pathname === '/api/cli/stop') {
+    if (!requireTrustedLocalJsonMutation(req, res)) return;
+    return void handleCliStop(req, res);
+  }
+  if (req.method === 'POST' && url.pathname === '/api/cli/open-terminal') {
+    if (!requireTrustedLocalJsonMutation(req, res)) return;
+    return void handleCliOpenTerminal(req, res);
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/terminal/sessions') {
+    return handleTerminalSessionsList(req, res);
+  }
+  if (req.method === 'POST' && url.pathname === '/api/terminal/sessions') {
+    return void handleTerminalSessionCreate(req, res);
+  }
+  const terminalSessionMatch = url.pathname.match(/^\/api\/terminal\/sessions\/([a-f0-9-]{8,64})\/(stop|input|resize)$/);
+  if (req.method === 'POST' && terminalSessionMatch) {
+    const [, sessionId, action] = terminalSessionMatch;
+    if (action === 'stop') return void handleTerminalSessionStop(req, res, sessionId);
+    if (action === 'input') return void handleTerminalSessionInput(req, res, sessionId);
+    if (action === 'resize') return void handleTerminalSessionResize(req, res, sessionId);
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/chat') {
     if (!requireTrustedLocalJsonMutation(req, res)) return;
-    return handleChat(req, res);
+    return void handleChat(req, res);
   }
   if (req.method === 'GET' && url.pathname === '/api/chat/attach') return handleAttach(req, res, url);
   if (req.method === 'POST' && url.pathname === '/api/chat/stop') {
@@ -786,15 +1777,165 @@ http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/sessions') return listSessions(res, url.searchParams.get('all') === '1');
   if (req.method === 'GET' && url.pathname === '/api/sessions/search') return searchSessions(res, url.searchParams.get('q'));
   if (req.method === 'GET' && url.pathname === '/api/session') return getSession(res, url.searchParams.get('id'));
-  if (req.method === 'POST' && url.pathname === '/api/session/rename') return void patchSession(req, res, 'title');
-  if (req.method === 'POST' && url.pathname === '/api/session/archive') return void patchSession(req, res, 'archived');
+  if (req.method === 'POST' && url.pathname === '/api/session/rename') {
+    if (!requireTrustedLocalJsonMutation(req, res)) return;
+    return void patchSession(req, res, 'title');
+  }
+  if (req.method === 'POST' && url.pathname === '/api/session/archive') {
+    if (!requireTrustedLocalJsonMutation(req, res)) return;
+    return void patchSession(req, res, 'archived');
+  }
   if (req.method === 'GET' && url.pathname === '/api/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true, port: PORT, claude_bin: CLAUDE_BIN }));
     return;
   }
   serveStatic(req, res);
-}).listen(PORT, '127.0.0.1', () => {
+});
+
+const terminalWss = new WebSocketServer({ noServer: true, maxPayload: TERMINAL_WS_MAX_PAYLOAD });
+
+terminalWss.on('connection', (ws, req, session) => {
+  if (!session || !TERMINAL_STATE.sessions.has(session.id)) {
+    try { ws.close(1008, 'session not found'); } catch {}
+    return;
+  }
+  if (session.clients.size >= TERMINAL_MAX_CLIENTS_PER_SESSION) {
+    ws.send(JSON.stringify({ type: 'error', error: `session client limit reached (max ${TERMINAL_MAX_CLIENTS_PER_SESSION})` }));
+    ws.close(1013, 'too many clients');
+    return;
+  }
+
+  session.clients.add(ws);
+  clearTerminalTimer(session, 'noClientTimer');
+  clearTerminalTimer(session, 'reapTimer');
+  ws.send(JSON.stringify({ type: 'status', session: terminalSnapshot(session) }));
+
+  ws.on('message', (raw) => {
+    const rawBytes = Buffer.isBuffer(raw) ? raw.length : Buffer.byteLength(String(raw || ''), 'utf8');
+    if (rawBytes > TERMINAL_WS_MAX_PAYLOAD) {
+      ws.send(JSON.stringify({ type: 'error', error: `payload too large (max ${TERMINAL_WS_MAX_PAYLOAD} bytes)` }));
+      return;
+    }
+    let msg = null;
+    try {
+      msg = JSON.parse(String(raw || ''));
+    } catch {
+      ws.send(JSON.stringify({ type: 'error', error: 'invalid JSON message' }));
+      return;
+    }
+
+    if (msg?.type === 'input') {
+      const data = typeof msg.data === 'string' ? msg.data : '';
+      if (!data) return;
+      if (Buffer.byteLength(data, 'utf8') > TERMINAL_INPUT_MAX_BYTES) {
+        ws.send(JSON.stringify({ type: 'error', error: `input too large (max ${TERMINAL_INPUT_MAX_BYTES} bytes)` }));
+        return;
+      }
+      if (!session.running || !session.pty) {
+        ws.send(JSON.stringify({ type: 'error', error: 'session is not running' }));
+        return;
+      }
+      try {
+        session.pty.write(data);
+        session.updatedAt = nowIso();
+      } catch (err) {
+        ws.send(JSON.stringify({ type: 'error', error: err?.message || 'failed to write terminal input' }));
+      }
+      return;
+    }
+
+    if (msg?.type === 'resize') {
+      const cols = parsePositiveInt(msg.cols, session.cols, { min: 20, max: 500 });
+      const rows = parsePositiveInt(msg.rows, session.rows, { min: 8, max: 300 });
+      session.cols = cols;
+      session.rows = rows;
+      session.updatedAt = nowIso();
+      if (session.running && session.pty) {
+        try { session.pty.resize(cols, rows); } catch {}
+      }
+      sendTerminalWs(session, { type: 'status', session: terminalSnapshot(session) });
+      return;
+    }
+
+    ws.send(JSON.stringify({ type: 'error', error: 'unsupported message type' }));
+  });
+
+  ws.on('close', () => {
+    session.clients.delete(ws);
+    scheduleNoClientStop(session);
+  });
+
+  ws.on('error', () => {
+    session.clients.delete(ws);
+    scheduleNoClientStop(session);
+  });
+});
+
+server.on('upgrade', (req, socket, head) => {
+  let url;
+  try {
+    url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+  } catch {
+    socket.destroy();
+    return;
+  }
+  if (url.pathname !== '/api/terminal/ws') {
+    socket.destroy();
+    return;
+  }
+  if (!CHAT_CLI_BRIDGE_ENABLED) {
+    socket.write('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+  if (!requireCliToken(req, { writeHead() {}, end() {} }, url)) {
+    socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+  if (!isTrustedLocalWebRequest(req, PORT)) {
+    socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+
+  const sessionId = String(url.searchParams.get('sessionId') || '').trim();
+  const session = terminalSessionById(sessionId);
+  if (!session) {
+    socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+
+  terminalWss.handleUpgrade(req, socket, head, (ws) => {
+    terminalWss.emit('connection', ws, req, session);
+  });
+});
+
+server.listen(PORT, '127.0.0.1', () => {
   console.log(`Steadymade AI OS Chat → http://localhost:${PORT}`);
   console.log(`claude binary: ${CLAUDE_BIN}`);
+  if (!CHAT_CLI_BRIDGE_ENABLED) {
+    console.log('CLI bridge: disabled (set CHAT_CLI_BRIDGE_ENABLED=1 to enable)');
+  }
 });
+
+let shuttingDown = false;
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  const run = CLI_STATE.run;
+  if (run?.active) {
+    run.stopReason = 'shutdown';
+    cliStopRunSignals(run);
+  }
+  for (const session of TERMINAL_STATE.sessions.values()) {
+    stopTerminalSessionSignals(session);
+  }
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 1500).unref();
+  if (signal) console.log(`Received ${signal}; shutting down chat server…`);
+}
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));

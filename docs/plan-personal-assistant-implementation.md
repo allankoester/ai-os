@@ -71,7 +71,7 @@ State legend: `pending` · `in_progress` · `blocked (<why>)` · `done`
 | 4 | Skill version contract | G5 | done | 8033052 |
 | 5 | Raw→clean promotion pipeline + incognito | G4 | done | 8ef7f7d |
 | 6 | Hardening & polish (6.1-6.4 done; 6.5 backlog) | G6/misc | done | 0d3ece0 |
-| 7 | Interface & chat UX round (2026-07-10 list) ⚠ | UX/7.3 | in_progress | — |
+| 7 | Interface & chat UX round (2026-07-10 list) ⚠ | UX/7.3 | done | local changes pending commit |
 
 Dependencies: 1 → 3 → 5 (memory before learning before promotion). 2 and 4 are
 independent and can be reordered if blocked. 5's incognito subtasks depend
@@ -689,7 +689,7 @@ review + Allan approval before it is marked done.
 - [x] 7.3.5 Skill capability model: frontmatter parsing, type badges
       (PROMPT/+TOOLS/+KNOWLEDGE), per-skill configure panel, activation
       dependency check against enabled plugins.
-- [ ] 7.3.6 Simon review of 7.2.5 + 7.3 diff; findings fixed; diff presented
+- [x] 7.3.6 Simon review of 7.2.5 + 7.3 diff; findings fixed; diff presented
       to Allan; approval recorded here before phase marked done.
 
 **Acceptance criteria + verification:**
@@ -711,10 +711,10 @@ review + Allan approval before it is marked done.
 
 **Status:**
 ```
-state: in_progress
+state: done
 started: 2026-07-10
-completed: —
-commit: —
+completed: 2026-07-11
+commit: pending local commit (not committed in this session)
 notes:
 - Phase created from the 2026-07-10 chat analysis (9-point list from Allan +
   OpenClaw-pattern recommendations). Allan approved implementation
@@ -744,8 +744,14 @@ notes:
   artifacts restricted to `artifacts/` + `knowledge/company/**/_artifacts/**`,
   /api/artifact symlink+realpath enforcement, scheduler default permission/tool
   constraints, and incognito README wording clarified as best-effort cleanup.
-  7.3.6 remains pending until Allan approval is explicitly recorded.
-- Remaining: 7.3.6 Simon review and Allan approval gate before phase close.
+  Simon review verdict was Stop before fixes; minimum patch set was applied and
+  revalidated.
+- Allan approval recorded 2026-07-11: user explicitly requested to "mark step 7
+  done" after the implemented changes and security follow-up.
+- UI alignment follow-up 2026-07-11: Settings Profile rows aligned, MCP row
+  removed from Profile (plugins remain in Plugins tab), memory/MEMORY.md made
+  editable via the same settings drawer pattern, and Settings/Onboarding badges
+  normalized by tightening `.kv-row` selectors.
 ```
 
 ---

@@ -1,3 +1,6 @@
+const layoutEl = document.getElementById('layout');
+const sidebarEl = document.getElementById('sidebar');
+const sidebarResizeEl = document.getElementById('sidebarResize');
 const stageEl = document.getElementById('stage');
 const chatEl = document.getElementById('chat');
 const inputEl = document.getElementById('input');
@@ -6,12 +9,35 @@ const statusEl = document.getElementById('status');
 const sessEl = document.getElementById('sess');
 const modelSel = document.getElementById('model');
 const agentSel = document.getElementById('agent');
+const chatHeaderEl = document.getElementById('chatHeader');
+const cliHeaderEl = document.getElementById('cliHeader');
 const newBtn = document.getElementById('newChat');
 const convListEl = document.getElementById('convList');
 const convSearchEl = document.getElementById('convSearch');
 const incogEl = document.getElementById('incognito');
+const composerWrapEl = document.querySelector('.composer-wrap');
+const viewChatBtn = document.getElementById('viewChat');
+const viewCliBtn = document.getElementById('viewCli');
+const cliPanelEl = document.getElementById('cliPanel');
+const termStartBtn = document.getElementById('termStart');
+const termStopBtn = document.getElementById('termStop');
+const termSessionsEl = document.getElementById('termSessions');
+const cliHintEl = document.getElementById('cliHint');
+const termEmptyEl = document.getElementById('termEmpty');
+const terminalHostEl = document.getElementById('terminalHost');
 
 const CONV_KEY = 'steadymade_chat_conversation';
+const SIDEBAR_WIDTH_KEY = 'steadymade_chat_sidebar_width';
+const UI_MODE_KEY = 'steadymade_chat_ui_mode';
+const TERMINAL_TARGETS = new Set(['claude', 'opencode']);
+const TRUSTED_PARENT_ORIGINS = new Set([
+  `${location.protocol}//localhost:4011`,
+  `${location.protocol}//127.0.0.1:4011`,
+]);
+
+const MOBILE_MEDIA = window.matchMedia('(max-width: 720px)');
+const SIDEBAR_MIN = 180;
+const SIDEBAR_MAX = 560;
 
 const state = {
   conversationId: null,
@@ -25,17 +51,72 @@ const state = {
   agentById: new Map(),
   seqByConversation: {},
   live: null,
+  uiMode: 'chat',
 };
 
+const cliState = {
+  bridgeEnabled: false,
+  sessions: [],
+  activeSessionId: null,
+  ws: null,
+  provider: 'claude',
+  modeLocked: false,
+  unsupportedReason: '',
+  term: null,
+  fitAddon: null,
+  resizeObserver: null,
+};
+
+if (window.parent !== window) {
+  cliState.modeLocked = true;
+}
+
+function trustedParentOrigin() {
+  try {
+    const ref = document.referrer ? new URL(document.referrer).origin : '';
+    if (TRUSTED_PARENT_ORIGINS.has(ref)) return ref;
+  } catch {}
+  const sameHost = `${location.protocol}//${location.hostname}:4011`;
+  if (TRUSTED_PARENT_ORIGINS.has(sameHost)) return sameHost;
+  return `${location.protocol}//localhost:4011`;
+}
+
+function isTrustedParentMessage(event) {
+  if (window.parent === window) return true;
+  return event.source === window.parent && TRUSTED_PARENT_ORIGINS.has(String(event.origin || ''));
+}
+
 function esc(s) {
-  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function safeHref(url) {
+  const href = String(url || '').trim();
+  const lower = href.toLowerCase();
+  const allowed = lower.startsWith('http://')
+    || lower.startsWith('https://')
+    || lower.startsWith('mailto:')
+    || href.startsWith('/')
+    || href.startsWith('./')
+    || href.startsWith('../')
+    || href.startsWith('#');
+  return allowed ? esc(href) : null;
 }
 
 function inline(s) {
   return s
     .replace(/`([^`]+)`/g, (_, c) => `<code>${c}</code>`)
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => {
+      const safe = safeHref(href);
+      if (!safe) return label;
+      return `<a href="${safe}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+    });
 }
 
 function renderMd(src) {
@@ -220,9 +301,334 @@ async function apiJson(url, opts) {
   if (!res.ok) {
     const err = new Error(data?.error || `${res.status}`);
     err.status = res.status;
+    err.payload = data;
     throw err;
   }
   return data;
+}
+
+function clamp(n, min, max) {
+  return Math.min(max, Math.max(min, n));
+}
+
+function sidebarMaxForViewport() {
+  return Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, Math.floor(window.innerWidth * 0.5)));
+}
+
+function applySidebarWidth(rawWidth) {
+  if (MOBILE_MEDIA.matches) return;
+  const width = clamp(Number(rawWidth) || 250, SIDEBAR_MIN, sidebarMaxForViewport());
+  sidebarEl.style.width = `${width}px`;
+  return width;
+}
+
+function initSidebarResize() {
+  const stored = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+  if (!MOBILE_MEDIA.matches) applySidebarWidth(Number.isFinite(stored) ? stored : 250);
+
+  let dragging = false;
+
+  const onMove = (e) => {
+    if (!dragging || MOBILE_MEDIA.matches) return;
+    const w = applySidebarWidth(e.clientX - layoutEl.getBoundingClientRect().left);
+    if (Number.isFinite(w)) localStorage.setItem(SIDEBAR_WIDTH_KEY, String(w));
+  };
+
+  const stop = () => {
+    if (!dragging) return;
+    dragging = false;
+    sidebarResizeEl.classList.remove('dragging');
+    document.body.style.userSelect = '';
+    window.removeEventListener('mousemove', onMove);
+    window.removeEventListener('mouseup', stop);
+  };
+
+  sidebarResizeEl.addEventListener('mousedown', (e) => {
+    if (MOBILE_MEDIA.matches) return;
+    dragging = true;
+    sidebarResizeEl.classList.add('dragging');
+    document.body.style.userSelect = 'none';
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', stop);
+    e.preventDefault();
+  });
+
+  window.addEventListener('resize', () => {
+    if (MOBILE_MEDIA.matches) {
+      sidebarEl.style.removeProperty('width');
+      return;
+    }
+    const current = Number.parseInt(sidebarEl.style.width || '', 10);
+    const storedWidth = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+    const base = Number.isFinite(current) ? current : (Number.isFinite(storedWidth) ? storedWidth : 250);
+    const w = applySidebarWidth(base);
+    if (Number.isFinite(w)) localStorage.setItem(SIDEBAR_WIDTH_KEY, String(w));
+  });
+}
+
+function setUiMode(mode) {
+  const next = mode === 'cli' ? 'cli' : 'chat';
+  state.uiMode = next;
+  localStorage.setItem(UI_MODE_KEY, next);
+  viewChatBtn.classList.toggle('active', next === 'chat');
+  viewCliBtn.classList.toggle('active', next === 'cli');
+  layoutEl.classList.toggle('cli-mode', next === 'cli');
+  const modeSwitch = viewChatBtn?.closest('.view-switch');
+  if (modeSwitch) modeSwitch.classList.toggle('hidden', cliState.modeLocked);
+  chatHeaderEl.classList.toggle('hidden', next !== 'chat');
+  cliHeaderEl.classList.toggle('hidden', next !== 'cli');
+  chatEl.classList.toggle('hidden', next !== 'chat');
+  composerWrapEl.classList.toggle('hidden', next !== 'chat');
+  cliPanelEl.classList.toggle('hidden', next !== 'cli');
+  sidebarEl.classList.toggle('hidden', next === 'cli');
+  sidebarResizeEl.classList.toggle('hidden', next === 'cli');
+  if (next === 'cli') {
+    stageEl.classList.remove('centered');
+    statusEl.textContent = 'ready';
+    ensureTerminal();
+    refreshTerminalSessions();
+  } else {
+    if (!chatEl.querySelector('.msg')) showWelcome();
+    inputEl.focus();
+  }
+}
+
+function setCliHint(text, kind = '') {
+  cliHintEl.className = `cli-hint${kind ? ` ${kind}` : ''}`;
+  cliHintEl.textContent = text;
+}
+
+function ensureTerminal() {
+  if (cliState.term) return true;
+  if (!window.Terminal || !window.FitAddon || !window.FitAddon.FitAddon) {
+    cliState.unsupportedReason = 'Embedded terminal assets unavailable. Please reinstall dependencies and reload.';
+    setCliHint(cliState.unsupportedReason, 'warn');
+    return false;
+  }
+  cliState.term = new window.Terminal({
+    convertEol: false,
+    cursorBlink: true,
+    fontFamily: 'JetBrains Mono, Menlo, Consolas, monospace',
+    fontSize: 12,
+    theme: {
+      background: '#111111',
+      foreground: '#E6ECE6',
+    },
+  });
+  cliState.fitAddon = new window.FitAddon.FitAddon();
+  cliState.term.loadAddon(cliState.fitAddon);
+  cliState.term.open(terminalHostEl);
+  cliState.fitAddon.fit();
+  cliState.term.onData((data) => {
+    if (!cliState.ws || cliState.ws.readyState !== WebSocket.OPEN) return;
+    cliState.ws.send(JSON.stringify({ type: 'input', data }));
+  });
+  cliState.resizeObserver = new ResizeObserver(() => {
+    fitTerminalAndNotify();
+  });
+  cliState.resizeObserver.observe(terminalHostEl);
+  return true;
+}
+
+function activeTerminalSession() {
+  return cliState.sessions.find((s) => s.id === cliState.activeSessionId) || null;
+}
+
+function fitTerminalAndNotify() {
+  if (!cliState.term || !cliState.fitAddon) return;
+  cliState.fitAddon.fit();
+  const active = activeTerminalSession();
+  if (!active) return;
+  const cols = cliState.term.cols;
+  const rows = cliState.term.rows;
+  if (cliState.ws && cliState.ws.readyState === WebSocket.OPEN) {
+    cliState.ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+  } else {
+    apiJson(`/api/terminal/sessions/${encodeURIComponent(active.id)}/resize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cols, rows }),
+    }).catch(() => {});
+  }
+}
+
+function renderTerminalTabs() {
+  termSessionsEl.innerHTML = '';
+  if (!cliState.sessions.length) {
+    const empty = document.createElement('span');
+    empty.className = 'term-tab';
+    empty.textContent = 'No sessions';
+    empty.style.cursor = 'default';
+    termSessionsEl.appendChild(empty);
+    return;
+  }
+  for (const s of cliState.sessions) {
+    const tab = document.createElement('button');
+    tab.type = 'button';
+    tab.className = `term-tab${s.id === cliState.activeSessionId ? ' active' : ''}`;
+    tab.textContent = `${s.target} · ${s.id.slice(0, 6)}${s.running ? '' : ' · stopped'}`;
+    tab.addEventListener('click', () => switchTerminalSession(s.id));
+    termSessionsEl.appendChild(tab);
+  }
+}
+
+function updateTerminalControls() {
+  const active = activeTerminalSession();
+  const running = !!active?.running;
+  termStartBtn.disabled = !cliState.bridgeEnabled || !!cliState.unsupportedReason;
+  termStartBtn.textContent = `Start ${cliState.provider}`;
+  termStopBtn.disabled = !running;
+
+  if (!cliState.bridgeEnabled) {
+    setCliHint('CLI bridge is disabled. Enable it in Settings → AI Provider and restart.', 'warn');
+  } else if (cliState.unsupportedReason) {
+    setCliHint(cliState.unsupportedReason, 'warn');
+  } else if (!active) {
+    setCliHint(`Ready. Provider target: ${cliState.provider}. Create a session to start the embedded terminal.`, '');
+  } else if (!active.running) {
+    setCliHint(`Session ${active.id.slice(0, 8)} exited${active.exitCode != null ? ` (code ${active.exitCode})` : ''}.`, 'warn');
+  } else {
+    setCliHint(`Connected to ${active.target} session ${active.id.slice(0, 8)}${active.pid ? ` (pid ${active.pid})` : ''}.`, 'ok');
+  }
+}
+
+function setTerminalEmptyVisible(visible, message) {
+  termEmptyEl.classList.toggle('hidden', !visible);
+  if (message) termEmptyEl.textContent = message;
+}
+
+function closeTerminalWs() {
+  if (cliState.ws) {
+    cliState.ws.onclose = null;
+    cliState.ws.onerror = null;
+    cliState.ws.onmessage = null;
+    try { cliState.ws.close(); } catch {}
+    cliState.ws = null;
+  }
+}
+
+function switchTerminalSession(sessionId) {
+  if (!sessionId || cliState.activeSessionId === sessionId) {
+    renderTerminalTabs();
+    updateTerminalControls();
+    return;
+  }
+  cliState.activeSessionId = sessionId;
+  renderTerminalTabs();
+  connectTerminalWebSocket();
+}
+
+function connectTerminalWebSocket() {
+  closeTerminalWs();
+  const active = activeTerminalSession();
+  updateTerminalControls();
+  if (!active) {
+    setTerminalEmptyVisible(true, 'No terminal session yet. Click Start to launch the current provider target.');
+    return;
+  }
+  if (!ensureTerminal()) return;
+
+  cliState.term.reset();
+  setTerminalEmptyVisible(false);
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${proto}//${location.host}/api/terminal/ws?sessionId=${encodeURIComponent(active.id)}`);
+  cliState.ws = ws;
+
+  ws.onopen = () => {
+    fitTerminalAndNotify();
+    updateTerminalControls();
+  };
+
+  ws.onmessage = (event) => {
+    let payload = {};
+    try { payload = JSON.parse(event.data || '{}'); } catch {}
+    if (payload.type === 'output' && typeof payload.data === 'string') {
+      if (cliState.term) cliState.term.write(payload.data);
+      return;
+    }
+    if (payload.type === 'status' && payload.session) {
+      const idx = cliState.sessions.findIndex((s) => s.id === payload.session.id);
+      if (idx >= 0) cliState.sessions[idx] = payload.session;
+      else cliState.sessions.unshift(payload.session);
+      renderTerminalTabs();
+      updateTerminalControls();
+      return;
+    }
+    if (payload.type === 'error' && payload.error) {
+      setCliHint(payload.error, 'warn');
+    }
+  };
+
+  ws.onerror = () => {
+    setCliHint('Embedded terminal websocket error. Check local bridge settings and retry.', 'warn');
+  };
+
+  ws.onclose = () => {
+    if (cliState.ws === ws) cliState.ws = null;
+    refreshTerminalSessions();
+  };
+}
+
+async function refreshTerminalSessions() {
+  try {
+    const data = await apiJson('/api/terminal/sessions');
+    cliState.bridgeEnabled = data.bridgeEnabled !== false;
+    cliState.sessions = Array.isArray(data.sessions) ? data.sessions : [];
+    const hasActive = cliState.sessions.some((s) => s.id === cliState.activeSessionId);
+    if (!hasActive) {
+      const firstRunning = cliState.sessions.find((s) => s.running);
+      cliState.activeSessionId = firstRunning?.id || cliState.sessions[0]?.id || null;
+    }
+    renderTerminalTabs();
+    updateTerminalControls();
+    if (cliState.activeSessionId) connectTerminalWebSocket();
+    else setTerminalEmptyVisible(true, 'No terminal session yet. Click Start to launch the current provider target.');
+  } catch (err) {
+    cliState.bridgeEnabled = false;
+    cliState.sessions = [];
+    cliState.activeSessionId = null;
+    renderTerminalTabs();
+    const msg = err.payload?.reason || err.message || 'Terminal API unavailable';
+    setCliHint(msg, 'warn');
+    setTerminalEmptyVisible(true, msg);
+    updateTerminalControls();
+  }
+}
+
+async function startTerminalSession() {
+  if (!ensureTerminal()) return;
+  const target = TERMINAL_TARGETS.has(cliState.provider) ? cliState.provider : 'claude';
+  try {
+    const data = await apiJson('/api/terminal/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target, cols: cliState.term.cols, rows: cliState.term.rows }),
+    });
+    cliState.sessions = Array.isArray(data.sessions) ? data.sessions : cliState.sessions;
+    cliState.activeSessionId = data.session?.id || cliState.activeSessionId;
+    renderTerminalTabs();
+    connectTerminalWebSocket();
+  } catch (err) {
+    const msg = err.payload?.error || err.payload?.reason || err.message || 'failed to start terminal session';
+    setCliHint(msg, 'warn');
+    setTerminalEmptyVisible(true, msg);
+  }
+}
+
+async function stopTerminalSession() {
+  const active = activeTerminalSession();
+  if (!active) return;
+  try {
+    await apiJson(`/api/terminal/sessions/${encodeURIComponent(active.id)}/stop`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    await refreshTerminalSessions();
+  } catch (err) {
+    const msg = err.payload?.error || err.message || 'failed to stop terminal session';
+    setCliHint(msg, 'warn');
+  }
 }
 
 function renderConvList(items, { searchMode = false } = {}) {
@@ -505,6 +911,7 @@ async function loadConversation(id) {
 }
 
 async function send() {
+  if (state.uiMode !== 'chat') return;
   const text = inputEl.value.trim();
   if (!text || state.running) return;
 
@@ -586,6 +993,8 @@ function resetConversation() {
 
 (async function boot() {
   localStorage.removeItem('steadymade_chat_session');
+  initSidebarResize();
+  updateTerminalControls();
   const params = new URLSearchParams(location.search);
   await loadAgents();
   applyPreset(params.get('agent'), params.get('msg'));
@@ -594,14 +1003,50 @@ function resetConversation() {
   if (stored && state.sessions.some((s) => s.id === stored) && !params.get('msg')) {
     loadConversation(stored);
   }
+
+  const savedMode = localStorage.getItem(UI_MODE_KEY);
+  setUiMode(savedMode === 'cli' ? 'cli' : 'chat');
 })();
 
 window.addEventListener('message', (e) => {
-  if (e.data?.type !== 'steadymade-preset') return;
-  applyPreset(e.data.agent, e.data.draft);
+  if (!isTrustedParentMessage(e)) return;
+  const data = e.data || {};
+  if (data.type === 'steadymade-preset') {
+    applyPreset(data.agent, data.draft);
+    return;
+  }
+
+  if (
+    data.type === 'steadymade-runtime-config'
+    || data.type === 'steadymade-cli-config'
+    || data.type === 'steadymade-mode'
+    || data.type === 'steadymade-provider'
+  ) {
+    const mode = String(data.chatMode || data.mode || '').toLowerCase();
+    if (mode === 'cli' || mode === 'chat') {
+      setUiMode(mode);
+      if (data.lockMode === true) cliState.modeLocked = true;
+      if (data.lockMode === false) cliState.modeLocked = false;
+    }
+
+    const providerMode = String(data.providerMode || '').toLowerCase();
+    const providerFromMode = providerMode === 'opencode' ? 'opencode' : 'claude';
+    const provider = String(data.provider || providerFromMode).toLowerCase();
+    if (TERMINAL_TARGETS.has(provider)) {
+      cliState.provider = provider;
+      updateTerminalControls();
+    }
+
+    if (data.unsupportedReason) {
+      cliState.unsupportedReason = String(data.unsupportedReason);
+      setCliHint(cliState.unsupportedReason, 'warn');
+      setTerminalEmptyVisible(true, cliState.unsupportedReason);
+      updateTerminalControls();
+    }
+  }
 });
 if (window.parent !== window) {
-  window.parent.postMessage({ type: 'steadymade-chat-ready' }, '*');
+  window.parent.postMessage({ type: 'steadymade-chat-ready' }, trustedParentOrigin());
 }
 
 let searchTimer = null;
@@ -637,6 +1082,7 @@ incogEl.addEventListener('change', () => {
 });
 
 sendBtn.addEventListener('click', () => {
+  if (state.uiMode !== 'chat') return;
   if (state.running) {
     if (!state.streamIncognito && state.streamConversationId) stopActiveRun();
     else detachStream();
@@ -653,6 +1099,16 @@ inputEl.addEventListener('keydown', (e) => {
 });
 inputEl.addEventListener('input', autosize);
 newBtn.addEventListener('click', resetConversation);
+viewChatBtn.addEventListener('click', () => {
+  if (cliState.modeLocked) return;
+  setUiMode('chat');
+});
+viewCliBtn.addEventListener('click', () => {
+  if (cliState.modeLocked) return;
+  setUiMode('cli');
+});
+termStartBtn.addEventListener('click', startTerminalSession);
+termStopBtn.addEventListener('click', stopTerminalSession);
 agentSel.addEventListener('change', () => {
   const id = agentSel.value;
   const meta = agentMeta(id);

@@ -24,6 +24,7 @@ const ROOT = path.resolve(__dirname, '..'); // project root: steadymade-ai-os
 const PUBLIC = path.join(__dirname, 'public');
 const META_FILE = path.join(__dirname, 'meta.json'); // sidecar metadata (status, scope) — keeps real docs untouched
 const FLOWS_FILE = path.join(__dirname, 'workflows.json'); // user workflow edits: overrides / custom / deleted (machine-local)
+const PROVIDER_SETTINGS_FILE = path.join(__dirname, 'provider-settings.json');
 const USAGE_LOG = path.join(ROOT, 'runs', 'usage.jsonl');
 const LEGACY_CHAT_USAGE_LOG = path.join(ROOT, 'runs', 'chat-usage.jsonl');
 const PORT = process.env.PORT || 4011;
@@ -54,6 +55,19 @@ const MIME = {
   '.jpg': 'image/jpeg',
   '.woff2': 'font/woff2',
 };
+
+const PROVIDER_RUNTIME_MODES = new Set(['claude-subscription', 'anthropic-api', 'opencode']);
+const PROVIDER_ENV_KEY_RE = /^[A-Z_][A-Z0-9_]*$/;
+const PROVIDER_ENV_MAX_ENTRIES = 64;
+const PROVIDER_ENV_MAX_KEY_LENGTH = 64;
+const PROVIDER_ENV_MAX_VALUE_LENGTH = 8192;
+const DEFAULT_PROVIDER_SETTINGS = Object.freeze({
+  runtimeMode: 'claude-subscription',
+  opencodeBin: '',
+  cliBridgeEnabled: false,
+  envVault: [],
+  updatedAt: null,
+});
 
 // ---------- helpers ----------
 
@@ -151,6 +165,139 @@ async function readMeta() {
   } catch {
     return { docs: {} };
   }
+}
+
+async function readProviderSettings() {
+  const raw = await readProviderSettingsRaw();
+  return toProviderSettingsResponse(raw);
+}
+
+async function readProviderSettingsRaw() {
+  try {
+    try { await fsp.chmod(PROVIDER_SETTINGS_FILE, 0o600); } catch {}
+    const parsed = JSON.parse(await fsp.readFile(PROVIDER_SETTINGS_FILE, 'utf8'));
+    const sanitized = sanitizeProviderSettings(parsed);
+    return {
+      ...DEFAULT_PROVIDER_SETTINGS,
+      ...sanitized,
+      updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : null,
+    };
+  } catch {
+    return { ...DEFAULT_PROVIDER_SETTINGS };
+  }
+}
+
+function toProviderSettingsResponse(rawSettings) {
+  const envVaultEntries = Object.entries(rawSettings.envVault || {})
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => ({
+      key,
+      masked: maskSecret(value),
+      hasValue: true,
+    }));
+  return {
+    runtimeMode: rawSettings.runtimeMode,
+    opencodeBin: rawSettings.opencodeBin,
+    cliBridgeEnabled: rawSettings.cliBridgeEnabled,
+    envVault: envVaultEntries,
+    updatedAt: rawSettings.updatedAt || null,
+  };
+}
+
+function maskSecret(value) {
+  const len = Math.min(Math.max(String(value || '').length, 4), 16);
+  return '•'.repeat(len);
+}
+
+function sanitizeEnvVaultMap(input) {
+  const out = {};
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return out;
+  for (const [rawKey, rawValue] of Object.entries(input)) {
+    const key = String(rawKey || '').trim();
+    if (!PROVIDER_ENV_KEY_RE.test(key)) continue;
+    if (key.length > PROVIDER_ENV_MAX_KEY_LENGTH) continue;
+    const value = String(rawValue ?? '');
+    out[key] = value.slice(0, PROVIDER_ENV_MAX_VALUE_LENGTH);
+    if (Object.keys(out).length >= PROVIDER_ENV_MAX_ENTRIES) break;
+  }
+  return out;
+}
+
+function resolveEnvVaultMap(bodyEnvVault, existingMap) {
+  const next = {};
+  const rows = Array.isArray(bodyEnvVault) ? bodyEnvVault : [];
+  for (const row of rows) {
+    const key = String(row?.key || '').trim();
+    if (!key) continue;
+    if (!PROVIDER_ENV_KEY_RE.test(key)) continue;
+    if (key.length > PROVIDER_ENV_MAX_KEY_LENGTH) continue;
+    const preserve = row?.preserve === true;
+    const hasValueField = typeof row?.value === 'string';
+    if (hasValueField && row.value.length) {
+      next[key] = row.value.slice(0, PROVIDER_ENV_MAX_VALUE_LENGTH);
+    } else if (preserve && typeof existingMap[key] === 'string') {
+      next[key] = existingMap[key];
+    }
+    if (Object.keys(next).length >= PROVIDER_ENV_MAX_ENTRIES) break;
+  }
+  return next;
+}
+
+function sanitizeProviderSettings(body) {
+  const runtimeMode = String(body?.runtimeMode || '').trim();
+  const opencodeBin = String(body?.opencodeBin || '').trim();
+  const cliBridgeEnabled = body?.cliBridgeEnabled;
+  const envVaultRaw = body?.envVault;
+  const envVault = Array.isArray(envVaultRaw)
+    ? resolveEnvVaultMap(envVaultRaw, {})
+    : sanitizeEnvVaultMap(envVaultRaw);
+  return {
+    runtimeMode: PROVIDER_RUNTIME_MODES.has(runtimeMode) ? runtimeMode : DEFAULT_PROVIDER_SETTINGS.runtimeMode,
+    opencodeBin: opencodeBin.slice(0, 1024),
+    cliBridgeEnabled: typeof cliBridgeEnabled === 'boolean' ? cliBridgeEnabled : DEFAULT_PROVIDER_SETTINGS.cliBridgeEnabled,
+    envVault,
+  };
+}
+
+function validateProviderSettings(body) {
+  const errors = [];
+  if (!body || typeof body !== 'object') errors.push('body must be an object');
+  if (!PROVIDER_RUNTIME_MODES.has(String(body?.runtimeMode || ''))) {
+    errors.push('runtimeMode must be one of: claude-subscription, anthropic-api, opencode');
+  }
+  if (typeof body?.opencodeBin !== 'string') errors.push('opencodeBin must be a string');
+  if (typeof body?.cliBridgeEnabled !== 'boolean') errors.push('cliBridgeEnabled must be a boolean');
+  if (body?.envVault !== undefined) {
+    if (!Array.isArray(body.envVault)) {
+      errors.push('envVault must be an array');
+    } else {
+      if (body.envVault.length > PROVIDER_ENV_MAX_ENTRIES) errors.push(`envVault supports up to ${PROVIDER_ENV_MAX_ENTRIES} entries`);
+      for (let i = 0; i < body.envVault.length; i++) {
+        const row = body.envVault[i];
+        if (!row || typeof row !== 'object') {
+          errors.push(`envVault[${i}] must be an object`);
+          continue;
+        }
+        const key = String(row.key || '').trim();
+        if (!PROVIDER_ENV_KEY_RE.test(key)) {
+          errors.push(`envVault[${i}].key must match ${PROVIDER_ENV_KEY_RE}`);
+        }
+        if (key.length > PROVIDER_ENV_MAX_KEY_LENGTH) {
+          errors.push(`envVault[${i}].key exceeds ${PROVIDER_ENV_MAX_KEY_LENGTH} chars`);
+        }
+        if (row.value !== undefined && typeof row.value !== 'string') {
+          errors.push(`envVault[${i}].value must be a string`);
+        }
+        if (typeof row.value === 'string' && row.value.length > PROVIDER_ENV_MAX_VALUE_LENGTH) {
+          errors.push(`envVault[${i}].value exceeds ${PROVIDER_ENV_MAX_VALUE_LENGTH} chars`);
+        }
+        if (row.preserve !== undefined && typeof row.preserve !== 'boolean') {
+          errors.push(`envVault[${i}].preserve must be boolean`);
+        }
+      }
+    }
+  }
+  return errors;
 }
 
 async function fileEntry(absPath) {
@@ -442,6 +589,41 @@ async function handleApi(req, res, url) {
     return send(200, { ok: true, config });
   }
 
+  if (url.pathname === '/api/provider-settings' && req.method === 'GET') {
+    const settings = await readProviderSettings();
+    return send(200, {
+      settings,
+      path: 'interface/provider-settings.json',
+      note: 'Machine-local settings only. Environment vault values are masked in responses and apply after restart.',
+    });
+  }
+
+  if (url.pathname === '/api/provider-settings' && req.method === 'PUT') {
+    const body = await readBody(req);
+    const errors = validateProviderSettings(body);
+    if (errors.length) return send(400, { errors });
+    const existing = await readProviderSettingsRaw();
+    const sanitized = sanitizeProviderSettings(body);
+    const settings = {
+      runtimeMode: sanitized.runtimeMode,
+      opencodeBin: sanitized.opencodeBin,
+      cliBridgeEnabled: sanitized.cliBridgeEnabled,
+      envVault: body.envVault === undefined
+        ? { ...(existing.envVault || {}) }
+        : resolveEnvVaultMap(body.envVault, existing.envVault || {}),
+      updatedAt: new Date().toISOString(),
+    };
+    await fsp.writeFile(PROVIDER_SETTINGS_FILE, JSON.stringify(settings, null, 2), { encoding: 'utf8', mode: 0o600 });
+    try { await fsp.chmod(PROVIDER_SETTINGS_FILE, 0o600); } catch {}
+    const responseSettings = toProviderSettingsResponse(settings);
+    return send(200, {
+      ok: true,
+      settings: responseSettings,
+      path: 'interface/provider-settings.json',
+      message: 'saved — restart app/chat to apply runtime env defaults',
+    });
+  }
+
   // ---------- artifacts (open any file under artifacts/ and knowledge/company/**/_artifacts/**) ----------
 
   if (url.pathname === '/api/artifact' && req.method === 'GET') {
@@ -658,16 +840,17 @@ async function handleApi(req, res, url) {
       { id: 'operating-profile', label: 'operating-profile.md (company profile, symlinked to AI_OS root)', path: 'operating-profile.md', hint: 'run /company-onboarding' },
       { id: 'skill-profile', label: '.skill-profile (active skills)', path: '.skill-profile', hint: 'created by the Skill Hub' },
       { id: 'settings', label: '.claude/settings.local.json (permissions)', path: '.claude/settings.local.json', hint: 'created when plugins/permissions are set' },
-      { id: 'mcp', label: '.mcp.json (MCP servers)', path: '.mcp.json', hint: 'optional — enable an MCP plugin in Settings' },
-    ].map((c) => {
-      const abs = path.join(ROOT, c.path);
-      const exists = fs.existsSync(abs);
-      let todos = 0;
-      if (exists && c.path.endsWith('.md')) {
-        try { todos = (fs.readFileSync(abs, 'utf8').match(/TODO/g) || []).length; } catch { /* ignore */ }
-      }
-      return { ...c, exists, todos };
-    });
+    ]
+      .filter((c) => c.path !== '.mcp.json')
+      .map((c) => {
+        const abs = path.join(ROOT, c.path);
+        const exists = fs.existsSync(abs);
+        let todos = 0;
+        if (exists && c.path.endsWith('.md')) {
+          try { todos = (fs.readFileSync(abs, 'utf8').match(/TODO/g) || []).length; } catch { /* ignore */ }
+        }
+        return { ...c, exists, todos };
+      });
     const byId = (id) => checks.find((c) => c.id === id) || {};
     const onboarding = {
       personalDone: Boolean(byId('user-profile').exists && byId('claude-local').exists),

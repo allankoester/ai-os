@@ -4,10 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Steadymade AI OS Chat</title>
+  <link rel="stylesheet" href="/vendor/xterm/xterm.css">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div class="layout">
+  <div class="layout" id="layout">
     <aside id="sidebar" class="sidebar">
       <div class="side-head">
         <button id="newChat" title="Start new conversation">+ New chat</button>
@@ -16,14 +17,25 @@
       <div id="convList" class="conv-list"></div>
     </aside>
 
+    <div id="sidebarResize" class="sidebar-resize" role="separator" aria-orientation="vertical" aria-label="Resize sidebar"></div>
+
     <div class="main-col">
       <header class="topbar">
-        <div class="top-left">
+        <div id="chatHeader" class="top-left">
           <select id="agent" class="agent-select" title="Agent mode">
             <option value="danny">Danny — Orchestrator</option>
           </select>
         </div>
+        <div id="cliHeader" class="cli-header hidden">
+          <button id="termStart" type="button">Start</button>
+          <button id="termStop" type="button" class="muted">Stop</button>
+          <div id="termSessions" class="term-sessions" role="tablist" aria-label="Terminal sessions"></div>
+        </div>
         <div class="top-right">
+          <div class="view-switch" role="tablist" aria-label="Main view">
+            <button id="viewChat" class="view-btn active" data-view="chat" title="Chat view">Chat</button>
+            <button id="viewCli" class="view-btn" data-view="cli" title="CLI view">CLI</button>
+          </div>
           <label class="incog" title="No history, no memory writes — this conversation leaves no trace">
             <input type="checkbox" id="incognito"> INCOGNITO
           </label>
@@ -38,6 +50,15 @@
             <p>Danny is the default orchestrator. You can switch to direct specialist mode in the selector.</p>
           </div>
         </main>
+
+        <section id="cliPanel" class="cli-panel hidden" aria-live="polite">
+          <div id="cliHint" class="cli-hint"></div>
+          <div class="cli-note">Embedded PTY terminal for Claude/OpenCode. Sessions stay alive while you switch tabs. If embedding is blocked, use your host interface fallback.</div>
+          <div class="terminal-stage">
+            <div id="termEmpty" class="term-empty">No terminal session yet. Click Start to launch the current provider target.</div>
+            <div id="terminalHost" class="terminal-host" aria-label="Embedded terminal"></div>
+          </div>
+        </section>
 
         <footer class="composer-wrap">
           <div class="composer">
@@ -60,6 +81,8 @@
     </div>
   </div>
 
+  <script src="/vendor/xterm/xterm.js"></script>
+  <script src="/vendor/xterm-addon-fit/addon-fit.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -36,6 +36,7 @@ interface/guardrails.json
 
 # Workflow edits (overrides / custom / deleted) are machine-local state
 interface/workflows.json
+interface/provider-settings.json
 
 # Scheduler jobs/runs/logs are machine-local state
 scheduler/*
@@ -47,6 +48,9 @@ CLAUDE.local.md
 # Local env files
 .env
 .env.local
+
+# Local JS dependencies
+node_modules/
 
 # OS/editor noise
 .DS_Store

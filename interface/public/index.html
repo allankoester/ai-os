@@ -57,7 +57,12 @@
             <div id="search-results" class="search-results hidden"></div>
           </div>
         </div>
-        <div class="topbar-right"></div>
+        <div class="topbar-right">
+          <div id="chat-mode-switch" class="chat-mode-switch hidden" role="group" aria-label="Chat runtime mode">
+            <button class="chat-mode-btn active" type="button" data-chat-mode="chat">Chat</button>
+            <button class="chat-mode-btn" type="button" data-chat-mode="cli">CLI</button>
+          </div>
+        </div>
       </header>
 
       <main id="view" class="view"></main>

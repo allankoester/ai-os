@@ -22,7 +22,22 @@ const state = {
     content: '',
     savedContent: '',
     mode: 'edit',        // edit | preview
+    colWidths: null,     // persisted folder/docs column widths
+    resizeObserver: null,
   },
+};
+
+const CHAT_MODE_KEY = 'steadymade.chat.mode.v1';
+const DEFAULT_PROVIDER_SETTINGS = {
+  runtimeMode: 'claude-subscription',
+  opencodeBin: '',
+  cliBridgeEnabled: false,
+  envVault: [],
+  updatedAt: null,
+};
+const uiState = {
+  chatMode: 'chat',
+  providerSettings: { ...DEFAULT_PROVIDER_SETTINGS },
 };
 
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -117,6 +132,19 @@ function statusBadgeClass(status) {
   return 'badge-gray';
 }
 
+function safeHref(url) {
+  const href = String(url || '').trim();
+  const lower = href.toLowerCase();
+  const allowed = lower.startsWith('http://')
+    || lower.startsWith('https://')
+    || lower.startsWith('mailto:')
+    || href.startsWith('/')
+    || href.startsWith('./')
+    || href.startsWith('../')
+    || href.startsWith('#');
+  return allowed ? esc(href) : null;
+}
+
 function isReviewStatus(status) {
   return status === 'needs_review' || status === 'needs review' || status === 'conflict';
 }
@@ -160,8 +188,57 @@ async function boot() {
     if (u.role) uEl.title = u.role;
   }
   bindChrome();
+  uiState.chatMode = loadStoredChatMode();
+  await refreshProviderSettingsState();
+  syncChatModeSwitch();
   setView('command');
   checkOnboarding(); // non-blocking: shows the onboarding guide if the workspace is not fully onboarded
+}
+
+function loadStoredChatMode() {
+  try {
+    const value = String(localStorage.getItem(CHAT_MODE_KEY) || '').toLowerCase();
+    return value === 'cli' ? 'cli' : 'chat';
+  } catch {
+    return 'chat';
+  }
+}
+
+function persistChatMode(mode) {
+  try { localStorage.setItem(CHAT_MODE_KEY, mode); } catch { /* localStorage unavailable */ }
+}
+
+function syncChatModeSwitch() {
+  $$('#chat-mode-switch [data-chat-mode]').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.chatMode === uiState.chatMode);
+  });
+}
+
+function toggleTopbarChatControls() {
+  const wrap = $('#chat-mode-switch');
+  if (!wrap) return;
+  wrap.classList.toggle('hidden', state.view !== 'chat');
+}
+
+function setChatMode(mode, { persist = true } = {}) {
+  const next = mode === 'cli' ? 'cli' : 'chat';
+  uiState.chatMode = next;
+  if (persist) persistChatMode(next);
+  syncChatModeSwitch();
+  postChatRuntimeConfig();
+}
+
+async function refreshProviderSettingsState() {
+  try {
+    const payload = await apiJson('/api/provider-settings');
+    uiState.providerSettings = {
+      ...DEFAULT_PROVIDER_SETTINGS,
+      ...(payload?.settings || {}),
+      envVault: Array.isArray(payload?.settings?.envVault) ? payload.settings.envVault : [],
+    };
+  } catch {
+    uiState.providerSettings = { ...DEFAULT_PROVIDER_SETTINGS };
+  }
 }
 
 function bindChrome() {
@@ -184,6 +261,10 @@ function bindChrome() {
       saveDoc();
     }
   });
+
+  $$('#chat-mode-switch [data-chat-mode]').forEach((btn) => {
+    btn.addEventListener('click', () => setChatMode(btn.dataset.chatMode));
+  });
 }
 
 function openChat(agentId, draftMessage) {
@@ -196,8 +277,10 @@ function setView(view) {
   state.view = view;
   state.selectedAgent = state.selectedFolder = null;
   if (mapState.observer && view !== 'map') { mapState.observer.disconnect(); mapState.observer = null; }
+  if (state.kn.resizeObserver && view !== 'knowledge') { state.kn.resizeObserver.disconnect(); state.kn.resizeObserver = null; }
   $$('#nav .nav-item').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
   $('#view-title').textContent = VIEW_TITLES[view];
+  toggleTopbarChatControls();
   closeDrawer();
   const el = $('#view');
   const holder = $('#chat-holder');
@@ -1042,12 +1125,120 @@ function knChildren(level) {
   return [...map.values()];
 }
 
+const KN_COLS_KEY = 'steadymade.kn.cols.v1';
+const KN_COL_DEFAULTS = {
+  wide: { folders: 215, docs: 285 },
+  narrow: { folders: 180, docs: 235 },
+};
+const KN_COL_LIMITS = {
+  folders: { min: 150, max: 420 },
+  docs: { min: 180, max: 520 },
+  editorMin: 320,
+};
+
+function clamp(n, min, max) {
+  return Math.min(max, Math.max(min, n));
+}
+
+function loadKnColWidths() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(KN_COLS_KEY) || '{}');
+    if (Number.isFinite(raw.folders) && Number.isFinite(raw.docs)) {
+      return { folders: Math.round(raw.folders), docs: Math.round(raw.docs) };
+    }
+  } catch { /* ignore invalid localStorage */ }
+  return null;
+}
+
+function saveKnColWidths(widths) {
+  if (!widths) return;
+  localStorage.setItem(KN_COLS_KEY, JSON.stringify({ folders: Math.round(widths.folders), docs: Math.round(widths.docs) }));
+}
+
+function normalizedKnColWidths(layout, widths = state.kn.colWidths || loadKnColWidths()) {
+  const total = Math.round(layout.clientWidth || 0);
+  const defaults = total && total <= 1080 ? KN_COL_DEFAULTS.narrow : KN_COL_DEFAULTS.wide;
+  let folders = Number.isFinite(widths?.folders) ? widths.folders : defaults.folders;
+  let docs = Number.isFinite(widths?.docs) ? widths.docs : defaults.docs;
+
+  const maxFolders = total ? Math.min(KN_COL_LIMITS.folders.max, Math.floor(total * 0.5)) : KN_COL_LIMITS.folders.max;
+  const maxDocs = total ? Math.min(KN_COL_LIMITS.docs.max, Math.floor(total * 0.6)) : KN_COL_LIMITS.docs.max;
+  folders = clamp(Math.round(folders), KN_COL_LIMITS.folders.min, Math.max(KN_COL_LIMITS.folders.min, maxFolders));
+  docs = clamp(Math.round(docs), KN_COL_LIMITS.docs.min, Math.max(KN_COL_LIMITS.docs.min, maxDocs));
+
+  if (total) {
+    const maxCombined = Math.max(KN_COL_LIMITS.folders.min + KN_COL_LIMITS.docs.min, total - KN_COL_LIMITS.editorMin);
+    if (folders + docs > maxCombined) {
+      let excess = folders + docs - maxCombined;
+      const docsHeadroom = docs - KN_COL_LIMITS.docs.min;
+      const decDocs = Math.min(excess, docsHeadroom);
+      docs -= decDocs;
+      excess -= decDocs;
+      if (excess > 0) {
+        const folderHeadroom = folders - KN_COL_LIMITS.folders.min;
+        folders -= Math.min(excess, folderHeadroom);
+      }
+    }
+  }
+
+  return { folders, docs };
+}
+
+function applyKnColWidths(layout) {
+  const widths = normalizedKnColWidths(layout);
+  state.kn.colWidths = widths;
+  layout.style.setProperty('--kn-col-1', `${widths.folders}px`);
+  layout.style.setProperty('--kn-col-2', `${widths.docs}px`);
+}
+
+function bindKnResizers(layout) {
+  const startDrag = (kind, ev) => {
+    ev.preventDefault();
+    const startX = ev.clientX;
+    const start = { ...normalizedKnColWidths(layout) };
+    layout.classList.add('resizing');
+
+    const onMove = (e) => {
+      const dx = e.clientX - startX;
+      const next = { ...start };
+      if (kind === 'folders') next.folders = start.folders + dx;
+      else next.docs = start.docs + dx;
+      state.kn.colWidths = next;
+      applyKnColWidths(layout);
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      layout.classList.remove('resizing');
+      saveKnColWidths(state.kn.colWidths);
+    };
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
+
+  $$('[data-kn-resize]', layout).forEach((h) => h.addEventListener('mousedown', (ev) => startDrag(h.dataset.knResize, ev)));
+}
+
+function initKnLayout(root) {
+  const layout = $('.kn-layout', root);
+  if (!layout) return;
+  applyKnColWidths(layout);
+  bindKnResizers(layout);
+  if (state.kn.resizeObserver) state.kn.resizeObserver.disconnect();
+  state.kn.resizeObserver = new ResizeObserver(() => applyKnColWidths(layout));
+  state.kn.resizeObserver.observe(layout);
+}
+
 function renderKnowledge(el) {
   el.innerHTML = `<div class="kn-layout">
     <div class="kn-folders" id="kn-folders"></div>
+    <div class="kn-resizer" data-kn-resize="folders" role="separator" aria-orientation="vertical" aria-label="Resize folders column"></div>
     <div class="kn-docs" id="kn-docs"></div>
+    <div class="kn-resizer" data-kn-resize="docs" role="separator" aria-orientation="vertical" aria-label="Resize documents column"></div>
     <div class="kn-editor" id="kn-editor"></div>
   </div>`;
+  initKnLayout(el);
   if (!state.kn.folder) {
     const first = knChildren('')[0];
     if (first) { state.kn.folder = first.key; state.kn.level = ''; }
@@ -1071,6 +1262,11 @@ function selectKnFolder(key) {
 function paintKnFolders() {
   const el = $('#kn-folders');
   if (!el) return;
+  const folder = knFolderList().find((f) => f.key === state.kn.folder);
+  const isSystemFolder = folder ? folder.kind === 'system' : knSystemFolderKey(state.kn.folder);
+  const showDocControls = !isSystemFolder && Boolean(state.kn.folder);
+  const folderDocs = folder?.docs || [];
+  const reviewCount = folderDocs.filter((d) => isReviewStatus(docMeta(d.path).status)).length;
   const level = state.kn.level || '';
   const segs = level ? level.split('/') : [];
   const crumbs = [`<button class="kn-crumb ${level ? '' : 'current'}" data-level="">knowledge</button>`]
@@ -1079,7 +1275,17 @@ function paintKnFolders() {
   const children = knChildren(level);
 
   el.innerHTML = `
-    <div class="section-title" style="padding:0 12px;display:flex;align-items:center;gap:8px"><span style="flex:1">Folders</span><button class="chip" data-new-doc title="Create a new Markdown document">+ NEW DOC</button></div>
+    <div class="section-title" style="padding:0 12px;display:flex;align-items:center;gap:8px"><span style="flex:1">Folders</span></div>
+    ${showDocControls ? `<div class="kn-controls" style="padding:0 12px 10px">
+      <span class="filter-tabs compact" title="Docs or artifacts view">
+        <button class="filter-tab ${state.kn.docsMode === 'docs' ? 'active' : ''}" data-kn-mode="docs">Docs</button>
+        <button class="filter-tab ${state.kn.docsMode === 'artifacts' ? 'active' : ''}" data-kn-mode="artifacts">Art</button>
+      </span>
+      <span class="filter-tabs compact" title="Filter docs by review status">
+        <button class="filter-tab ${state.kn.filter === 'all' ? 'active' : ''}" data-kn-filter="all">All</button>
+        <button class="filter-tab ${state.kn.filter === 'review-needed' ? 'active' : ''}" data-kn-filter="review-needed">Review${reviewCount ? ` (${reviewCount})` : ''}</button>
+      </span>
+    </div>` : ''}
     <div class="kn-crumbs">${crumbs}</div>
     ${level ? `
       <button class="kn-folder-btn kn-up" data-up>
@@ -1092,7 +1298,6 @@ function paintKnFolders() {
         <span class="kn-folder-meta">${c.docs + c.subDocs} DOCS${c.subs.size ? ' · ' + c.subs.size + ' FOLDERS' : ''}</span>
       </button>`).join('') || '<div class="stat-note" style="padding:0 12px">No subfolders.</div>'}`;
 
-  $('[data-new-doc]', el)?.addEventListener('click', () => openNewDocDrawer(state.kn.folder));
   $$('.kn-crumb', el).forEach((b) => b.addEventListener('click', () => {
     state.kn.level = b.dataset.level;
     paintKnFolders();
@@ -1106,6 +1311,18 @@ function paintKnFolders() {
     state.kn.docsMode = 'docs';
     state.kn.doc = null;
     if (b.dataset.children) state.kn.level = b.dataset.key; // drill in: clicked folder becomes the level
+    paintKnFolders(); paintKnDocs(); paintKnEditor();
+  }));
+  $$('[data-kn-mode]', el).forEach((b) => b.addEventListener('click', () => {
+    state.kn.docsMode = b.dataset.knMode;
+    state.kn.doc = null;
+    paintKnFolders(); paintKnDocs(); paintKnEditor();
+  }));
+  $$('[data-kn-filter]', el).forEach((b) => b.addEventListener('click', () => {
+    state.kn.filter = b.dataset.knFilter;
+    if (state.kn.doc && state.kn.filter === 'review-needed' && !isReviewStatus(docMeta(state.kn.doc).status)) {
+      state.kn.doc = null;
+    }
     paintKnFolders(); paintKnDocs(); paintKnEditor();
   }));
 }
@@ -1128,7 +1345,7 @@ function paintKnDocs() {
   const folder = knFolderList().find((f) => f.key === state.kn.folder);
   const isSystemFolder = folder ? folder.kind === 'system' : knSystemFolderKey(state.kn.folder);
   const headerLabel = folder ? folder.label : (state.kn.folder || '—') + '/';
-  const showModeToggle = !isSystemFolder && Boolean(state.kn.folder);
+  const showNewDoc = !isSystemFolder && Boolean(state.kn.folder);
   if (state.kn.filter !== 'review-needed' && state.kn.filter !== 'all') state.kn.filter = 'all';
   if (state.kn.docsMode !== 'artifacts' && state.kn.docsMode !== 'docs') state.kn.docsMode = 'docs';
 
@@ -1136,10 +1353,7 @@ function paintKnDocs() {
     const artifacts = knArtifactsForFolder(state.kn.folder);
     el.innerHTML = `<div class="section-title" style="padding:0 12px;display:flex;align-items:center;gap:8px">
       <span style="flex:1">${esc(headerLabel)}</span>
-      ${showModeToggle ? `<span class="filter-tabs">
-        <button class="filter-tab" data-kn-mode="docs">Docs</button>
-        <button class="filter-tab active" data-kn-mode="artifacts">Artifacts</button>
-      </span>` : ''}
+      ${showNewDoc ? '<button class="chip" data-new-doc title="Create a new Markdown document">+ New Doc</button>' : ''}
     </div>` +
       (artifacts.length ? artifacts.map((a) => `
       <button class="kn-doc-btn" data-art-open="${esc(a.path)}">
@@ -1152,22 +1366,15 @@ function paintKnDocs() {
     $$('[data-art-open]', el).forEach((b) => b.addEventListener('click', () => {
       window.open('/api/artifact?path=' + encodeURIComponent(b.dataset.artOpen), '_blank');
     }));
+    $('[data-new-doc]', el)?.addEventListener('click', () => openNewDocDrawer(state.kn.folder));
   } else {
     const folderDocs = folder?.docs || [];
     const filteredDocs = state.kn.filter === 'review-needed'
       ? folderDocs.filter((d) => isReviewStatus(docMeta(d.path).status))
       : folderDocs;
-    const reviewCount = folderDocs.filter((d) => isReviewStatus(docMeta(d.path).status)).length;
     el.innerHTML = `<div class="section-title" style="padding:0 12px;display:flex;align-items:center;gap:8px">
       <span style="flex:1">${esc(headerLabel)}</span>
-      ${showModeToggle ? `<span class="filter-tabs">
-        <button class="filter-tab active" data-kn-mode="docs">Docs</button>
-        <button class="filter-tab" data-kn-mode="artifacts">Artifacts</button>
-      </span>` : ''}
-      <span class="filter-tabs" title="Filter docs by review status">
-        <button class="filter-tab ${state.kn.filter === 'all' ? 'active' : ''}" data-kn-filter="all">All</button>
-        <button class="filter-tab ${state.kn.filter === 'review-needed' ? 'active' : ''}" data-kn-filter="review-needed">Review Needed ${reviewCount ? `(${reviewCount})` : ''}</button>
-      </span>
+      ${showNewDoc ? '<button class="chip" data-new-doc title="Create a new Markdown document">+ New Doc</button>' : ''}
     </div>` +
       (filteredDocs.length ? filteredDocs.map((d) => `
       <button class="kn-doc-btn ${state.kn.doc === d.path ? 'active' : ''}" data-path="${esc(d.path)}">
@@ -1177,23 +1384,9 @@ function paintKnDocs() {
           <span>${timeAgo(d.mtime)}</span><span>${d.words}w</span>
         </div>
       </button>`).join('') : `<div class="stat-note" style="padding:0 12px">${folder ? (state.kn.filter === 'review-needed' ? 'No review-needed docs in this folder.' : 'Empty folder.') : 'No documents at this level - open a subfolder.'}</div>`);
+    $('[data-new-doc]', el)?.addEventListener('click', () => openNewDocDrawer(state.kn.folder));
     $$('.kn-doc-btn[data-path]', el).forEach((b) => b.addEventListener('click', () => loadDoc(b.dataset.path)));
   }
-
-  $$('[data-kn-mode]', el).forEach((b) => b.addEventListener('click', () => {
-    state.kn.docsMode = b.dataset.knMode;
-    state.kn.doc = null;
-    paintKnDocs();
-    paintKnEditor();
-  }));
-  $$('[data-kn-filter]', el).forEach((b) => b.addEventListener('click', () => {
-    state.kn.filter = b.dataset.knFilter;
-    if (state.kn.doc && state.kn.filter === 'review-needed' && !isReviewStatus(docMeta(state.kn.doc).status)) {
-      state.kn.doc = null;
-    }
-    paintKnDocs();
-    paintKnEditor();
-  }));
 }
 
 async function loadDoc(path, mode) {
@@ -1592,7 +1785,17 @@ const AGENT_OPTIONS = AGENTS
   .map((a) => ({ value: a.promptPath.replace('.claude/agents/', '').replace(/\.md$/, ''), label: `${a.name} — ${a.title}` }));
 
 async function apiJson(path, opts) {
-  const res = await fetch(path, opts);
+  const req = { ...(opts || {}) };
+  const method = String(req.method || 'GET').toUpperCase();
+  const hasBody = req.body !== undefined && req.body !== null;
+  const bodyIsForm = typeof FormData !== 'undefined' && req.body instanceof FormData;
+  const bodyIsJsonString = typeof req.body === 'string';
+  if (hasBody && bodyIsJsonString && (method === 'POST' || method === 'PUT' || method === 'PATCH') && !bodyIsForm) {
+    const headers = new Headers(req.headers || {});
+    if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+    req.headers = headers;
+  }
+  const res = await fetch(path, req);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error((data.errors && data.errors.join('; ')) || data.error || `HTTP ${res.status}`);
   return data;
@@ -2692,14 +2895,29 @@ function bindMemoryActions(scope = document) {
 const FILE_TEMPLATES = {
   'knowledge/personal/user-profile.md': `# User Profile — <Name>\n\n- **Rolle:** TODO\n- **Märkte:** TODO (DACH / Australia / Both)\n- **Sprache:** TODO (de / en)\n\n## Verantwortung & Aufgaben\n\n- TODO\n\n## Arbeitsweise\n\n- Entscheidungen: TODO\n- Detailtiefe: TODO\n\n## Kommunikation\n\n- Ton: TODO\n\n## Schmerzpunkte & Ziele\n\n- TODO\n\n> Tipp: /personal-onboarding füllt dieses Profil im Interview.\n`,
   'CLAUDE.local.md': `<!-- persona:start -->\n# Persönliche Instructions — <Name>\n\n- Ich bin TODO (Rolle). Vollständiges Profil: knowledge/personal/user-profile.md\n- Antworte auf TODO (de/en); Ton: TODO.\n- Detailtiefe: TODO.\n- Standard-Markt: TODO.\n<!-- persona:end -->\n`,
+  'memory/MEMORY.md': PERSONAL_MEMORY_TEMPLATE,
 };
 
 const settingsState = { section: 'all', el: null, data: null };
+
+const PROVIDER_MODES = [
+  { value: 'claude-subscription', label: 'Claude subscription (Claude CLI auth)' },
+  { value: 'anthropic-api', label: 'Anthropic API key (env-driven)' },
+  { value: 'opencode', label: 'OpenCode multi-provider runtime' },
+];
+
+function providerRestartStatusLabel(settings) {
+  const mode = String(settings?.runtimeMode || DEFAULT_PROVIDER_SETTINGS.runtimeMode);
+  const bridge = Boolean(settings?.cliBridgeEnabled);
+  const modeLabel = PROVIDER_MODES.find((m) => m.value === mode)?.label || mode;
+  return `Restart required · active mode: ${modeLabel} · CLI bridge ${bridge ? 'ON' : 'OFF'}`;
+}
 
 const SETTINGS_SECTIONS = [
   ['all', 'All'],
   ['project', 'Project Info'],
   ['runtime', 'Runtime'],
+  ['ai-provider', 'AI Provider'],
   ['onboarding', 'Onboarding'],
   ['profile', 'Profile & Instructions'],
   ['plugins', 'Plugins'],
@@ -2716,25 +2934,42 @@ async function paintSettings(el) {
   let workspace = { checks: [], onboarding: null };
   let plugins = [];
   let guardrails = null;
+  let providerSettings = { settings: { ...DEFAULT_PROVIDER_SETTINGS } };
   try {
-    [workspace, { plugins }, guardrails] = await Promise.all([
-      apiJson('/api/workspace'), apiJson('/api/plugins'), apiJson('/api/guardrails'),
+    [workspace, { plugins }, guardrails, providerSettings] = await Promise.all([
+      apiJson('/api/workspace'), apiJson('/api/plugins'), apiJson('/api/guardrails'), apiJson('/api/provider-settings'),
     ]);
   } catch { /* server-side features unavailable */ }
   if (state.view !== 'settings') return;
-  settingsState.data = { workspace, plugins, guardrails };
+  settingsState.data = { workspace, plugins, guardrails, providerSettings };
+  uiState.providerSettings = { ...DEFAULT_PROVIDER_SETTINGS, ...(providerSettings?.settings || {}) };
+  postChatRuntimeConfig();
   paintSettingsBody(el);
 }
 
 function paintSettingsBody(el) {
-  const { workspace, plugins, guardrails } = settingsState.data;
+  const { workspace, plugins, guardrails, providerSettings } = settingsState.data;
   const show = (section) => settingsState.section === 'all' || settingsState.section === section;
+  const profileChecks = (workspace.checks || []).filter((c) => c.id !== 'mcp-servers' && c.path !== '.mcp.json');
   const onb = workspace.onboarding;
+  const provider = { ...DEFAULT_PROVIDER_SETTINGS, ...(providerSettings?.settings || {}) };
+  const providerSavedAt = Date.parse(provider.updatedAt || '');
+  const restartLabel = providerRestartStatusLabel(provider);
+  const providerSavedLabel = Number.isFinite(providerSavedAt)
+    ? `Saved ${timeAgo(providerSavedAt)} · ${restartLabel}`
+    : `Not saved yet on this machine. ${restartLabel}`;
+  const providerEnvRows = Array.isArray(provider.envVault) ? provider.envVault.map((row) => ({
+    key: String(row?.key || ''),
+    hasValue: Boolean(row?.hasValue),
+    masked: String(row?.masked || ''),
+    value: '',
+  })) : [];
 
   const editable = {
     'user-profile': { title: 'Personal Profile', hint: 'Your persona profile — private, never committed.' },
     'claude-local': { title: 'Personal Instructions', hint: 'Loaded by Claude Code in addition to CLAUDE.md — private.' },
     'claude-md': { title: 'General Instructions', hint: 'Shared project instructions — changes go through review.' },
+    'memory-file': { title: 'Personal Memory', hint: 'Curated local memory — private, gitignored.' },
     'operating-profile': { title: 'Company Operating Profile', hint: 'Filled via /company-onboarding.' },
   };
 
@@ -2753,8 +2988,8 @@ function paintSettingsBody(el) {
         <span><span class="list-meta">run /company-onboarding in Claude Code</span></span>
       </div>
       <div class="kv-row">
-        <span>${onb.memoryDone ? '<span class="badge badge-green">DONE</span>' : '<span class="badge badge-apricot">OPEN</span>'} Memory setup — <code>memory/MEMORY.md</code> + <code>memory/daily/</code> exist</span>
-        <span><span class="list-meta">create/open from Settings → Memory</span></span>
+        <span>${onb.memoryDone ? '<span class="badge badge-green">DONE</span>' : '<span class="badge badge-apricot">OPEN</span>'} Memory setup — local memory files exist</span>
+        <span><span class="list-meta">memory/MEMORY.md + memory/daily/</span></span>
       </div>
       <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <button class="btn btn-ghost btn-small" data-act="onboarding-guide">Show Onboarding Guide</button>
@@ -2807,22 +3042,72 @@ function paintSettingsBody(el) {
       </div>
     </div>` : ''}
 
+    ${show('ai-provider') ? `
+    <div class="card" data-section="ai-provider">
+      <div class="section-title">AI Provider</div>
+      <div class="provider-grid">
+        <div class="provider-card">
+          <div class="section-title">Runtime mode</div>
+          <div class="form-field">
+            <label for="provider-runtime-mode">Provider runtime</label>
+            <select id="provider-runtime-mode" class="filter-input">
+              ${PROVIDER_MODES.map((m) => `<option value="${m.value}" ${provider.runtimeMode === m.value ? 'selected' : ''}>${esc(m.label)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="stat-note provider-note">Controls how chat startup actions adapt (Claude Code vs OpenCode runtime).</div>
+        </div>
+
+        <div class="provider-card">
+          <div class="section-title">Binary override</div>
+          <div class="form-field">
+            <label for="provider-opencode-bin">OPENCODE_BIN</label>
+            <input id="provider-opencode-bin" class="filter-input" type="text" value="${esc(provider.opencodeBin || '')}" placeholder="/opt/homebrew/bin/opencode">
+          </div>
+          <div class="stat-note provider-note">Optional absolute path to an OpenCode binary. Leave empty to use PATH lookup.</div>
+        </div>
+
+        <div class="provider-card">
+          <div class="section-title">CLI bridge</div>
+          <div class="form-check">
+            <label><input id="provider-cli-bridge-enabled" type="checkbox" ${provider.cliBridgeEnabled ? 'checked' : ''}> Enable CLI bridge for browser chat runtime</label>
+          </div>
+          <div class="stat-note provider-note">Use only on trusted local machines. Browser sessions should never expose real secrets.</div>
+        </div>
+
+        <div class="provider-card provider-card-full">
+          <div class="section-title">Env vault (machine-local)</div>
+          <div id="provider-env-list" class="provider-env-list"></div>
+          <button class="chip" type="button" data-act="provider-env-add">+ Add variable</button>
+          <div class="stat-note provider-note">Stored in <code>interface/provider-settings.json</code> on this machine only. Values are masked and not logged. Existing shell env vars always win at startup.</div>
+        </div>
+      </div>
+      <div class="provider-actions">
+        <button class="btn btn-primary btn-small" data-act="save-provider-settings">Save provider settings</button>
+        <span class="stat-note" id="provider-save-status">${providerSavedLabel}</span>
+      </div>
+      <div class="stat-note" style="margin-top:8px;white-space:normal">Settings are machine-local (<code>interface/provider-settings.json</code>) and apply on restart. Use <strong>Runtime → Restart App + Chat</strong> after saving.</div>
+    </div>` : ''}
+
     ${show('onboarding') ? onboardingCard : ''}
 
     ${show('profile') ? `
     <div class="card" data-section="profile">
       <div class="section-title">Profile &amp; Instructions</div>
-      ${workspace.checks.map((c) => `
+      ${profileChecks.map((c) => `
         <div class="kv-row">
           <span>${c.exists ? '<span class="badge badge-green">OK</span>' : '<span class="badge badge-apricot">MISSING</span>'} ${esc(c.label)}${c.todos ? ` <span class="list-meta">· ${c.todos} TODOs open</span>` : ''}</span>
-          <span>${editable[c.id] ? `<button class="chip" data-edit-file="${esc(c.path)}" data-check="${esc(c.id)}">${c.exists ? 'EDIT' : 'CREATE'}</button>` : `<span class="list-meta">${esc(c.hint)}</span>`}</span>
+          <span>${c.id === 'memory-daily'
+            ? '<button class="chip" data-act="mem-personal">OPEN</button>'
+            : (editable[c.id]
+              ? `<button class="chip" data-edit-file="${esc(c.path)}" data-check="${esc(c.id)}">${c.exists ? 'EDIT' : 'CREATE'}</button>`
+              : `<span class="list-meta">${esc(c.hint)}</span>`)
+          }</span>
         </div>`).join('')}
       <div class="stat-note" style="margin-top:8px;white-space:normal">
         Persona and company profiles are best filled through the interviews: <code>/personal-onboarding</code> and <code>/company-onboarding</code> in Claude Code.
         The editors here are for quick corrections.
       </div>
-    </div>
-    ${renderMemoryCard()}` : ''}
+    </div>` : ''}
 
     ${show('plugins') ? `
     <div class="card" data-section="plugins">
@@ -2860,19 +3145,24 @@ function paintSettingsBody(el) {
   bindMemoryActions(el);
 
   $$('[data-edit-file]', el).forEach((b) => b.addEventListener('click', () => {
-    const check = workspace.checks.find((c) => c.path === b.dataset.editFile);
+    const check = profileChecks.find((c) => c.path === b.dataset.editFile);
+    const meta = {
+      'user-profile': { title: 'Personal Profile', hint: 'private, never committed' },
+      'claude-local': { title: 'Personal Instructions', hint: 'private, loaded with CLAUDE.md' },
+      'claude-md': { title: 'General Instructions', hint: 'shared — changes go through review' },
+      'memory-file': { title: 'Personal Memory', hint: 'private, gitignored local memory' },
+      'operating-profile': { title: 'Company Operating Profile', hint: 'fill via /company-onboarding' },
+    }[b.dataset.check] || { title: 'Edit File', hint: '' };
+    if (b.dataset.check === 'memory-file') {
+      openFileEditorDrawer(b.dataset.editFile, { ...meta, template: FILE_TEMPLATES[b.dataset.editFile] || '' });
+      return;
+    }
     if (check && check.exists) {
       // existing files open in the full Knowledge editor (edit + preview), like knowledge docs
       openInEditor(b.dataset.editFile, 'edit');
       return;
     }
     // missing files are created via the drawer with a starter template
-    const meta = {
-      'user-profile': { title: 'Personal Profile', hint: 'private, never committed' },
-      'claude-local': { title: 'Personal Instructions', hint: 'private, loaded with CLAUDE.md' },
-      'claude-md': { title: 'General Instructions', hint: 'shared — changes go through review' },
-      'operating-profile': { title: 'Company Operating Profile', hint: 'fill via /company-onboarding' },
-    }[b.dataset.check] || { title: 'Edit File', hint: '' };
     openFileEditorDrawer(b.dataset.editFile, { ...meta, template: FILE_TEMPLATES[b.dataset.editFile] || '' });
   }));
 
@@ -2899,6 +3189,111 @@ function paintSettingsBody(el) {
   }));
 
   $('[data-act="add-plugin"]', el)?.addEventListener('click', () => openPluginCreateDrawer(() => paintSettings(el)));
+
+  const envListEl = $('#provider-env-list', el);
+  const renderProviderEnvRows = () => {
+    if (!envListEl) return;
+    envListEl.innerHTML = providerEnvRows.length
+      ? providerEnvRows.map((row, idx) => `
+        <div class="provider-env-row" data-env-row="${idx}">
+          <input class="filter-input" data-env-key="${idx}" type="text" value="${esc(row.key)}" placeholder="ENV_KEY" maxlength="64" autocomplete="off" spellcheck="false">
+          <div>
+            <input class="filter-input" data-env-value="${idx}" type="password" value="" placeholder="${row.hasValue ? 'leave blank to keep existing value' : 'value'}" autocomplete="off" spellcheck="false">
+            ${row.hasValue ? `<div class="provider-env-mask">Stored: ${esc(row.masked || '••••')}</div>` : ''}
+          </div>
+          <button class="chip" type="button" data-env-del="${idx}" style="color:var(--apricot-deep)">Remove</button>
+        </div>`).join('')
+      : '<div class="stat-note">No env variables saved.</div>';
+
+    $$('[data-env-key]', envListEl).forEach((input) => input.addEventListener('input', () => {
+      const idx = Number(input.dataset.envKey);
+      if (!Number.isInteger(idx) || !providerEnvRows[idx]) return;
+      providerEnvRows[idx].key = input.value.toUpperCase().replace(/\s+/g, '_');
+      const status = $('#provider-save-status', el);
+      if (status) status.textContent = 'Unsaved changes.';
+    }));
+
+    $$('[data-env-value]', envListEl).forEach((input) => input.addEventListener('input', () => {
+      const idx = Number(input.dataset.envValue);
+      if (!Number.isInteger(idx) || !providerEnvRows[idx]) return;
+      providerEnvRows[idx].value = input.value;
+      const status = $('#provider-save-status', el);
+      if (status) status.textContent = 'Unsaved changes.';
+    }));
+
+    $$('[data-env-del]', envListEl).forEach((btn) => btn.addEventListener('click', () => {
+      const idx = Number(btn.dataset.envDel);
+      if (!Number.isInteger(idx)) return;
+      providerEnvRows.splice(idx, 1);
+      renderProviderEnvRows();
+      const status = $('#provider-save-status', el);
+      if (status) status.textContent = 'Unsaved changes.';
+    }));
+  };
+  renderProviderEnvRows();
+
+  $('[data-act="provider-env-add"]', el)?.addEventListener('click', () => {
+    providerEnvRows.push({ key: '', value: '', hasValue: false, masked: '' });
+    renderProviderEnvRows();
+    const status = $('#provider-save-status', el);
+    if (status) status.textContent = 'Unsaved changes.';
+  });
+
+  $('[data-act="save-provider-settings"]', el)?.addEventListener('click', async () => {
+    const modeEl = $('#provider-runtime-mode', el);
+    const binEl = $('#provider-opencode-bin', el);
+    const bridgeEl = $('#provider-cli-bridge-enabled', el);
+    const statusEl = $('#provider-save-status', el);
+    if (!modeEl || !binEl || !bridgeEl || !statusEl) return;
+    const payload = {
+      runtimeMode: modeEl.value,
+      opencodeBin: binEl.value.trim(),
+      cliBridgeEnabled: Boolean(bridgeEl.checked),
+      envVault: providerEnvRows
+        .map((row) => ({
+          key: String(row.key || '').trim().toUpperCase(),
+          value: String(row.value || ''),
+          preserve: Boolean(row.hasValue && !String(row.value || '').length),
+        }))
+        .filter((row) => row.key),
+    };
+    try {
+      statusEl.textContent = 'Saving…';
+      const result = await apiJson('/api/provider-settings', { method: 'PUT', body: JSON.stringify(payload) });
+      settingsState.data.providerSettings = { settings: result.settings };
+      uiState.providerSettings = { ...DEFAULT_PROVIDER_SETTINGS, ...(result.settings || {}) };
+      statusEl.textContent = `Saved. ${providerRestartStatusLabel(result.settings)}`;
+      toast('PROVIDER SETTINGS SAVED');
+      postChatRuntimeConfig();
+      paintSettingsBody(el);
+    } catch (e) {
+      statusEl.textContent = `Save failed: ${e.message}`;
+      toast(e.message.toUpperCase(), true);
+    }
+  });
+
+  const modeEl = $('#provider-runtime-mode', el);
+  const bridgeEl = $('#provider-cli-bridge-enabled', el);
+  const statusEl = $('#provider-save-status', el);
+  if (modeEl && bridgeEl && statusEl) {
+    let bridgeManuallyTouched = false;
+    bridgeEl.addEventListener('change', () => {
+      bridgeManuallyTouched = true;
+    });
+    modeEl.addEventListener('change', () => {
+      if (modeEl.value === 'opencode' && !bridgeEl.checked && !bridgeManuallyTouched) {
+        bridgeEl.checked = true;
+        statusEl.textContent = 'OpenCode mode selected: CLI bridge enabled by default (you can turn it off before saving).';
+      }
+      statusEl.textContent = 'Unsaved changes.';
+    });
+    bridgeEl.addEventListener('change', () => {
+      statusEl.textContent = 'Unsaved changes.';
+    });
+    $('#provider-opencode-bin', el)?.addEventListener('input', () => {
+      statusEl.textContent = 'Unsaved changes.';
+    });
+  }
 
   $('[data-act="restart-app"]', el)?.addEventListener('click', async () => {
     if (!confirm('Restart the interface and chat runtime? Running scheduler jobs are aborted; the page reloads automatically.')) return;
@@ -2949,7 +3344,7 @@ function showOnboardingModal(workspace, { force = false } = {}) {
       </p>
       ${step(onb.personalDone, '1 · Personal onboarding', 'Creates your private persona profile (knowledge/personal/user-profile.md) and your personal instructions (CLAUDE.local.md).', '/personal-onboarding')}
       ${step(onb.companyDone, '2 · Company onboarding', `Fills the company operating profile — the shared custom instruction for the whole team.${onb.companyTodos ? ' Currently ' + onb.companyTodos + ' TODO placeholders open.' : ''}`, '/company-onboarding')}
-      ${step(onb.memoryDone, '3 · Memory setup', 'Required local memory paths exist: memory/MEMORY.md and memory/daily/. Create them in Settings → Memory.', '')}
+      ${step(onb.memoryDone, '3 · Memory setup', 'Required local memory paths exist: memory/MEMORY.md and memory/daily/. Edit memory/MEMORY.md in Settings -> Profile & Instructions.', '')}
       <div class="onb-actions">
         <button class="btn btn-primary btn-small" data-onb="settings">Open Settings</button>
         <button class="btn btn-ghost btn-small" data-onb="later">${onb.complete ? 'Close' : 'Remind me later'}</button>
@@ -3199,7 +3594,11 @@ function mdToHtml(src) {
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => {
+      const safe = safeHref(href);
+      if (!safe) return label;
+      return `<a href="${safe}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+    });
 
   while (i < lines.length) {
     const line = lines[i];
@@ -3252,7 +3651,7 @@ function mdToHtml(src) {
 
 // ---------------------------------------------------------------- Chat integration
 
-const chatFrameState = { frame: null, ready: false, pending: null };
+const chatFrameState = { frame: null, ready: false, pendingRuntimeConfig: null, pendingPreset: null };
 
 function chatSlug(agentId) {
   return CHAT_AGENT_MAP[agentId] || 'danny';
@@ -3260,12 +3659,50 @@ function chatSlug(agentId) {
 
 window.addEventListener('message', (e) => {
   if (e.origin !== CHAT_URL || e.data?.type !== 'steadymade-chat-ready') return;
+  if (e.source !== chatFrameState.frame?.contentWindow) return;
   chatFrameState.ready = true;
-  if (chatFrameState.pending && chatFrameState.frame?.contentWindow) {
-    chatFrameState.frame.contentWindow.postMessage(chatFrameState.pending, CHAT_URL);
-    chatFrameState.pending = null;
-  }
+  flushPendingChatMessages();
 });
+
+function chatRuntimeConfigPayload() {
+  const providerMode = String(uiState.providerSettings?.runtimeMode || DEFAULT_PROVIDER_SETTINGS.runtimeMode);
+  const provider = providerMode === 'opencode' ? 'opencode' : 'claude';
+  return {
+    type: 'steadymade-runtime-config',
+    chatMode: uiState.chatMode,
+    mode: uiState.chatMode,
+    lockMode: true,
+    providerMode,
+    provider,
+    cliBridgeEnabled: Boolean(uiState.providerSettings?.cliBridgeEnabled),
+  };
+}
+
+function postToChat(msg, kind = 'runtime') {
+  if (!msg) return;
+  if (chatFrameState.ready && chatFrameState.frame?.contentWindow) {
+    chatFrameState.frame.contentWindow.postMessage(msg, CHAT_URL);
+    return;
+  }
+  if (kind === 'preset') chatFrameState.pendingPreset = msg;
+  else chatFrameState.pendingRuntimeConfig = msg;
+}
+
+function flushPendingChatMessages() {
+  if (!chatFrameState.ready || !chatFrameState.frame?.contentWindow) return;
+  if (chatFrameState.pendingRuntimeConfig) {
+    chatFrameState.frame.contentWindow.postMessage(chatFrameState.pendingRuntimeConfig, CHAT_URL);
+    chatFrameState.pendingRuntimeConfig = null;
+  }
+  if (chatFrameState.pendingPreset) {
+    chatFrameState.frame.contentWindow.postMessage(chatFrameState.pendingPreset, CHAT_URL);
+    chatFrameState.pendingPreset = null;
+  }
+}
+
+function postChatRuntimeConfig() {
+  postToChat(chatRuntimeConfigPayload(), 'runtime');
+}
 
 function renderChat() {
   const holder = $('#chat-holder');
@@ -3281,10 +3718,15 @@ function renderChat() {
     frame.src = CHAT_URL;
     frame.title = 'Steadymade Danny Chat';
     frame.allow = 'clipboard-write';
-    frame.addEventListener('load', () => holder.querySelector('.chat-offline-note')?.remove());
+    frame.addEventListener('load', () => {
+      chatFrameState.ready = false;
+      holder.querySelector('.chat-offline-note')?.remove();
+    });
     holder.appendChild(frame);
     chatFrameState.frame = frame;
   }
+
+  postChatRuntimeConfig();
 
   if (state.chatAgent || state.chatDraft) {
     const preset = {
@@ -3292,11 +3734,7 @@ function renderChat() {
       agent: state.chatAgent ? chatSlug(state.chatAgent) : null,
       draft: state.chatDraft || null,
     };
-    if (chatFrameState.ready && chatFrameState.frame?.contentWindow) {
-      chatFrameState.frame.contentWindow.postMessage(preset, CHAT_URL);
-    } else {
-      chatFrameState.pending = preset;
-    }
+    postToChat(preset, 'preset');
   }
 
   state.chatDraft = null;

@@ -7,6 +7,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const PROVIDER_SETTINGS_FILE = path.join(ROOT, 'interface', 'provider-settings.json');
 const args = new Set(process.argv.slice(2));
 const checkOnly = args.has('--check-only');
 
@@ -26,6 +27,29 @@ const OPTIONAL = [
 
 function exists(rel) {
   return fs.existsSync(path.join(ROOT, rel));
+}
+
+function readProviderSettings() {
+  try {
+    try { fs.chmodSync(PROVIDER_SETTINGS_FILE, 0o600); } catch {}
+    const parsed = JSON.parse(fs.readFileSync(PROVIDER_SETTINGS_FILE, 'utf8'));
+    const envVault = {};
+    if (parsed && typeof parsed.envVault === 'object' && !Array.isArray(parsed.envVault)) {
+      for (const [key, value] of Object.entries(parsed.envVault)) {
+        if (/^[A-Z_][A-Z0-9_]*$/.test(String(key)) && typeof value === 'string') {
+          envVault[key] = value;
+        }
+      }
+    }
+    return {
+      runtimeMode: typeof parsed.runtimeMode === 'string' ? parsed.runtimeMode.trim() : '',
+      opencodeBin: typeof parsed.opencodeBin === 'string' ? parsed.opencodeBin.trim() : '',
+      cliBridgeEnabled: typeof parsed.cliBridgeEnabled === 'boolean' ? parsed.cliBridgeEnabled : null,
+      envVault,
+    };
+  } catch {
+    return { runtimeMode: '', opencodeBin: '', cliBridgeEnabled: null, envVault: {} };
+  }
 }
 
 function logHeader(title) {
@@ -112,11 +136,27 @@ async function main() {
     STEADYMADE_KNOWLEDGE_BACKEND: process.env.STEADYMADE_KNOWLEDGE_BACKEND || 'fs',
     STEADYMADE_KNOWLEDGE_FS_ROOT: process.env.STEADYMADE_KNOWLEDGE_FS_ROOT || '../../../_local/onedrive-company/AI_OS/knowledge',
   };
+  const providerSettings = readProviderSettings();
+  if (process.env.STEADYMADE_PROVIDER_MODE === undefined && providerSettings.runtimeMode) {
+    env.STEADYMADE_PROVIDER_MODE = providerSettings.runtimeMode;
+  }
+  if (process.env.OPENCODE_BIN === undefined && providerSettings.opencodeBin) {
+    env.OPENCODE_BIN = providerSettings.opencodeBin;
+  }
+  if (process.env.CHAT_CLI_BRIDGE_ENABLED === undefined && providerSettings.cliBridgeEnabled !== null) {
+    env.CHAT_CLI_BRIDGE_ENABLED = providerSettings.cliBridgeEnabled ? '1' : '0';
+  }
+  const chatOnlyEnv = {};
+  for (const [key, value] of Object.entries(providerSettings.envVault || {})) {
+    if (process.env[key] === undefined) chatOnlyEnv[key] = value;
+  }
 
   logHeader('Starting interface');
   console.log(`Runtime: ${env.STEADYMADE_RUNTIME}`);
   console.log(`Backend: ${env.STEADYMADE_KNOWLEDGE_BACKEND}`);
   console.log(`FS Root: ${env.STEADYMADE_KNOWLEDGE_FS_ROOT}`);
+  if (env.OPENCODE_BIN) console.log(`OpenCode bin: ${env.OPENCODE_BIN}`);
+  if (env.CHAT_CLI_BRIDGE_ENABLED != null) console.log(`CLI bridge default: ${env.CHAT_CLI_BRIDGE_ENABLED}`);
   console.log(`URL: http://localhost:${port}`);
 
   const child = spawn(process.execPath, ['interface/server.mjs'], {
@@ -134,7 +174,7 @@ async function main() {
       chatChild = spawn(process.execPath, ['chat/server.mjs'], {
         cwd: ROOT,
         stdio: 'inherit',
-        env,
+        env: { ...env, ...chatOnlyEnv },
       });
       chatChild.on('exit', (code, signal) => {
         if (signal) console.error(`Chat runtime stopped by signal ${signal}.`);
