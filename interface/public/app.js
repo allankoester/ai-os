@@ -2672,7 +2672,7 @@ async function openFileEditorDrawer(path, { title = 'Edit File', hint = '', temp
 
 // ---------------------------------------------------------------- Artifacts / Settings
 
-const artState = { q: '', range: 'all', type: 'all', layout: 'grid' };
+const artState = { q: '', range: 'all', type: 'all', layout: 'list' };
 
 const ART_RANGES = [
   ['24h', 24 * 3600e3, 'Last 24h'],
