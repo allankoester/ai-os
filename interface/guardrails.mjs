@@ -42,7 +42,7 @@ const RECOMMENDED_BASELINE = {
   'interface': 'ask',
   'scripts': 'read',
   'skills/company': 'ask',
-  'skills/personal': 'read',
+  'skills/personal': 'ask',
 };
 
 export function createGuardrails({ rootDir }) {

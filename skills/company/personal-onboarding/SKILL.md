@@ -28,7 +28,8 @@ Ordner** (siehe Schritt 4b):
 4. **`knowledge/personal/vault/`** (optional) — ein Symlink auf einen Ordner,
    den die Person selbst angibt, für eigene Notizen/Material über das
    Profil hinaus. Muss außerhalb von git und außerhalb des geteilten
-   OneDrive-Company-Roots liegen — nie auf dem Shared Drive.
+   Company/Team-Knowledge-Roots liegen (Settings → Knowledge Spaces) — nie
+   im geteilten Workspace.
 
 **Warum die Trennung wichtig ist:** Rolle/Settings (A) gehören zum Hub-Setup
 und werden bei jeder Session gelesen. Die Knowledge-Base (B) ist Privatsache
@@ -115,7 +116,7 @@ Frag aktiv, ob die Person das jetzt einrichten will — pflicht ist es nicht:
 
 > „Willst du zusätzlich zum Profil einen eigenen Ordner für private Notizen/
 > Material anbinden (`knowledge/personal/vault`)? Der bleibt komplett bei
-> dir — nie in git, nie im geteilten OneDrive-Company-Ordner. Du kannst das
+> dir — nie in git, nie im geteilten Company/Team-Knowledge-Root. Du kannst das
 > jederzeit später per erneutem `/personal-onboarding` nachholen."
 
 Bei „ja": per `AskUserQuestion` oder direkter Frage den **absoluten Pfad**
@@ -126,7 +127,7 @@ nur Vorschläge):
 - die eigene private OneDrive, falls unter `_local/onedrive-private`
   eingerichtet (`test -L _local/onedrive-private` prüfen — nur vorschlagen,
   wenn vorhanden; das ist die persönliche, nicht die geteilte
-  Company-OneDrive).
+  Company-Knowledge-Root).
 
 **Validierung, bevor der Symlink angelegt wird** (beide müssen zutreffen,
 sonst ablehnen und neu fragen):
@@ -137,10 +138,15 @@ case "$CHOSEN_PATH" in
   "$(pwd)"*) echo "REJECT: liegt im Repo — das wäre git-sichtbar" ;;
 esac
 
-# 2. Pfad darf nicht innerhalb des geteilten Company-OneDrive liegen
-case "$CHOSEN_PATH" in
-  "$(cd _local/onedrive-company 2>/dev/null && pwd)"*) echo "REJECT: liegt im geteilten OneDrive — nicht privat" ;;
-esac
+# 2. Pfad darf nicht innerhalb des geteilten Knowledge-Roots liegen
+#    (aus Settings → Knowledge Spaces, fallback: ./knowledge)
+SHARED_ROOT="$(node -e 'const fs=require("fs");const p="interface/app-settings.json";let c={};try{c=JSON.parse(fs.readFileSync(p,"utf8"))}catch{};const r=(c.sharedKnowledgeRoot||"knowledge").trim();process.stdout.write(r)')"
+SHARED_REAL="$(cd "$SHARED_ROOT" 2>/dev/null && pwd || true)"
+if [ -n "$SHARED_REAL" ]; then
+  case "$CHOSEN_PATH" in
+    "$SHARED_REAL"*) echo "REJECT: liegt im geteilten Knowledge-Root — nicht privat" ;;
+  esac
+fi
 ```
 
 Existiert der gewählte Ordner noch nicht: mit Bestätigung anlegen

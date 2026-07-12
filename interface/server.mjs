@@ -14,6 +14,18 @@ import { createKnowledgeConfig } from './storage/config.mjs';
 import { createFsKnowledgeStorage } from './storage/fs-storage.mjs';
 import { createGraphKnowledgeStorage } from './storage/graph-storage.mjs';
 import { createScheduler, resolveClaudeBin } from './scheduler.mjs';
+import {
+  buildAppSettingsStatus,
+  normalizeConfiguredPath,
+  readAppSettings,
+  validateAppSettingsPayload,
+  writeAppSettings,
+} from './app-settings.mjs';
+import {
+  isPersonalKnowledgePath,
+  isSharedKnowledgePath,
+  resolvePersonalKnowledgePath,
+} from './knowledge-paths.mjs';
 import { createSkillHub } from './skills.mjs';
 import { createPluginManager } from './plugins.mjs';
 import { createGuardrails } from './guardrails.mjs';
@@ -30,7 +42,6 @@ const LEGACY_CHAT_USAGE_LOG = path.join(ROOT, 'runs', 'chat-usage.jsonl');
 const PORT = process.env.PORT || 4011;
 const HOST = process.env.HOST || '127.0.0.1';
 const API_TOKEN = process.env.STEADYMADE_INTERFACE_TOKEN || '';
-const KNOWLEDGE_PATH_PREFIX = 'knowledge/';
 
 const scheduler = createScheduler({ rootDir: ROOT });
 const pluginManager = createPluginManager({ rootDir: ROOT });
@@ -40,7 +51,15 @@ const skillHub = createSkillHub({
 });
 const guardrails = createGuardrails({ rootDir: ROOT });
 
-const knowledgeConfig = createKnowledgeConfig({ rootDir: ROOT });
+const appSettingsRaw = await readAppSettings(ROOT);
+const envSharedKnowledgeRoot = normalizeConfiguredPath(ROOT, process.env.STEADYMADE_KNOWLEDGE_FS_ROOT);
+const activeSharedKnowledgeRoot = envSharedKnowledgeRoot
+  || normalizeConfiguredPath(ROOT, appSettingsRaw.sharedKnowledgeRoot)
+  || path.join(ROOT, 'knowledge');
+const activePersonalKnowledgeRoot = normalizeConfiguredPath(ROOT, appSettingsRaw.personalKnowledgeRoot)
+  || path.join(ROOT, 'knowledge', 'personal');
+
+const knowledgeConfig = createKnowledgeConfig({ rootDir: ROOT, fsRootOverride: activeSharedKnowledgeRoot });
 const knowledgeStorage = knowledgeConfig.backend === 'graph'
   ? createGraphKnowledgeStorage({ config: knowledgeConfig.graph })
   : createFsKnowledgeStorage({ root: knowledgeConfig.fsRoot });
@@ -61,6 +80,29 @@ const PROVIDER_ENV_KEY_RE = /^[A-Z_][A-Z0-9_]*$/;
 const PROVIDER_ENV_MAX_ENTRIES = 64;
 const PROVIDER_ENV_MAX_KEY_LENGTH = 64;
 const PROVIDER_ENV_MAX_VALUE_LENGTH = 8192;
+const MCP_TEST_TIMEOUT_MS = 9000;
+const MCP_TEST_ENV_ALLOWLIST = [
+  'PATH',
+  'HOME',
+  'SHELL',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'TMPDIR',
+  'TMP',
+  'TEMP',
+  'USER',
+  'LOGNAME',
+  'TERM',
+  'NO_COLOR',
+  'FORCE_COLOR',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
+  'NODE_EXTRA_CA_CERTS',
+];
 const DEFAULT_PROVIDER_SETTINGS = Object.freeze({
   runtimeMode: 'claude-subscription',
   opencodeBin: '',
@@ -79,11 +121,7 @@ function safeResolve(relPath) {
 }
 
 function isKnowledgePath(relPath) {
-  // knowledge/personal/ is never routed through the (OneDrive-backed) knowledge
-  // storage layer — it's a local-only file outside that configured root, served
-  // via the generic ROOT-relative file branch instead (see /api/file below).
-  return typeof relPath === 'string' && relPath.startsWith(KNOWLEDGE_PATH_PREFIX) && relPath.endsWith('.md')
-    && !relPath.startsWith('knowledge/personal/');
+  return isSharedKnowledgePath(relPath);
 }
 
 function normalizeProjectRelPath(relPath) {
@@ -259,6 +297,125 @@ function sanitizeProviderSettings(body) {
   };
 }
 
+function parseEnvVaultMarkerKeys(raw) {
+  return String(raw || '')
+    .split(',')
+    .map((k) => k.trim())
+    .filter((k) => PROVIDER_ENV_KEY_RE.test(k));
+}
+
+function truncateOutput(text, max = 3000) {
+  const value = String(text || '');
+  if (value.length <= max) return value;
+  return `${value.slice(0, max)}\n…[truncated ${value.length - max} chars]`;
+}
+
+function maskSecretsInText(text, secrets) {
+  let out = String(text || '');
+  for (const secret of secrets) {
+    const value = String(secret || '');
+    if (!value) continue;
+    out = out.split(value).join('****');
+  }
+  return out;
+}
+
+function readOptionalDeleteBody(req) {
+  return new Promise((resolve) => {
+    let data = '';
+    req.on('data', (c) => (data += c));
+    req.on('end', () => {
+      if (!data.trim()) return resolve({});
+      try {
+        resolve(JSON.parse(data));
+      } catch {
+        resolve({});
+      }
+    });
+    req.on('error', () => resolve({}));
+  });
+}
+
+async function testMcpPlugin(plugin) {
+  const cfg = { ...(plugin?.config || {}) };
+  const command = String(cfg.command || '').trim();
+  if (!command) return { errors: ['mcp plugin command is empty'] };
+  const args = Array.isArray(cfg.args)
+    ? cfg.args.map((a) => String(a))
+    : String(cfg.args || '').split(/\s+/).filter(Boolean);
+  const envAdd = cfg.env && typeof cfg.env === 'object' && !Array.isArray(cfg.env) ? cfg.env : {};
+  const envKeys = Array.isArray(cfg.envKeys)
+    ? cfg.envKeys.map((k) => String(k || '').trim()).filter((k) => PROVIDER_ENV_KEY_RE.test(k))
+    : [];
+
+  const testEnv = {};
+  for (const key of MCP_TEST_ENV_ALLOWLIST) {
+    const val = process.env[key];
+    if (typeof val === 'string' && val.length) testEnv[key] = val;
+  }
+  for (const key of envKeys) {
+    const val = process.env[key];
+    if (typeof val === 'string') testEnv[key] = val;
+  }
+  for (const [key, value] of Object.entries(envAdd)) {
+    if (!PROVIDER_ENV_KEY_RE.test(key)) continue;
+    if (typeof value === 'string') testEnv[key] = value;
+  }
+
+  const secretValues = new Set();
+  for (const value of Object.values(envAdd)) {
+    if (typeof value === 'string' && value) secretValues.add(value);
+  }
+  for (const key of envKeys) {
+    const val = testEnv[key];
+    if (typeof val === 'string' && val) secretValues.add(val);
+  }
+
+  return await new Promise((resolve) => {
+    const started = Date.now();
+    const child = spawn(command, args, {
+      cwd: ROOT,
+      env: testEnv,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      try { child.kill('SIGTERM'); } catch {}
+      setTimeout(() => {
+        try { child.kill('SIGKILL'); } catch {}
+      }, 500).unref();
+    }, MCP_TEST_TIMEOUT_MS);
+
+    child.stdout.on('data', (chunk) => { stdout += String(chunk || ''); });
+    child.stderr.on('data', (chunk) => { stderr += String(chunk || ''); });
+    child.on('error', (err) => {
+      clearTimeout(timeout);
+      resolve({
+        ok: false,
+        exitCode: null,
+        timedOut,
+        stdout: '',
+        stderr: truncateOutput(maskSecretsInText(err.message || String(err), secretValues)),
+        durationMs: Date.now() - started,
+      });
+    });
+    child.on('close', (code) => {
+      clearTimeout(timeout);
+      resolve({
+        ok: code === 0 && !timedOut,
+        exitCode: Number.isInteger(code) ? code : null,
+        timedOut,
+        stdout: truncateOutput(maskSecretsInText(stdout, secretValues)),
+        stderr: truncateOutput(maskSecretsInText(stderr, secretValues)),
+        durationMs: Date.now() - started,
+      });
+    });
+  });
+}
+
 function validateProviderSettings(body) {
   const errors = [];
   if (!body || typeof body !== 'object') errors.push('body must be an object');
@@ -300,6 +457,18 @@ function validateProviderSettings(body) {
   return errors;
 }
 
+async function getAppSettingsResponse() {
+  const settings = await readAppSettings(ROOT);
+  return buildAppSettingsStatus({
+    rootDir: ROOT,
+    settings,
+    activeRuntimeRoots: {
+      sharedKnowledgeRoot: activeSharedKnowledgeRoot,
+      personalKnowledgeRoot: activePersonalKnowledgeRoot,
+    },
+  });
+}
+
 async function fileEntry(absPath) {
   const stat = await fsp.stat(absPath);
   const text = await fsp.readFile(absPath, 'utf8');
@@ -315,6 +484,47 @@ async function fileEntry(absPath) {
     plugins: fm.plugins ? fm.plugins.split(',').map((s) => s.trim()).filter(Boolean) : [],
     words: text.split(/\s+/).length,
   };
+}
+
+async function listPersonalKnowledgeFolders(personalRootAbs) {
+  if (!fs.existsSync(personalRootAbs)) {
+    throw new Error(`personal knowledge root not found: ${personalRootAbs}`);
+  }
+  const folders = [];
+  async function walk(dirAbs, dirRel) {
+    const dirents = await fsp.readdir(dirAbs, { withFileTypes: true });
+    dirents.sort((a, b) => a.name.localeCompare(b.name));
+    const docs = [];
+    for (const dirent of dirents) {
+      if (dirent.isFile() && dirent.name.endsWith('.md')) {
+        const absPath = path.join(dirAbs, dirent.name);
+        const stat = await fsp.stat(absPath);
+        const text = await fsp.readFile(absPath, 'utf8');
+        const fm = parseFrontmatter(text);
+        const relSeg = dirRel ? `${dirRel}/` : '';
+        docs.push({
+          name: dirent.name,
+          path: `knowledge/personal/${relSeg}${dirent.name}`,
+          mtime: stat.mtimeMs,
+          size: stat.size,
+          title: firstHeading(text) || path.basename(absPath, '.md'),
+          fmName: fm.name || null,
+          description: fm.description || null,
+          words: text.split(/\s+/).length,
+        });
+      }
+    }
+    const subdirs = dirents.filter((d) => d.isDirectory() && d.name !== '_artifacts');
+    if (docs.length > 0 || subdirs.length === 0) {
+      folders.push({ name: dirRel ? `personal/${dirRel}` : 'personal', docs });
+    }
+    for (const dirent of subdirs) {
+      const subRel = dirRel ? `${dirRel}/${dirent.name}` : dirent.name;
+      await walk(path.join(dirAbs, dirent.name), subRel);
+    }
+  }
+  await walk(personalRootAbs, '');
+  return folders;
 }
 
 // ---------- workflow edits (overrides / custom / deleted) ----------
@@ -472,7 +682,16 @@ function getActiveUser() {
 // ---------- API ----------
 
 async function getSystem() {
-  const system = { agents: [], folders: [], docs: [], artifacts: [], meta: await readMeta(), user: getActiveUser() };
+  const system = {
+    agents: [],
+    folders: [],
+    docs: [],
+    artifacts: [],
+    meta: await readMeta(),
+    user: getActiveUser(),
+    appSettings: await getAppSettingsResponse(),
+    warnings: [],
+  };
 
   // Agents from .claude/agents/*.md
   const agentDir = path.join(ROOT, '.claude', 'agents');
@@ -481,7 +700,34 @@ async function getSystem() {
   }
 
   // Knowledge folders + docs
-  system.folders = await knowledgeStorage.listFolders();
+  let sharedFolders = [];
+  try {
+    sharedFolders = await knowledgeStorage.listFolders();
+  } catch (err) {
+    system.warnings.push(`shared knowledge root unavailable: ${err.message}`);
+  }
+
+  const filteredShared = sharedFolders.filter((f) => f.name !== 'personal' && !f.name.startsWith('personal/'));
+
+  let personalFolders = [];
+  try {
+    personalFolders = await listPersonalKnowledgeFolders(activePersonalKnowledgeRoot);
+  } catch (err) {
+    system.warnings.push(`personal knowledge root unavailable: ${err.message}`);
+  }
+
+  system.folders = [...filteredShared, ...personalFolders];
+
+  const appStatus = system.appSettings || {};
+  if (knowledgeStorage.kind === 'fs' && appStatus.activeRuntimeRoots?.shared?.exists === false) {
+    system.warnings.push('shared knowledge root is not available — personal knowledge stays usable');
+  }
+  if (appStatus.activeRuntimeRoots?.personal?.exists === false) {
+    system.warnings.push('personal knowledge root is not available — configure a valid path in Settings → Knowledge Spaces');
+  }
+  if (appStatus.restartRequired) {
+    system.warnings.push('knowledge root settings were changed — restart app to apply active runtime roots');
+  }
 
   // Core docs (active project instructions and key indexes)
   for (const rel of ['CLAUDE.md', 'CLAUDE.local.md', 'README.md', 'docs/README.md', 'docs/status-and-roadmap.md']) {
@@ -494,7 +740,11 @@ async function getSystem() {
   const aDir = path.join(ROOT, 'artifacts');
   if (fs.existsSync(aDir)) artifacts.push(...await scanArtifacts(aDir));
   if (typeof knowledgeStorage.listArtifacts === 'function') {
-    artifacts.push(...await knowledgeStorage.listArtifacts());
+    try {
+      artifacts.push(...await knowledgeStorage.listArtifacts());
+    } catch (err) {
+      system.warnings.push(`knowledge artifacts unavailable: ${err.message}`);
+    }
   }
   system.artifacts = artifacts.sort((a, b) => (b.ctime || b.mtime || 0) - (a.ctime || a.mtime || 0));
 
@@ -526,6 +776,29 @@ async function handleApi(req, res, url) {
     return send(200, await getSystem());
   }
 
+  if (url.pathname === '/api/app-settings' && req.method === 'GET') {
+    return send(200, await getAppSettingsResponse());
+  }
+
+  if (url.pathname === '/api/app-settings' && req.method === 'PUT') {
+    const body = await readBody(req);
+    const errors = validateAppSettingsPayload(body);
+    if (errors.length) return send(400, { errors });
+    const saved = await writeAppSettings(ROOT, body);
+    return send(200, {
+      ok: true,
+      ...buildAppSettingsStatus({
+        rootDir: ROOT,
+        settings: saved,
+        activeRuntimeRoots: {
+          sharedKnowledgeRoot: activeSharedKnowledgeRoot,
+          personalKnowledgeRoot: activePersonalKnowledgeRoot,
+        },
+      }),
+      message: 'saved — restart app to apply updated knowledge roots',
+    });
+  }
+
   if (url.pathname === '/api/usage' && req.method === 'GET') {
     return send(200, await readUsageLog());
   }
@@ -534,6 +807,11 @@ async function handleApi(req, res, url) {
     const rel = url.searchParams.get('path') || '';
     const gate = guardrails.check(rel, 'read');
     if (!gate.allowed) return send(403, { error: gate.reason });
+    if (isPersonalKnowledgePath(rel)) {
+      const abs = resolvePersonalKnowledgePath(activePersonalKnowledgeRoot, rel);
+      if (!abs || !fs.existsSync(abs)) return send(404, { error: 'not found' });
+      return send(200, { path: rel, content: await fsp.readFile(abs, 'utf8'), mtime: (await fsp.stat(abs)).mtimeMs });
+    }
     if (isKnowledgePath(rel)) {
       try {
         return send(200, await knowledgeStorage.readFile(rel));
@@ -555,6 +833,13 @@ async function handleApi(req, res, url) {
     if (!writeGate.allowed) return send(403, { error: writeGate.reason });
     if (writeGate.confirmRequired && body.confirmed !== true) {
       return send(409, { confirmRequired: true, folder: writeGate.folder, error: `guardrail: ${writeGate.folder} is set to "ask" — confirm the write` });
+    }
+    if (isPersonalKnowledgePath(body.path || '')) {
+      const abs = resolvePersonalKnowledgePath(activePersonalKnowledgeRoot, body.path || '');
+      if (!abs || !abs.endsWith('.md')) return send(400, { error: 'only .md files inside personal knowledge root can be written' });
+      await fsp.mkdir(path.dirname(abs), { recursive: true });
+      await fsp.writeFile(abs, body.content, 'utf8');
+      return send(200, { ok: true, mtime: (await fsp.stat(abs)).mtimeMs });
     }
     if (isKnowledgePath(body.path || '')) {
       try {
@@ -711,6 +996,13 @@ async function handleApi(req, res, url) {
     return res.end(log);
   }
 
+  const runMatch = url.pathname.match(/^\/api\/scheduler\/runs\/([0-9a-f-]+)$/i);
+  if (runMatch && req.method === 'DELETE') {
+    const result = await scheduler.deleteRun(runMatch[1]);
+    if (result.code === 'RUN_ACTIVE') return send(409, result);
+    return send(result.errors ? 404 : 200, result);
+  }
+
   // ---------- skill hub ----------
 
   if (url.pathname === '/api/skills' && req.method === 'GET') {
@@ -755,6 +1047,31 @@ async function handleApi(req, res, url) {
     }
   }
 
+  const skillRemoveMatch = url.pathname.match(/^\/api\/skills\/([a-z0-9-]+)\/([a-z0-9-]+)$/);
+  if (skillRemoveMatch && req.method === 'DELETE') {
+    try {
+      const [, scope, name] = skillRemoveMatch;
+      const body = await readOptionalDeleteBody(req);
+      const writePaths = [
+        normalizeProjectRelPath(`skills/${scope}/${name}/`),
+        normalizeProjectRelPath(`skills/${scope}/.trash/`),
+        '.skill-profile',
+        normalizeProjectRelPath(`.claude/skills/${name}`),
+      ];
+      for (const targetPath of writePaths) {
+        const writeGate = guardrails.check(targetPath, 'write');
+        if (!writeGate.allowed) return send(403, { error: writeGate.reason });
+        if (writeGate.confirmRequired && body.confirmed !== true) {
+          return send(409, { confirmRequired: true, folder: writeGate.folder, error: `guardrail: ${writeGate.folder} is set to "ask" — confirm the write` });
+        }
+      }
+      const result = await skillHub.removePersonalSkill({ scope, name });
+      return send(result.errors ? 400 : 200, result);
+    } catch (err) {
+      return send(500, { errors: [err.message] });
+    }
+  }
+
   if (url.pathname === '/api/marketplace' && req.method === 'GET') {
     try {
       return send(200, await skillHub.marketplace(url.searchParams.get('refresh') === '1'));
@@ -765,7 +1082,14 @@ async function handleApi(req, res, url) {
 
   if (url.pathname === '/api/marketplace/install' && req.method === 'POST') {
     try {
-      const result = await skillHub.installFromMarketplace(await readBody(req));
+      const body = await readBody(req);
+      const targetPath = normalizeProjectRelPath(`skills/${body.scope || 'personal'}`);
+      const writeGate = guardrails.check(targetPath, 'write');
+      if (!writeGate.allowed) return send(403, { error: writeGate.reason });
+      if (writeGate.confirmRequired && body.confirmed !== true) {
+        return send(409, { confirmRequired: true, folder: writeGate.folder, error: `guardrail: ${writeGate.folder} is set to "ask" — confirm the write` });
+      }
+      const result = await skillHub.installFromMarketplace(body);
       return send(result.errors ? 400 : 200, result);
     } catch (err) {
       return send(500, { errors: [err.message] });
@@ -801,6 +1125,15 @@ async function handleApi(req, res, url) {
     return send(result.errors ? 400 : 200, result);
   }
 
+  const pluginTestMatch = url.pathname.match(/^\/api\/plugins\/([a-z0-9-]+)\/test$/);
+  if (pluginTestMatch && req.method === 'POST') {
+    const plugin = pluginManager.getPlugin(pluginTestMatch[1]);
+    if (!plugin) return send(404, { errors: ['unknown plugin: ' + pluginTestMatch[1]] });
+    if (plugin.kind !== 'mcp') return send(400, { errors: ['only mcp plugins can be tested'] });
+    const result = await testMcpPlugin(plugin);
+    return send(result.errors ? 400 : 200, result);
+  }
+
   // ---------- guardrails ----------
 
   if (url.pathname === '/api/guardrails' && req.method === 'GET') {
@@ -831,6 +1164,14 @@ async function handleApi(req, res, url) {
   // ---------- workspace status (profile + instructions completeness) ----------
 
   if (url.pathname === '/api/workspace' && req.method === 'GET') {
+    const appSettings = await getAppSettingsResponse();
+    const knowledgeSpaces = {
+      personalReady: Boolean(appSettings.activeRuntimeRoots?.personal?.exists),
+      sharedReady: knowledgeStorage.kind === 'fs'
+        ? Boolean(appSettings.activeRuntimeRoots?.shared?.exists)
+        : true,
+      restartRequired: Boolean(appSettings.restartRequired),
+    };
     const checks = [
       { id: 'claude-md', label: 'CLAUDE.md (shared instructions)', path: 'CLAUDE.md', hint: 'core project instructions' },
       { id: 'claude-local', label: 'CLAUDE.local.md (personal instructions)', path: 'CLAUDE.local.md', hint: 'run /personal-onboarding' },
@@ -857,9 +1198,10 @@ async function handleApi(req, res, url) {
       companyDone: Boolean(byId('operating-profile').exists && byId('operating-profile').todos === 0),
       memoryDone: Boolean(byId('memory-file').exists && byId('memory-daily').exists),
       companyTodos: byId('operating-profile').todos || 0,
+      knowledgeSpacesDone: Boolean(knowledgeSpaces.personalReady && knowledgeSpaces.sharedReady),
     };
     onboarding.complete = onboarding.personalDone && onboarding.companyDone && onboarding.memoryDone;
-    return send(200, { checks, onboarding });
+    return send(200, { checks, onboarding, knowledgeSpaces, appSettings });
   }
 
   if (url.pathname === '/api/meta' && req.method === 'PUT') {

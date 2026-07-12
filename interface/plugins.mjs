@@ -151,6 +151,25 @@ export function createPluginManager({ rootDir }) {
       });
     },
 
+    getPlugin(id) {
+      const state = readState();
+      const def = allDefs(state).find((d) => d.id === id);
+      if (!def) return null;
+      const p = state.plugins[id] || {};
+      return {
+        id: def.id,
+        name: def.name,
+        kind: def.kind,
+        custom: Boolean(def.custom),
+        description: def.description,
+        setup: def.setup || null,
+        permission: def.permission || null,
+        enabled: Boolean(p.enabled),
+        defaults: { ...(def.defaults || {}) },
+        config: { ...(def.defaults || {}), ...(p.config || {}) },
+      };
+    },
+
     async update(id, { enabled, config }) {
       const state = readState();
       const def = allDefs(state).find((d) => d.id === id);

@@ -134,7 +134,6 @@ async function main() {
     ...process.env,
     STEADYMADE_RUNTIME: process.env.STEADYMADE_RUNTIME || 'dev',
     STEADYMADE_KNOWLEDGE_BACKEND: process.env.STEADYMADE_KNOWLEDGE_BACKEND || 'fs',
-    STEADYMADE_KNOWLEDGE_FS_ROOT: process.env.STEADYMADE_KNOWLEDGE_FS_ROOT || '../../../_local/onedrive-company/AI_OS/knowledge',
   };
   const providerSettings = readProviderSettings();
   if (process.env.STEADYMADE_PROVIDER_MODE === undefined && providerSettings.runtimeMode) {
@@ -146,15 +145,17 @@ async function main() {
   if (process.env.CHAT_CLI_BRIDGE_ENABLED === undefined && providerSettings.cliBridgeEnabled !== null) {
     env.CHAT_CLI_BRIDGE_ENABLED = providerSettings.cliBridgeEnabled ? '1' : '0';
   }
-  const chatOnlyEnv = {};
+  const envVaultKeys = [];
   for (const [key, value] of Object.entries(providerSettings.envVault || {})) {
-    if (process.env[key] === undefined) chatOnlyEnv[key] = value;
+    envVaultKeys.push(key);
+    if (process.env[key] === undefined) env[key] = value;
   }
+  env.STEADYMADE_ENV_VAULT_KEYS = envVaultKeys.join(',');
 
   logHeader('Starting interface');
   console.log(`Runtime: ${env.STEADYMADE_RUNTIME}`);
   console.log(`Backend: ${env.STEADYMADE_KNOWLEDGE_BACKEND}`);
-  console.log(`FS Root: ${env.STEADYMADE_KNOWLEDGE_FS_ROOT}`);
+  console.log(`FS Root: ${env.STEADYMADE_KNOWLEDGE_FS_ROOT || '(resolved by server env/app-settings/default)'}`);
   if (env.OPENCODE_BIN) console.log(`OpenCode bin: ${env.OPENCODE_BIN}`);
   if (env.CHAT_CLI_BRIDGE_ENABLED != null) console.log(`CLI bridge default: ${env.CHAT_CLI_BRIDGE_ENABLED}`);
   console.log(`URL: http://localhost:${port}`);
@@ -174,7 +175,7 @@ async function main() {
       chatChild = spawn(process.execPath, ['chat/server.mjs'], {
         cwd: ROOT,
         stdio: 'inherit',
-        env: { ...env, ...chatOnlyEnv },
+        env,
       });
       chatChild.on('exit', (code, signal) => {
         if (signal) console.error(`Chat runtime stopped by signal ${signal}.`);

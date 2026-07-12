@@ -93,12 +93,35 @@ for (const p of ['knowledge/company', 'knowledge/inbox', 'operating-profile.md']
 if (exists('.gitignore')) {
   const gitignore = read('.gitignore');
   check('.gitignore excludes .claude/settings.local.json', /(^|\n)\.claude\/settings\.local\.json(\n|$)/.test(gitignore));
+  check('.gitignore excludes interface/app-settings.json', /(^|\n)interface\/app-settings\.json(\n|$)/.test(gitignore));
+}
+
+try {
+  const trackedLocalState = execSync('git ls-files interface/app-settings.json interface/provider-settings.json interface/workflows.json scheduler runs/usage.jsonl', { cwd: ROOT, encoding: 'utf8' })
+    .split('\n').filter(Boolean)
+    .filter((f) => f !== 'scheduler/README.md');
+  check('machine-local runtime state files are not git-tracked', trackedLocalState.length === 0, `tracked: ${trackedLocalState.join(', ')}`);
+} catch {
+  ok.push('machine-local state git check skipped (not a git repo)');
 }
 
 if (exists('.claude/settings.local.json')) {
   const localSettings = read('.claude/settings.local.json');
   check('settings.local has no home-wide read grant', !/Read\(\/\/Users\/[^/)]+\/\*\*\)/.test(localSettings));
   check('settings.local has no unrelated KI-OS read grant', !/Read\(\/\/Users\/[^/)]+\/KI-OS\/\*\*\)/.test(localSettings));
+}
+
+if (exists('scripts/start.mjs')) {
+  const startText = read('scripts/start.mjs');
+  check('scripts/start.mjs does not force STEADYMADE_KNOWLEDGE_FS_ROOT local default', !/STEADYMADE_KNOWLEDGE_FS_ROOT\s*:\s*process\.env\.STEADYMADE_KNOWLEDGE_FS_ROOT\s*\|\|/.test(startText));
+  check('scripts/start.mjs has no hardcoded _local knowledge default path', !/\.\.\.\/\.\.\.\/_local\/onedrive-company\/AI_OS\/knowledge/.test(startText));
+}
+
+if (exists('.claude/launch.json')) {
+  let launchText = '';
+  try { launchText = read('.claude/launch.json'); } catch { launchText = ''; }
+  check('.claude/launch.json has no hardcoded STEADYMADE_KNOWLEDGE_FS_ROOT env', !/"STEADYMADE_KNOWLEDGE_FS_ROOT"\s*:/.test(launchText));
+  check('.claude/launch.json has no hardcoded _local knowledge default path', !/_local\/onedrive-company\/AI_OS\/knowledge/.test(launchText));
 }
 
 // ---------- 2b. Skills library ----------

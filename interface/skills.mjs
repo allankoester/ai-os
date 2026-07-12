@@ -261,15 +261,72 @@ export function createSkillHub({ rootDir, listEnabledPlugins = () => [] }) {
       // installable = hosted on github.com (repo root or /tree/<branch>/<subpath>)
       // or a directory inside the awesome repo itself (./folder/)
       let install = null;
+      let openUrl = url;
       const gh = url.match(/^https:\/\/github\.com\/([^/]+)\/([^/#?]+)(?:\/tree\/([^/]+)\/(.+?))?\/?$/);
       if (gh) install = { owner: gh[1], repo: gh[2].replace(/\.git$/, ''), ref: gh[3] || null, subpath: gh[4] || null };
       else if (/^\.\//.test(url)) {
         const [owner, repo] = MARKETPLACE_REPO.split('/');
-        install = { owner, repo, ref: 'master', subpath: url.replace(/^\.\//, '').replace(/\/$/, '') };
+        const subpath = url.replace(/^\.\//, '').replace(/\/$/, '');
+        install = { owner, repo, ref: 'master', subpath };
+        openUrl = `https://github.com/${MARKETPLACE_REPO}/tree/master/${subpath}`;
       }
-      skills.push({ name, url, description, category, installable: Boolean(install), install });
+      skills.push({ name, url, openUrl, description, category, installable: Boolean(install), install, available: true, missingUpstream: false });
     }
     return skills;
+  }
+
+  async function fetchRepoTreePaths(owner, repo, refs = ['master', 'main']) {
+    let lastErr = null;
+    for (const ref of refs) {
+      try {
+        const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/${encodeURIComponent(ref)}?recursive=1`, {
+          headers: { accept: 'application/vnd.github.v3+json' },
+        });
+        if (!res.ok) {
+          lastErr = `HTTP ${res.status} for ${ref}`;
+          continue;
+        }
+        const json = await res.json();
+        const tree = Array.isArray(json?.tree) ? json.tree : [];
+        const paths = new Set(tree
+          .filter((e) => e && e.type === 'blob' && typeof e.path === 'string')
+          .map((e) => e.path.replace(/^\/+/, '').replace(/\/+$/, ''))
+          .filter(Boolean));
+        return { ref, paths };
+      } catch (e) {
+        lastErr = e?.message || String(e);
+      }
+    }
+    if (lastErr) console.warn(`[skills] marketplace tree lookup failed: ${lastErr}`);
+    return null;
+  }
+
+  function withMarketplaceAvailability(skills, treeInfo) {
+    if (!treeInfo?.paths) return skills;
+    const [marketOwner, marketRepo] = MARKETPLACE_REPO.split('/');
+    return skills.map((skill) => {
+      const install = skill.install;
+      if (!skill.installable || !install) return skill;
+      const sameRepo = install.owner === marketOwner && install.repo === marketRepo;
+      if (!sameRepo || !install.subpath) return skill;
+      const subpath = install.subpath.replace(/^\/+/, '').replace(/\/+$/, '');
+      if (!subpath) return skill;
+
+      const primarySkill = `${subpath}/SKILL.md`;
+      const movedSubpath = `composio-skills/${subpath}`;
+      const movedSkill = `${movedSubpath}/SKILL.md`;
+      const hasPrimary = treeInfo.paths.has(primarySkill);
+      const hasMoved = treeInfo.paths.has(movedSkill);
+      const missingUpstream = !hasPrimary && !hasMoved;
+      const resolvedSubpath = hasPrimary ? subpath : (hasMoved ? movedSubpath : null);
+
+      return {
+        ...skill,
+        available: !missingUpstream,
+        missingUpstream,
+        openUrl: resolvedSubpath ? `https://github.com/${MARKETPLACE_REPO}/tree/${treeInfo.ref}/${resolvedSubpath}` : skill.openUrl,
+      };
+    });
   }
 
   async function marketplace(refresh = false) {
@@ -278,7 +335,10 @@ export function createSkillHub({ rootDir, listEnabledPlugins = () => [] }) {
     }
     const res = await fetch(MARKETPLACE_README);
     if (!res.ok) throw new Error(`marketplace fetch failed: HTTP ${res.status}`);
-    marketCache = { at: Date.now(), source: `github.com/${MARKETPLACE_REPO}`, skills: parseMarketplace(await res.text()) };
+    const [owner, repo] = MARKETPLACE_REPO.split('/');
+    const treeInfo = await fetchRepoTreePaths(owner, repo);
+    const parsed = parseMarketplace(await res.text());
+    marketCache = { at: Date.now(), source: `github.com/${MARKETPLACE_REPO}`, skills: withMarketplaceAvailability(parsed, treeInfo) };
     return marketCache;
   }
 
@@ -313,6 +373,12 @@ export function createSkillHub({ rootDir, listEnabledPlugins = () => [] }) {
     } catch { /* best-effort: empty commit or missing git never breaks installs */ }
   }
 
+  function timestampForTrash() {
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  }
+
   function findSkillDirs(dir, depth = 0, results = []) {
     if (depth > 4 || results.length > 50) return results;
     let entries;
@@ -331,6 +397,9 @@ export function createSkillHub({ rootDir, listEnabledPlugins = () => [] }) {
     const { skills } = await marketplace();
     const entry = skills.find((s) => s.url === url);
     if (!entry) return { errors: ['marketplace entry not found — refresh the marketplace list'] };
+    if (entry.missingUpstream || entry.available === false) {
+      return { errors: ['marketplace entry points to a missing upstream path (likely moved/removed) — open the entry URL for the updated location'] };
+    }
     if (!entry.installable || !entry.install) {
       return { errors: ['this entry is not directly installable (external website) — open its URL and follow its own install instructions'] };
     }
@@ -359,8 +428,24 @@ export function createSkillHub({ rootDir, listEnabledPlugins = () => [] }) {
 
       const repoRoot = fs.readdirSync(tmpDir, { withFileTypes: true }).find((e) => e.isDirectory());
       if (!repoRoot) return { errors: ['downloaded archive is empty'] };
-      const base = subpath ? path.join(tmpDir, repoRoot.name, subpath) : path.join(tmpDir, repoRoot.name);
-      if (!fs.existsSync(base)) return { errors: [`path not found in repo: ${subpath}`] };
+      const repoPath = `${owner}/${repo}`;
+      const repoBase = path.join(tmpDir, repoRoot.name);
+      const normSubpath = String(subpath || '').replace(/^\/+/, '').replace(/\/+$/, '');
+      let usedSubpath = normSubpath;
+      let base = normSubpath ? path.join(repoBase, normSubpath) : repoBase;
+      if (normSubpath && !fs.existsSync(base) && repoPath === MARKETPLACE_REPO && !normSubpath.startsWith('composio-skills/')) {
+        const movedSubpath = `composio-skills/${normSubpath}`;
+        const movedBase = path.join(repoBase, movedSubpath);
+        if (fs.existsSync(movedBase)) {
+          usedSubpath = movedSubpath;
+          base = movedBase;
+        } else {
+          return {
+            errors: [`path not found in ${repoPath}: tried "${normSubpath}" and "${movedSubpath}" — marketplace entry is likely stale or moved upstream`],
+          };
+        }
+      }
+      if (!fs.existsSync(base)) return { errors: [`path not found in repo: ${normSubpath || '.'}`] };
 
       const skillDirs = findSkillDirs(base);
       if (!skillDirs.length) {
@@ -381,7 +466,7 @@ export function createSkillHub({ rootDir, listEnabledPlugins = () => [] }) {
         owner,
         repo,
         ref: usedRef,
-        subpath: subpath || null,
+        subpath: usedSubpath || null,
         sha,
       };
       await fsp.writeFile(path.join(targetDir, '.install.json'), JSON.stringify(meta, null, 2), 'utf8');
@@ -478,6 +563,40 @@ export function createSkillHub({ rootDir, listEnabledPlugins = () => [] }) {
       await fsp.writeFile(skillFile, content, 'utf8');
       personalGitSnapshot(scope, `customize ${name}`);
       return { ok: true, scope, name, path: `skills/${scope}/${name}/SKILL.md`, mtime: (await fsp.stat(skillFile)).mtimeMs };
+    },
+
+    async removePersonalSkill({ scope, name }) {
+      if (!isPersonalScope(scope)) return { errors: ['scope must be personal or personal-<name>'] };
+      if (scope === 'company') return { errors: ['company scope cannot be removed here'] };
+      if (!validName(name)) return { errors: ['invalid skill name'] };
+
+      const skillFile = path.join(libraryDir, scope, name, 'SKILL.md');
+      const skillDir = path.join(libraryDir, scope, name);
+      if (!fs.existsSync(skillFile)) return { errors: [`skill not found: skills/${scope}/${name}/SKILL.md`] };
+
+      const profile = readProfile() || defaultProfile();
+      const wasActive = skillIsActiveInProfile(profile, scope, name);
+      if (wasActive) {
+        profile.include.delete(`${scope}/${name}`);
+        if (profile.scopes.has(scope)) profile.exclude.add(`${scope}/${name}`);
+        await writeProfile(profile);
+        await syncActiveDir(profile);
+      }
+
+      const trashRoot = path.join(libraryDir, scope, '.trash');
+      await fsp.mkdir(trashRoot, { recursive: true });
+      const trashName = `${name}-${timestampForTrash()}`;
+      const trashDir = path.join(trashRoot, trashName);
+      await fsp.rename(skillDir, trashDir);
+      personalGitSnapshot(scope, `remove ${name}`);
+
+      return {
+        ok: true,
+        scope,
+        name,
+        trashPath: `skills/${scope}/.trash/${trashName}`,
+        wasActive,
+      };
     },
 
     marketplace,

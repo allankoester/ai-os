@@ -307,9 +307,14 @@ export function createScheduler({ rootDir }) {
       if (job.scheduleType === 'once') {
         if (oncePending(job) && now.getTime() >= job.runAt) {
           lastFired.set(job.id, minuteKey);
-          job.enabled = false; // one-time jobs disable themselves after firing
-          persistJobs().catch(() => {});
-          executeJob(job, 'once').catch((e) => console.error('[scheduler] run failed:', e.message));
+          executeJob(job, 'once')
+            .then(async (result) => {
+              if (result?.run) {
+                job.enabled = false; // disable only after a run was created/recorded
+                await persistJobs();
+              }
+            })
+            .catch((e) => console.error('[scheduler] run failed:', e.message));
         }
         continue;
       }
@@ -377,6 +382,30 @@ export function createScheduler({ rootDir }) {
       if (!exists) return { errors: ['job not found'] };
       jobs = jobs.filter((j) => j.id !== id);
       await persistJobs();
+      return { ok: true };
+    },
+    async deleteRun(runId) {
+      if (!/^[0-9a-f-]+$/i.test(runId)) return { errors: ['run not found'] };
+      const run = runs.find((r) => r.id === runId);
+      if (!run) return { errors: ['run not found'] };
+      if (run.status === 'running' || running.has(run.jobId)) {
+        return { errors: ['run is still running'], code: 'RUN_ACTIVE' };
+      }
+
+      runs = runs.filter((r) => r.id !== runId);
+      await persistRuns();
+
+      const logFile = path.join(logsDir, `${runId}.log`);
+      await fsp.unlink(logFile).catch(() => {});
+
+      let jobsChanged = false;
+      for (const job of jobs) {
+        if (job.lastRun?.runId === runId) {
+          job.lastRun = null;
+          jobsChanged = true;
+        }
+      }
+      if (jobsChanged) await persistJobs();
       return { ok: true };
     },
     async runNow(id) {

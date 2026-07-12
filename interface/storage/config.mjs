@@ -16,14 +16,15 @@ function resolveKnowledgeFsRoot(rootDir, value) {
   return path.resolve(rootDir, String(value).trim());
 }
 
-export function createKnowledgeConfig({ rootDir, env = process.env }) {
+export function createKnowledgeConfig({ rootDir, env = process.env, fsRootOverride }) {
   const runtime = String(env.STEADYMADE_RUNTIME || 'dev').trim().toLowerCase();
   const backend = normalizeBackend(env.STEADYMADE_KNOWLEDGE_BACKEND);
+  const fsRootSource = fsRootOverride ?? env.STEADYMADE_KNOWLEDGE_FS_ROOT;
 
   return {
     runtime,
     backend,
-    fsRoot: resolveKnowledgeFsRoot(rootDir, env.STEADYMADE_KNOWLEDGE_FS_ROOT),
+    fsRoot: resolveKnowledgeFsRoot(rootDir, fsRootSource),
     graph: {
       tenantId: env.MICROSOFT_TENANT_ID || '',
       clientId: env.MICROSOFT_CLIENT_ID || '',

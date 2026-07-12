@@ -169,6 +169,15 @@ function toast(msg, warn = false) {
   t._timer = setTimeout(() => t.classList.remove('show'), 2600);
 }
 
+function systemWarningsNoteHtml() {
+  const warnings = Array.isArray(state.system?.warnings) ? state.system.warnings : [];
+  if (!warnings.length) return '';
+  return `<div class="card" style="border-color:var(--apricot)">
+    <div class="section-title" style="margin-bottom:6px">Workspace Warnings</div>
+    <div class="stat-note" style="white-space:normal">${warnings.map((w) => esc(w)).join('<br>')}</div>
+  </div>`;
+}
+
 // ---------------------------------------------------------------- boot
 
 async function boot() {
@@ -1231,7 +1240,8 @@ function initKnLayout(root) {
 }
 
 function renderKnowledge(el) {
-  el.innerHTML = `<div class="kn-layout">
+  const warnings = systemWarningsNoteHtml();
+  el.innerHTML = `${warnings ? `<div class="view-pad" style="padding-bottom:0">${warnings}</div>` : ''}<div class="kn-layout">
     <div class="kn-folders" id="kn-folders"></div>
     <div class="kn-resizer" data-kn-resize="folders" role="separator" aria-orientation="vertical" aria-label="Resize folders column"></div>
     <div class="kn-docs" id="kn-docs"></div>
@@ -1879,8 +1889,15 @@ function paintScheduler() {
           </span>
           <span class="list-meta">${esc(r.trigger)} · ${fmtWhen(r.startedAt)}</span>
           <span class="list-meta">${r.endedAt ? Math.max(1, Math.round((r.endedAt - r.startedAt) / 1000)) + 's' : '…'}</span>
-          <button class="chip" data-log="${r.id}">LOG</button>
+          <span style="display:flex;gap:6px">
+            <button class="chip" data-log="${r.id}">LOG</button>
+            <button class="chip" data-run-del="${r.id}" style="color:var(--apricot-deep)">DELETE</button>
+          </span>
         </div>`).join('') : '<div class="stat-note">No runs yet.</div>'}
+      <div class="stat-note" style="margin-top:10px;white-space:normal">
+        History is persisted in <code>scheduler/runs.json</code> and per-run logs in <code>scheduler/logs/</code>.
+        Cron windows missed while the app is off are skipped. One-time jobs past due run after restart.
+      </div>
     </div>
   </div>`;
 
@@ -1923,6 +1940,24 @@ function paintScheduler() {
       <div class="drawer-body">
         <pre class="run-log">${esc(text)}</pre>
       </div>`);
+  }));
+  $$('[data-run-del]', el).forEach((b) => b.addEventListener('click', async () => {
+    const run = runs.find((x) => x.id === b.dataset.runDel);
+    if (!run) return;
+    if (!confirm(`Delete run history entry "${run.jobName}"?`)) return;
+    try {
+      const res = await fetch(`/api/scheduler/runs/${run.id}`, { method: 'DELETE' });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 409) {
+        toast('RUN IS STILL ACTIVE — WAIT FOR IT TO FINISH BEFORE DELETING HISTORY', true);
+        return;
+      }
+      if (!res.ok) throw new Error((data.errors && data.errors.join('; ')) || data.error || `HTTP ${res.status}`);
+      toast('RUN HISTORY ENTRY DELETED');
+      refreshScheduler();
+    } catch (e) {
+      toast(e.message.toUpperCase(), true);
+    }
   }));
 
   // live view: refresh automatically while something is running
@@ -2365,6 +2400,7 @@ function skillBodyHtml() {
           <span class="skill-actions">
             <button class="chip" data-configure-skill="${esc(s.scope)}:${esc(s.name)}">CONFIGURE</button>
             <button class="chip" data-customize="${esc(s.path)}" data-customize-scope="${esc(s.scope)}" data-customize-name="${esc(s.name)}">CUSTOMIZE</button>
+            ${/^personal(?:-|$)/.test(s.scope) ? `<button class="chip" data-remove-skill="${esc(s.scope)}:${esc(s.name)}" style="color:var(--apricot-deep)">REMOVE</button>` : ''}
           </span>
         </div>`;
       }).join('') : `<div class="stat-note">${esc(skills.length ? 'No skills match the current filter.' : empties[scope.name] || 'No skills in this workspace yet.')}</div>`}
@@ -2416,6 +2452,18 @@ function paintSkillBody() {
     const skill = findSkill(b.dataset.customizeScope, b.dataset.customizeName);
     if (!skill) return toast('SKILL NOT FOUND', true);
     openSkillCustomizeEditor(skill);
+  }));
+  $$('[data-remove-skill]', body).forEach((b) => b.addEventListener('click', async () => {
+    const [scope, name] = b.dataset.removeSkill.split(':');
+    if (!confirm(`Remove /${name} from ${scope}?\n\nIt will be moved to skills/${scope}/.trash locally, not hard-deleted.`)) return;
+    try {
+      const result = await deleteWithGuardrailConfirm(`/api/skills/${encodeURIComponent(scope)}/${encodeURIComponent(name)}`, {}, `Remove /${name} from ${scope}`);
+      skillState.data = await apiJson('/api/skills');
+      paintSkillBody();
+      toast(`REMOVED /${name.toUpperCase()} → ${(result.trashPath || 'TRASH').toUpperCase()}`);
+    } catch (e) {
+      toast(e.message.toUpperCase(), true);
+    }
   }));
 }
 
@@ -2514,10 +2562,7 @@ function openNewSkillDrawer() {
     const name = ($('#ns-name').value || '').trim();
     if (!name) return toast('SKILL NAME IS REQUIRED', true);
     try {
-      const result = await apiJson('/api/skills/new', {
-        method: 'POST',
-        body: JSON.stringify({ scope, name }),
-      });
+      const result = await postJsonWithGuardrailConfirm('/api/skills/new', { scope, name }, `Create /${name} in ${scope}`);
       skillState.workspace = scope;
       skillState.data = await apiJson('/api/skills');
       closeDrawer();
@@ -2546,6 +2591,54 @@ async function loadMarketplace(refresh = false) {
   paintMarketplace();
 }
 
+function resolveMarketplaceOpenUrl(skill) {
+  if (skill?.openUrl) return skill.openUrl;
+  const raw = String(skill?.url || '');
+  if (!raw.startsWith('./')) return raw;
+  const subpath = raw.replace(/^\.\//, '').replace(/\/+$/, '');
+  return `https://github.com/ComposioHQ/awesome-claude-skills/tree/master/${subpath}`;
+}
+
+async function postJsonWithGuardrailConfirm(apiPath, payload, actionLabel) {
+  const send = (confirmed) => fetch(apiPath, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(confirmed ? { ...payload, confirmed: true } : payload),
+  });
+
+  let res = await send(false);
+  let data = await res.json().catch(() => ({}));
+  if (res.status === 409 && data.confirmRequired) {
+    if (!confirm(`Guardrail: "${data.folder}" is set to ASK.\n\n${actionLabel}?`)) {
+      throw new Error('action cancelled (guardrail)');
+    }
+    res = await send(true);
+    data = await res.json().catch(() => ({}));
+  }
+  if (!res.ok) throw new Error((data.errors && data.errors.join('; ')) || data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+async function deleteWithGuardrailConfirm(apiPath, payload = {}, actionLabel) {
+  const send = (confirmed) => fetch(apiPath, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(confirmed ? { ...payload, confirmed: true } : payload),
+  });
+
+  let res = await send(false);
+  let data = await res.json().catch(() => ({}));
+  if (res.status === 409 && data.confirmRequired) {
+    if (!confirm(`Guardrail: "${data.folder}" is set to ASK.\n\n${actionLabel}?`)) {
+      throw new Error('action cancelled (guardrail)');
+    }
+    res = await send(true);
+    data = await res.json().catch(() => ({}));
+  }
+  if (!res.ok) throw new Error((data.errors && data.errors.join('; ')) || data.error || `HTTP ${res.status}`);
+  return data;
+}
+
 function paintMarketplaceList() {
   const listEl = $('#mkt-list');
   if (!listEl || !skillState.market) return;
@@ -2558,14 +2651,14 @@ function paintMarketplaceList() {
   listEl.innerHTML = `
       ${visible.map((s, i) => `
         <div class="list-row" style="cursor:default;align-items:flex-start">
-          <span class="badge ${s.installable ? 'badge-green' : 'badge-gray'}">${s.installable ? 'INSTALLABLE' : 'EXTERNAL'}</span>
+          <span class="badge ${s.missingUpstream ? 'badge-apricot' : (s.installable ? 'badge-green' : 'badge-gray')}">${s.missingUpstream ? 'UNAVAILABLE' : (s.installable ? 'INSTALLABLE' : 'EXTERNAL')}</span>
           <span style="flex:1;min-width:0">
             <span class="list-title" style="display:block">${esc(s.name)} <span class="list-meta">· ${esc(s.category)}</span></span>
             <span class="stat-note" style="display:block;white-space:normal">${esc(s.description.slice(0, 200))}</span>
           </span>
           <span style="display:flex;gap:6px;flex-shrink:0">
-            <a class="chip" href="${esc(s.url)}" target="_blank" rel="noopener" style="text-decoration:none">OPEN</a>
-            ${s.installable ? `<button class="chip" data-install="${i}">${skillState.installing === s.url ? 'INSTALLING…' : 'INSTALL'}</button>` : ''}
+            <a class="chip" href="${esc(resolveMarketplaceOpenUrl(s))}" target="_blank" rel="noopener" style="text-decoration:none">OPEN</a>
+            ${s.installable && s.available !== false ? `<button class="chip" data-install="${i}">${skillState.installing === s.url ? 'INSTALLING…' : 'INSTALL'}</button>` : ''}
           </span>
         </div>`).join('') || '<div class="stat-note">No marketplace entries match.</div>'}
       ${skills.length > 40 && visible.length === 40 ? '<div class="stat-note" style="margin-top:6px">Showing first 40 matches — refine the search.</div>' : ''}`;
@@ -2576,7 +2669,8 @@ function paintMarketplaceList() {
     skillState.installing = s.url;
     paintMarketplaceList();
     try {
-      const result = await apiJson('/api/marketplace/install', { method: 'POST', body: JSON.stringify({ url: s.url, scope: skillState.marketScope || 'personal' }) });
+      const targetScope = skillState.marketScope || 'personal';
+      const result = await postJsonWithGuardrailConfirm('/api/marketplace/install', { url: s.url, scope: targetScope }, `Install /${s.name} into ${targetScope}`);
       toast(`INSTALLED /${result.name.toUpperCase()} — REVIEW, THEN ACTIVATE`);
       skillState.installing = null;
       skillState.data = await apiJson('/api/skills');
@@ -3017,6 +3111,7 @@ const SETTINGS_SECTIONS = [
   ['all', 'All'],
   ['project', 'Project Info'],
   ['runtime', 'Runtime'],
+  ['knowledge-spaces', 'Knowledge Spaces'],
   ['ai-provider', 'AI Provider'],
   ['onboarding', 'Onboarding'],
   ['profile', 'Profile & Instructions'],
@@ -3035,20 +3130,21 @@ async function paintSettings(el) {
   let plugins = [];
   let guardrails = null;
   let providerSettings = { settings: { ...DEFAULT_PROVIDER_SETTINGS } };
+  let appSettings = state.system?.appSettings || null;
   try {
-    [workspace, { plugins }, guardrails, providerSettings] = await Promise.all([
-      apiJson('/api/workspace'), apiJson('/api/plugins'), apiJson('/api/guardrails'), apiJson('/api/provider-settings'),
+    [workspace, { plugins }, guardrails, providerSettings, appSettings] = await Promise.all([
+      apiJson('/api/workspace'), apiJson('/api/plugins'), apiJson('/api/guardrails'), apiJson('/api/provider-settings'), apiJson('/api/app-settings'),
     ]);
   } catch { /* server-side features unavailable */ }
   if (state.view !== 'settings') return;
-  settingsState.data = { workspace, plugins, guardrails, providerSettings };
+  settingsState.data = { workspace, plugins, guardrails, providerSettings, appSettings };
   uiState.providerSettings = { ...DEFAULT_PROVIDER_SETTINGS, ...(providerSettings?.settings || {}) };
   postChatRuntimeConfig();
   paintSettingsBody(el);
 }
 
 function paintSettingsBody(el) {
-  const { workspace, plugins, guardrails, providerSettings } = settingsState.data;
+  const { workspace, plugins, guardrails, providerSettings, appSettings } = settingsState.data;
   const show = (section) => settingsState.section === 'all' || settingsState.section === section;
   const profileChecks = (workspace.checks || []).filter((c) => c.id !== 'mcp-servers' && c.path !== '.mcp.json');
   const onb = workspace.onboarding;
@@ -3064,6 +3160,16 @@ function paintSettingsBody(el) {
     masked: String(row?.masked || ''),
     value: '',
   })) : [];
+  const appCfg = appSettings || {};
+  const appCfgSettings = appCfg.settings || {};
+  const appSaved = appCfg.savedEffectiveRoots || {};
+  const appActive = appCfg.activeRuntimeRoots || {};
+  const sharedSaved = appSaved.shared || {};
+  const sharedActive = appActive.shared || {};
+  const personalSaved = appSaved.personal || {};
+  const personalActive = appActive.personal || {};
+  const sharedFolders = sharedActive.detectedSubfolders || sharedSaved.detectedSubfolders || {};
+  const ksDone = Boolean(workspace.knowledgeSpaces?.personalReady && workspace.knowledgeSpaces?.sharedReady);
 
   const editable = {
     'user-profile': { title: 'Personal Profile', hint: 'Your persona profile — private, never committed.' },
@@ -3090,6 +3196,10 @@ function paintSettingsBody(el) {
       <div class="kv-row">
         <span>${onb.memoryDone ? '<span class="badge badge-green">DONE</span>' : '<span class="badge badge-apricot">OPEN</span>'} Memory setup — local memory files exist</span>
         <span><span class="list-meta">memory/MEMORY.md + memory/daily/</span></span>
+      </div>
+      <div class="kv-row">
+        <span>${ksDone ? '<span class="badge badge-green">DONE</span>' : '<span class="badge badge-apricot">OPEN</span>'} Knowledge spaces — personal + shared roots configured and reachable</span>
+        <span><span class="list-meta">Settings → Knowledge Spaces</span></span>
       </div>
       <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <button class="btn btn-ghost btn-small" data-act="onboarding-guide">Show Onboarding Guide</button>
@@ -3142,6 +3252,38 @@ function paintSettingsBody(el) {
       </div>
     </div>` : ''}
 
+    ${show('knowledge-spaces') ? `
+    <div class="card" data-section="knowledge-spaces" ${ksDone ? '' : 'style="border-color:var(--apricot)"'}>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+        <div class="section-title" style="flex:1;margin:0">Knowledge Spaces</div>
+        <span class="badge ${ksDone ? 'badge-green' : 'badge-apricot'}">${ksDone ? 'READY' : 'CHECK PATHS'}</span>
+      </div>
+      <div class="form-field">
+        <label for="ks-personal-root">Personal knowledge root (maps to <code>knowledge/personal/…</code>)</label>
+        <input id="ks-personal-root" class="filter-input" type="text" value="${esc(appCfgSettings.personalKnowledgeRoot || '')}" placeholder="knowledge/personal">
+      </div>
+      <div class="stat-note" style="white-space:normal;margin-bottom:8px">
+        Saved root: <code>${esc(personalSaved.path || 'knowledge/personal')}</code> · ${personalSaved.exists ? 'exists' : 'missing'}${personalSaved.isSymlink ? ' · symlink' : ''}<br>
+        Active runtime root: <code>${esc(personalActive.path || personalSaved.path || 'knowledge/personal')}</code> · ${personalActive.exists ? 'exists' : 'missing'}${personalActive.isSymlink ? ' · symlink' : ''}
+      </div>
+      <div class="form-field">
+        <label for="ks-shared-root">Shared company/team knowledge root (maps to <code>knowledge/company</code>, <code>knowledge/inbox</code>, <code>knowledge/team</code>)</label>
+        <input id="ks-shared-root" class="filter-input" type="text" value="${esc(appCfgSettings.sharedKnowledgeRoot || '')}" placeholder="knowledge">
+      </div>
+      <div class="stat-note" style="white-space:normal;margin-bottom:8px">
+        Saved root: <code>${esc(sharedSaved.path || 'knowledge')}</code> · ${sharedSaved.exists ? 'exists' : 'missing'}${sharedSaved.isSymlink ? ' · symlink' : ''}<br>
+        Active runtime root: <code>${esc(sharedActive.path || sharedSaved.path || 'knowledge')}</code> · ${sharedActive.exists ? 'exists' : 'missing'}${sharedActive.isSymlink ? ' · symlink' : ''}<br>
+        Shared subfolders detected: company ${sharedFolders.company ? '✓' : '—'} · inbox ${sharedFolders.inbox ? '✓' : '—'} · team ${sharedFolders.team ? '✓' : '—'}
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button class="btn btn-primary btn-small" data-act="save-knowledge-spaces">Save knowledge spaces</button>
+        <span class="stat-note" id="ks-save-status">${appCfg.restartRequired ? 'Saved. Restart required to apply active runtime roots.' : 'Saved values shown above. Changes require restart to take effect.'}</span>
+      </div>
+      <div class="stat-note" style="margin-top:8px;white-space:normal">
+        Personal knowledge remains available independently. If the shared root is missing, the app still runs and shows private folders.
+      </div>
+    </div>` : ''}
+
     ${show('ai-provider') ? `
     <div class="card" data-section="ai-provider">
       <div class="section-title">AI Provider</div>
@@ -3178,7 +3320,7 @@ function paintSettingsBody(el) {
           <div class="section-title">Env vault (machine-local)</div>
           <div id="provider-env-list" class="provider-env-list"></div>
           <button class="chip" type="button" data-act="provider-env-add">+ Add variable</button>
-          <div class="stat-note provider-note">Stored in <code>interface/provider-settings.json</code> on this machine only. Values are masked and not logged. Existing shell env vars always win at startup.</div>
+          <div class="stat-note provider-note">Local runtime env vault: values are stored machine-local in <code>interface/provider-settings.json</code>, masked in the UI and not logged. They apply to interface + chat runtime startup defaults; existing shell env vars always win.</div>
         </div>
       </div>
       <div class="provider-actions">
@@ -3411,12 +3553,40 @@ function paintSettingsBody(el) {
     if (guardrails) paintGuardrailsCard(grCard, guardrails);
     else grCard.innerHTML = '<div class="section-title">Guardrails</div><div class="stat-note">Guardrails unavailable.</div>';
   }
+
+  $('[data-act="save-knowledge-spaces"]', el)?.addEventListener('click', async () => {
+    const personalEl = $('#ks-personal-root', el);
+    const sharedEl = $('#ks-shared-root', el);
+    const status = $('#ks-save-status', el);
+    if (!personalEl || !sharedEl || !status) return;
+    try {
+      status.textContent = 'Saving…';
+      const result = await apiJson('/api/app-settings', {
+        method: 'PUT',
+        body: JSON.stringify({
+          personalKnowledgeRoot: personalEl.value.trim(),
+          sharedKnowledgeRoot: sharedEl.value.trim(),
+        }),
+      });
+      settingsState.data.appSettings = result;
+      if (state.system) state.system.appSettings = result;
+      status.textContent = result.restartRequired
+        ? 'Saved. Restart required to apply active runtime roots.'
+        : 'Saved.';
+      toast('KNOWLEDGE SPACES SAVED');
+      paintSettings(el);
+    } catch (e) {
+      status.textContent = `Save failed: ${e.message}`;
+      toast(e.message.toUpperCase(), true);
+    }
+  });
 }
 
 // ---------------------------------------------------------------- Onboarding check (initial load)
 
 function showOnboardingModal(workspace, { force = false } = {}) {
   const onb = workspace && workspace.onboarding;
+  const ks = workspace && workspace.knowledgeSpaces;
   if (!onb) return;
   if (!force && (onb.complete || sessionStorage.getItem('onboarding-dismissed'))) return;
   $('#onboarding-modal')?.remove();
@@ -3445,6 +3615,7 @@ function showOnboardingModal(workspace, { force = false } = {}) {
       ${step(onb.personalDone, '1 · Personal onboarding', 'Creates your private persona profile (knowledge/personal/user-profile.md) and your personal instructions (CLAUDE.local.md).', '/personal-onboarding')}
       ${step(onb.companyDone, '2 · Company onboarding', `Fills the company operating profile — the shared custom instruction for the whole team.${onb.companyTodos ? ' Currently ' + onb.companyTodos + ' TODO placeholders open.' : ''}`, '/company-onboarding')}
       ${step(onb.memoryDone, '3 · Memory setup', 'Required local memory paths exist: memory/MEMORY.md and memory/daily/. Edit memory/MEMORY.md in Settings -> Profile & Instructions.', '')}
+      ${step(Boolean(ks?.personalReady && ks?.sharedReady), '4 · Knowledge spaces', 'Confirm personal and shared knowledge roots in Settings -> Knowledge Spaces. Missing shared roots are allowed, but should be configured for company docs visibility.', '')}
       <div class="onb-actions">
         <button class="btn btn-primary btn-small" data-onb="settings">Open Settings</button>
         <button class="btn btn-ghost btn-small" data-onb="later">${onb.complete ? 'Close' : 'Remind me later'}</button>
@@ -3654,10 +3825,38 @@ function openPluginDrawer(p, onSaved) {
       <div class="form-field">
         <label>Configuration (JSON)</label>
         <textarea id="pf-config" rows="8" spellcheck="false">${esc(JSON.stringify(p.config, null, 2))}</textarea>
+        ${p.kind === 'mcp' ? '<div class="stat-note">Tip: keep secrets out of plugin JSON. Use <code>envKeys</code> (e.g. <code>["TWENTY_API_KEY"]</code>) to read values from local runtime env.</div>' : ''}
       </div>
+      ${p.kind === 'mcp' ? `<div class="drawer-section">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-small" id="pf-test">Test MCP</button>
+          <span class="stat-note">Runs command once with timeout, returns sanitized summary only.</span>
+        </div>
+        <pre class="run-log" id="pf-test-result" style="max-height:180px;margin-top:8px;display:none"></pre>
+      </div>` : ''}
       <div class="form-field form-check"><label><input id="pf-enabled" type="checkbox" ${p.enabled ? 'checked' : ''}> Enabled</label></div>
       <button class="btn btn-primary" id="pf-save">Save Plugin Settings</button>
     </div>`);
+
+  $('#pf-test')?.addEventListener('click', async () => {
+    const out = $('#pf-test-result');
+    const btn = $('#pf-test');
+    if (!out || !btn) return;
+    try {
+      out.style.display = 'block';
+      out.textContent = 'Testing MCP command…';
+      btn.disabled = true;
+      const result = await apiJson('/api/plugins/' + p.id + '/test', { method: 'POST', body: JSON.stringify({}) });
+      out.textContent = JSON.stringify(result, null, 2);
+      toast(`${p.name.toUpperCase()} TEST FINISHED`);
+    } catch (e) {
+      out.style.display = 'block';
+      out.textContent = String(e.message || e);
+      toast((`${p.name} TEST FAILED: ${e.message}`).toUpperCase(), true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
 
   $('#pf-save').addEventListener('click', async () => {
     let config;

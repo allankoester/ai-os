@@ -3,6 +3,16 @@
   "plugin": [
     "../../../.opencode/plugins/claude-agent-adapter.js"
   ],
+  "mcp": {
+    "twenty": {
+      "type": "remote",
+      "url": "https://crm.smapas.com/mcp",
+      "enabled": true,
+      "headers": {
+        "Authorization": "Bearer {env:TWENTY_API_KEY}"
+      }
+    }
+  },
   "agent": {
     "build": {
       "model": "azure/gpt-5.3-codex",

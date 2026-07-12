@@ -277,6 +277,11 @@ const CLI_ENV_ALLOWLIST = [
 ];
 
 const CHAT_PROVIDER_ENV_RE = /^(ANTHROPIC_|OPENCODE_|OPENAI_|AZURE_|AZURE_OPENAI_|CLAUDE_|GOOGLE_|GEMINI_|GROQ_|OPENROUTER_|MISTRAL_|COHERE_|DEEPSEEK_|XAI_|VERTEX_|AWS_)/;
+const ENV_KEY_RE = /^[A-Z_][A-Z0-9_]*$/;
+const ENV_VAULT_KEYS = String(process.env.STEADYMADE_ENV_VAULT_KEYS || '')
+  .split(',')
+  .map((k) => k.trim())
+  .filter((k) => ENV_KEY_RE.test(k));
 const TERMINAL_SCROLLBACK_MAX_BYTES = Math.max(16 * 1024, Number(process.env.CHAT_TERMINAL_SCROLLBACK_MAX_BYTES || 1024 * 1024) || 1024 * 1024);
 
 function sse(res, event, data) {
@@ -662,6 +667,10 @@ function buildCliChildEnv() {
   for (const [key, val] of Object.entries(process.env)) {
     if (!CHAT_PROVIDER_ENV_RE.test(key)) continue;
     if (typeof val === 'string' && val.length) env[key] = val;
+  }
+  for (const key of ENV_VAULT_KEYS) {
+    const val = process.env[key];
+    if (typeof val === 'string') env[key] = val;
   }
   return env;
 }

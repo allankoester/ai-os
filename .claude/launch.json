@@ -9,8 +9,7 @@
       ],
       "env": {
         "STEADYMADE_RUNTIME": "dev",
-        "STEADYMADE_KNOWLEDGE_BACKEND": "fs",
-        "STEADYMADE_KNOWLEDGE_FS_ROOT": "../../../_local/onedrive-company/AI_OS/knowledge"
+        "STEADYMADE_KNOWLEDGE_BACKEND": "fs"
       },
       "port": 4011,
       "autoPort": true

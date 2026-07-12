@@ -37,6 +37,7 @@ interface/guardrails.json
 # Workflow edits (overrides / custom / deleted) are machine-local state
 interface/workflows.json
 interface/provider-settings.json
+interface/app-settings.json
 
 # Scheduler jobs/runs/logs are machine-local state
 scheduler/*

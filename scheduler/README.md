@@ -24,6 +24,10 @@ scheduler/
   specific subagent and a timeout (1–120 min).
 - Jobs only run **while the interface server is running** (Stage 1/2 is
   local-first — always-on execution is Stage 4, VM runtime).
+- If the app is offline during a recurring cron window, that missed window is
+  skipped (no backfill run).
+- One-time jobs with a past due timestamp fire on the next scheduler tick
+  after restart, then disable themselves.
 - Run logs are per-user learning data, same privacy rule as `runs/`.
 
 ## Approval rule

@@ -17,6 +17,10 @@ ihren eigenen Workspace* (Persona-Profil, `CLAUDE.local.md`). Dieser Skill
 betrifft das *Unternehmen* — Wissen, das für alle User gilt. Tauchen im
 Interview persönliche Arbeitsweisen auf, verweise auf `/personal-onboarding`.
 
+**Knowledge-Space-Hinweis:** Der geteilte Company/Team-Knowledge-Root wird in
+der Oberfläche unter **Settings → Knowledge Spaces** konfiguriert. Dieser Skill
+arbeitet mit dem dort aktiven Shared Root.
+
 ## Leitprinzipien
 
 - **Nichts erfinden.** Nur eintragen, was der User sagt oder was in
