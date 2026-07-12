@@ -23,6 +23,7 @@ const termStartBtn = document.getElementById('termStart');
 const termStopBtn = document.getElementById('termStop');
 const termSessionsEl = document.getElementById('termSessions');
 const cliHintEl = document.getElementById('cliHint');
+const termStatusEl = document.getElementById('termStatus');
 const termEmptyEl = document.getElementById('termEmpty');
 const terminalHostEl = document.getElementById('terminalHost');
 
@@ -394,8 +395,14 @@ function setUiMode(mode) {
 }
 
 function setCliHint(text, kind = '') {
-  cliHintEl.className = `cli-hint${kind ? ` ${kind}` : ''}`;
-  cliHintEl.textContent = text;
+  if (cliHintEl) {
+    cliHintEl.className = `cli-hint${kind ? ` ${kind}` : ''}`;
+    cliHintEl.textContent = text;
+  }
+  if (termStatusEl) {
+    termStatusEl.className = `term-status${kind ? ` ${kind}` : ''}`;
+    termStatusEl.textContent = text || '';
+  }
 }
 
 function ensureTerminal() {
@@ -463,11 +470,23 @@ function renderTerminalTabs() {
     return;
   }
   for (const s of cliState.sessions) {
-    const tab = document.createElement('button');
-    tab.type = 'button';
+    const tab = document.createElement('div');
+    tab.setAttribute('role', 'tab');
+    tab.tabIndex = 0;
     tab.className = `term-tab${s.id === cliState.activeSessionId ? ' active' : ''}`;
-    tab.textContent = `${s.target} · ${s.id.slice(0, 6)}${s.running ? '' : ' · stopped'}`;
+    tab.innerHTML = `<span class="term-tab-label">${esc(`${s.target} · ${s.id.slice(0, 6)}${s.running ? '' : ' · stopped'}`)}</span><button class="term-tab-stop" type="button" title="Close session" aria-label="Close session">×</button>`;
     tab.addEventListener('click', () => switchTerminalSession(s.id));
+    tab.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        switchTerminalSession(s.id);
+      }
+    });
+    const close = tab.querySelector('.term-tab-stop');
+    if (close) close.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeTerminalSession(s.id);
+    });
     termSessionsEl.appendChild(tab);
   }
 }
@@ -477,7 +496,7 @@ function updateTerminalControls() {
   const running = !!active?.running;
   termStartBtn.disabled = !cliState.bridgeEnabled || !!cliState.unsupportedReason;
   termStartBtn.textContent = `Start ${cliState.provider}`;
-  termStopBtn.disabled = !running;
+  if (termStopBtn) termStopBtn.disabled = !running;
 
   if (!cliState.bridgeEnabled) {
     setCliHint('CLI bridge is disabled. Enable it in Settings → AI Provider and restart.', 'warn');
@@ -615,18 +634,37 @@ async function startTerminalSession() {
   }
 }
 
-async function stopTerminalSession() {
-  const active = activeTerminalSession();
+async function closeTerminalSession(sessionId = null) {
+  const active = sessionId ? cliState.sessions.find((s) => s.id === sessionId) : activeTerminalSession();
   if (!active) return;
+  const prevSessions = cliState.sessions.slice();
+  const closedId = active.id;
+  const closedIdx = prevSessions.findIndex((s) => s.id === closedId);
   try {
-    await apiJson(`/api/terminal/sessions/${encodeURIComponent(active.id)}/stop`, {
+    const data = await apiJson(`/api/terminal/sessions/${encodeURIComponent(active.id)}/stop`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
     });
-    await refreshTerminalSessions();
+    cliState.sessions = Array.isArray(data.sessions) ? data.sessions : [];
+    const hasActive = cliState.sessions.some((s) => s.id === cliState.activeSessionId);
+    if (!hasActive || cliState.activeSessionId === closedId) {
+      const fallbackOrder = closedIdx >= 0
+        ? [...prevSessions.slice(closedIdx + 1), ...prevSessions.slice(0, closedIdx)].map((s) => s.id)
+        : [];
+      const nextFromOrder = fallbackOrder.find((id) => cliState.sessions.some((s) => s.id === id));
+      const firstRunning = cliState.sessions.find((s) => s.running);
+      cliState.activeSessionId = nextFromOrder || firstRunning?.id || cliState.sessions[0]?.id || null;
+    }
+    renderTerminalTabs();
+    updateTerminalControls();
+    if (cliState.activeSessionId) connectTerminalWebSocket();
+    else {
+      closeTerminalWs();
+      setTerminalEmptyVisible(true, 'No terminal session yet. Click Start to launch the current provider target.');
+    }
   } catch (err) {
-    const msg = err.payload?.error || err.message || 'failed to stop terminal session';
+    const msg = err.payload?.error || err.message || 'failed to close terminal session';
     setCliHint(msg, 'warn');
   }
 }
@@ -1108,7 +1146,7 @@ viewCliBtn.addEventListener('click', () => {
   setUiMode('cli');
 });
 termStartBtn.addEventListener('click', startTerminalSession);
-termStopBtn.addEventListener('click', stopTerminalSession);
+if (termStopBtn) termStopBtn.addEventListener('click', () => closeTerminalSession());
 agentSel.addEventListener('change', () => {
   const id = agentSel.value;
   const meta = agentMeta(id);

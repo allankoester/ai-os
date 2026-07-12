@@ -22,7 +22,7 @@ const USAGE_LOG = path.join(ROOT, 'runs', 'usage.jsonl');
 // currentSessionId = latest turn's session id (each --resume returns a new one).
 const HISTORY_DIR = path.join(__dirname, 'history');
 const SESSIONS_FILE = path.join(__dirname, 'sessions.json');
-const SAFE_ID = /^[a-f0-9-]{8,64}$/;
+const SAFE_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---\n?/;
 
 const PERMISSION_MODE = process.env.CHAT_PERMISSION_MODE || 'default';
@@ -118,6 +118,17 @@ function findClaudeBin() {
 }
 const CLAUDE_BIN = findClaudeBin();
 const OPENCODE_BIN = process.env.OPENCODE_BIN || 'opencode';
+
+const PROVIDER_MODES = new Set(['claude-subscription', 'anthropic-api', 'opencode']);
+
+function resolveProviderMode(rawMode) {
+  const value = String(rawMode || '').trim().toLowerCase();
+  if (PROVIDER_MODES.has(value)) return value;
+  return 'claude-subscription';
+}
+
+const PROVIDER_MODE = resolveProviderMode(process.env.STEADYMADE_PROVIDER_MODE);
+const ACTIVE_CHAT_RUNTIME = PROVIDER_MODE === 'opencode' ? 'opencode' : 'claude';
 
 function expandHome(rawPath) {
   const value = String(rawPath || '').trim();
@@ -265,7 +276,8 @@ const CLI_ENV_ALLOWLIST = [
   'NODE_EXTRA_CA_CERTS',
 ];
 
-const CHAT_PROVIDER_ENV_RE = /^(ANTHROPIC_|OPENCODE_|OPENAI_|AZURE_OPENAI_|CLAUDE_)/;
+const CHAT_PROVIDER_ENV_RE = /^(ANTHROPIC_|OPENCODE_|OPENAI_|AZURE_|AZURE_OPENAI_|CLAUDE_|GOOGLE_|GEMINI_|GROQ_|OPENROUTER_|MISTRAL_|COHERE_|DEEPSEEK_|XAI_|VERTEX_|AWS_)/;
+const TERMINAL_SCROLLBACK_MAX_BYTES = Math.max(16 * 1024, Number(process.env.CHAT_TERMINAL_SCROLLBACK_MAX_BYTES || 1024 * 1024) || 1024 * 1024);
 
 function sse(res, event, data) {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -327,6 +339,19 @@ function hasJsonContentType(req) {
 
 function isTrustedLocalWebRequest(req, expectedPort) {
   const expected = Number(expectedPort);
+  const hostHeader = String(req.headers.host || '').trim();
+  try {
+    const hostUrl = new URL(`http://${hostHeader || 'localhost'}`);
+    const host = hostUrl.hostname;
+    const port = Number(hostUrl.port || 80);
+    const fetchSite = String(req.headers['sec-fetch-site'] || '').toLowerCase();
+    if ((host === 'localhost' || host === '127.0.0.1') && port === expected && (fetchSite === 'same-origin' || fetchSite === 'none')) {
+      return true;
+    }
+  } catch {
+    // invalid Host header; fall through to Origin/Referer checks
+  }
+
   const origins = [req.headers.origin, req.headers.referer];
   for (const raw of origins) {
     if (!raw) continue;
@@ -634,16 +659,15 @@ function buildCliChildEnv() {
     const val = process.env[key];
     if (typeof val === 'string' && val.length) env[key] = val;
   }
-  return env;
-}
-
-function buildChatChildEnv() {
-  const env = buildCliChildEnv();
   for (const [key, val] of Object.entries(process.env)) {
     if (!CHAT_PROVIDER_ENV_RE.test(key)) continue;
     if (typeof val === 'string' && val.length) env[key] = val;
   }
   return env;
+}
+
+function buildChatChildEnv() {
+  return buildCliChildEnv();
 }
 
 function clearCliRunTimer(run) {
@@ -1069,6 +1093,15 @@ function sendTerminalWs(session, payload) {
   }
 }
 
+function appendTerminalOutputBuffer(session, data) {
+  if (!session || !data) return;
+  session.outputBuffer = `${session.outputBuffer || ''}${data}`;
+  const bytes = Buffer.byteLength(session.outputBuffer, 'utf8');
+  if (bytes <= TERMINAL_SCROLLBACK_MAX_BYTES) return;
+  const trimTo = Math.floor(TERMINAL_SCROLLBACK_MAX_BYTES * 0.8);
+  session.outputBuffer = session.outputBuffer.slice(-trimTo);
+}
+
 function terminalSessionById(sessionId) {
   if (!SAFE_ID.test(String(sessionId || ''))) return null;
   return TERMINAL_STATE.sessions.get(String(sessionId).trim()) || null;
@@ -1084,6 +1117,17 @@ function stopTerminalSessionSignals(session) {
     if (session.exited) return;
     try { session.pty.kill('SIGKILL'); } catch {}
   }, 1200);
+}
+
+function closeTerminalSession(session, { stopProcess = true } = {}) {
+  if (!session) return;
+  if (stopProcess && session.running && session.pty) stopTerminalSessionSignals(session);
+  clearTerminalTimers(session);
+  for (const ws of [...session.clients]) {
+    session.clients.delete(ws);
+    try { ws.close(1000, 'session closed'); } catch {}
+  }
+  TERMINAL_STATE.sessions.delete(session.id);
 }
 
 function createTerminalSession({ target, cols, rows }) {
@@ -1120,23 +1164,34 @@ function createTerminalSession({ target, cols, rows }) {
     exitCode: null,
     signal: null,
     clients: new Set(),
+    outputBuffer: '',
     runtimeTimer: null,
     noClientTimer: null,
     reapTimer: null,
   };
 
   const env = buildCliChildEnv();
-  session.pty = spawnPty(resolvedPath, args, {
-    name: env.TERM || 'xterm-256color',
-    cols: session.cols,
-    rows: session.rows,
-    cwd: ROOT,
-    env,
-  });
+  try {
+    session.pty = spawnPty(resolvedPath, args, {
+      name: env.TERM || 'xterm-256color',
+      cols: session.cols,
+      rows: session.rows,
+      cwd: ROOT,
+      env,
+    });
+  } catch (err) {
+    return {
+      error: `failed to start ${target} PTY: ${err?.message || String(err)}`,
+      code: 500,
+      diagnostics,
+    };
+  }
 
   session.pty.onData((data) => {
     session.updatedAt = nowIso();
-    sendTerminalWs(session, { type: 'output', sessionId: session.id, data: String(data || '') });
+    const text = String(data || '');
+    appendTerminalOutputBuffer(session, text);
+    sendTerminalWs(session, { type: 'output', sessionId: session.id, data: text });
   });
 
   session.pty.onExit((ev = {}) => {
@@ -1191,8 +1246,8 @@ async function handleTerminalSessionStop(req, res, sessionId) {
   if (!requireTrustedLocalJsonMutation(req, res)) return;
   const session = terminalSessionById(sessionId);
   if (!session) return sendJson(res, 404, { error: 'terminal session not found' });
-  stopTerminalSessionSignals(session);
-  sendJson(res, 200, { ok: true, session: terminalSnapshot(session), sessions: listTerminalSessionSnapshots() });
+  closeTerminalSession(session, { stopProcess: true });
+  sendJson(res, 200, { ok: true, closedSessionId: sessionId, sessions: listTerminalSessionSnapshots() });
 }
 
 async function handleTerminalSessionInput(req, res, sessionId) {
@@ -1397,242 +1452,478 @@ function toolDetail(block) {
   }
 }
 
+function shouldUseOpenCodeModel(model) {
+  const value = String(model || '').trim();
+  if (!value || value === 'default') return false;
+  return value.includes('/');
+}
+
+function extractSessionIdFromEvent(ev) {
+  if (!ev || typeof ev !== 'object') return '';
+  return String(
+    ev.sessionID
+    || ev.sessionId
+    || ev.session_id
+    || ev.part?.sessionID
+    || ev.part?.sessionId
+    || ev.part?.session_id
+    || '',
+  ).trim();
+}
+
+function extractModelFromEvent(ev) {
+  if (!ev || typeof ev !== 'object') return '';
+  const direct = String(ev.model || '').trim();
+  if (direct) return direct;
+  const nested = String(ev.meta?.model || ev.result?.model || '').trim();
+  return nested;
+}
+
+function parseOpenCodeTokenUsage(ev) {
+  const partTokens = ev?.part?.tokens || {};
+  const partCache = partTokens.cache || {};
+  if (Object.keys(partTokens).length) {
+    return {
+      input_tokens: partTokens.input ?? null,
+      output_tokens: partTokens.output ?? null,
+      cache_creation_input_tokens: partCache.write ?? null,
+      cache_read_input_tokens: partCache.read ?? null,
+      total_tokens: partTokens.total ?? (
+        partTokens.input != null || partTokens.output != null || partCache.write != null || partCache.read != null
+          ? Number(partTokens.input || 0) + Number(partTokens.output || 0) + Number(partCache.write || 0) + Number(partCache.read || 0)
+          : null
+      ),
+    };
+  }
+  const usage = ev?.usage || ev?.tokens || ev?.token_usage || ev?.result?.usage || {};
+  const input = usage.input_tokens ?? usage.inputTokens ?? usage.prompt_tokens ?? usage.promptTokens ?? null;
+  const output = usage.output_tokens ?? usage.outputTokens ?? usage.completion_tokens ?? usage.completionTokens ?? null;
+  const cacheCreation = usage.cache_creation_input_tokens ?? usage.cacheCreationInputTokens ?? null;
+  const cacheRead = usage.cache_read_input_tokens ?? usage.cacheReadInputTokens ?? null;
+  const total = usage.total_tokens ?? usage.totalTokens ?? (
+    input != null || output != null || cacheCreation != null || cacheRead != null
+      ? Number(input || 0) + Number(output || 0) + Number(cacheCreation || 0) + Number(cacheRead || 0)
+      : null
+  );
+  return {
+    input_tokens: input,
+    output_tokens: output,
+    cache_creation_input_tokens: cacheCreation,
+    cache_read_input_tokens: cacheRead,
+    total_tokens: total,
+  };
+}
+
+function extractOpenCodeErrorText(ev) {
+  const candidates = [
+    ev?.error?.data?.message,
+    ev?.error?.message,
+    ev?.part?.error?.message,
+    ev?.part?.error,
+    ev?.error,
+    ev?.message,
+    ev?.text,
+    ev?.result?.error,
+    ev?.result?.message,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+  }
+  return '';
+}
+
+function ensureRunConversation(run, context, sessionId) {
+  if (!sessionId) return;
+  run.meta.session_id = sessionId;
+  if (!context.convId && !context.incognito) {
+    context.convId = sessionId;
+    run.conversationId = context.convId;
+    RUN_REGISTRY.set(context.convId, run);
+    const s = readSessions();
+    s[context.convId] = {
+      id: context.convId,
+      title: context.message.replace(/\s+/g, ' ').slice(0, 60),
+      agent: context.selectedAgent,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      turns: 0,
+      currentSessionId: context.convId,
+      archived: false,
+    };
+    writeSessions(s);
+    appendHistory(context.convId, context.userEntry);
+  }
+}
+
+function emitRunConversationInit(run, context, { sessionId, model }) {
+  ensureRunConversation(run, context, sessionId);
+  if (model) run.meta.model = model;
+  if (!run.initEmitted) {
+    if (context.convId) emitRunEvent(run, 'conversation', { id: context.convId });
+    emitRunEvent(run, 'init', { session_id: run.meta.session_id, model: run.meta.model, incognito: context.incognito });
+    run.initEmitted = true;
+  }
+}
+
+function emitAssistantResult(run, selectedAgent, text, { errorText } = {}) {
+  const cleanText = String(text || '').trim();
+  run.pendingAssistant = {
+    t: 'assistant',
+    ts: new Date().toISOString(),
+    text: cleanText,
+    meta: {
+      session_id: run.meta.session_id,
+      model: run.meta.model,
+      duration_ms: run.meta.duration_ms,
+      cost_usd: run.meta.cost_usd,
+      num_turns: run.meta.num_turns,
+      total_tokens: run.meta.total_tokens,
+      is_error: run.meta.is_error,
+    },
+  };
+  emitRunEvent(run, 'result', {
+    session_id: run.meta.session_id,
+    model: run.meta.model,
+    duration_ms: run.meta.duration_ms,
+    cost_usd: run.meta.cost_usd,
+    num_turns: run.meta.num_turns,
+    input_tokens: run.meta.input_tokens,
+    output_tokens: run.meta.output_tokens,
+    total_tokens: run.meta.total_tokens,
+    is_error: run.meta.is_error,
+    error_text: run.meta.is_error ? (errorText || (cleanText ? undefined : 'runtime error')) : undefined,
+  });
+  emitRunEvent(run, 'gate', { issues: CONTENT_AGENTS.has(selectedAgent) ? lintText(cleanText) : [] });
+  run.resultEmitted = true;
+}
+
+function startClaudeChatRun({ run, context, resumeId, model, agent }) {
+  const runMessage = context.incognito
+    ? `[Incognito turn] Do not write memory files, daily notes, or run logs for this turn, and do not store anything about this exchange anywhere.\n\n${context.message}`
+    : context.message;
+  const args = [
+    '-p', runMessage,
+    '--output-format', 'stream-json',
+    '--include-partial-messages',
+    '--verbose',
+    '--permission-mode', PERMISSION_MODE,
+    '--allowedTools', ALLOWED_TOOLS,
+    '--append-system-prompt', buildSystemPrompt(agent),
+  ];
+  if (DISALLOWED_TOOLS) args.push('--disallowedTools', DISALLOWED_TOOLS);
+  if (resumeId) args.push('--resume', resumeId);
+  if (model && model !== 'default') args.push('--model', model);
+
+  const env = buildChatChildEnv();
+  delete env.CLAUDECODE;
+  delete env.CLAUDE_CODE_ENTRYPOINT;
+  delete env.CLAUDE_CODE_SSE_PORT;
+
+  const child = spawn(CLAUDE_BIN, args, { cwd: ROOT, env });
+  run.child = child;
+  child.stdin.end();
+
+  let buffer = '';
+
+  child.on('error', (err) => {
+    emitRunEvent(run, 'stderr', { text: `spawn error: ${err.message}` });
+    finalizeRun(run, { code: -1, isError: true });
+  });
+
+  child.stdout.on('data', (chunk) => {
+    buffer += chunk.toString();
+    let idx;
+    while ((idx = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, idx).trim();
+      buffer = buffer.slice(idx + 1);
+      if (line && run.active) forwardLine(line);
+    }
+  });
+
+  child.stderr.on('data', (chunk) => {
+    if (run.active) emitRunEvent(run, 'stderr', { text: String(chunk) });
+  });
+
+  child.on('close', (code) => {
+    run.processClosed = true;
+    finalizeRun(run, { code, isError: code !== 0 && !run.meta.duration_ms });
+  });
+
+  function forwardLine(line) {
+    let ev;
+    try { ev = JSON.parse(line); } catch { return; }
+    const isSub = !!ev.parent_tool_use_id;
+
+    if (ev.type === 'system' && ev.subtype === 'init') {
+      emitRunConversationInit(run, context, {
+        sessionId: String(ev.session_id || '').trim() || run.meta.session_id,
+        model: String(ev.model || '').trim() || run.meta.model,
+      });
+      return;
+    }
+
+    if (ev.type === 'stream_event' && !isSub) {
+      const e = ev.event;
+      if (e?.type === 'content_block_delta' && e.delta?.type === 'text_delta') {
+        run.finalText += e.delta.text;
+        emitRunEvent(run, 'delta', { text: e.delta.text });
+      }
+      return;
+    }
+
+    if (ev.type === 'assistant') {
+      if (ev.message?.usage) run.tokenUsage = ev.message.usage;
+      const blocks = ev.message?.content || [];
+      for (const b of blocks) {
+        if (b.type === 'tool_use') {
+          const toolEvent = { name: b.name, sub: isSub, detail: toolDetail(b) };
+          emitRunEvent(run, 'tool', toolEvent);
+          if (context.convId) run.pendingToolEvents.push({ t: 'tool', ts: new Date().toISOString(), ...toolEvent });
+        }
+      }
+      return;
+    }
+
+    if (ev.type === 'result') {
+      const text = ev.result || run.finalText;
+      run.meta = {
+        session_id: ev.session_id || run.meta.session_id,
+        model: run.meta.model,
+        duration_ms: ev.duration_ms,
+        cost_usd: ev.total_cost_usd,
+        num_turns: ev.num_turns,
+        input_tokens: run.tokenUsage.input_tokens ?? null,
+        output_tokens: run.tokenUsage.output_tokens ?? null,
+        cache_creation_input_tokens: run.tokenUsage.cache_creation_input_tokens ?? null,
+        cache_read_input_tokens: run.tokenUsage.cache_read_input_tokens ?? null,
+        total_tokens: run.tokenUsage.total_tokens ?? (
+          run.tokenUsage.input_tokens != null || run.tokenUsage.output_tokens != null
+            ? Number(run.tokenUsage.input_tokens || 0) + Number(run.tokenUsage.output_tokens || 0) + Number(run.tokenUsage.cache_creation_input_tokens || 0) + Number(run.tokenUsage.cache_read_input_tokens || 0)
+            : null
+        ),
+        is_error: Boolean(ev.is_error),
+      };
+      emitAssistantResult(run, context.selectedAgent, text, {
+        errorText: run.meta.is_error && !run.finalText ? text : undefined,
+      });
+    }
+  }
+}
+
+function startOpenCodeChatRun({ run, context, resumeId, model }) {
+  const opencodeDiagnostics = resolveBinaryCommand(OPENCODE_BIN, 'opencode');
+  const opencodeCmd = opencodeDiagnostics.resolvedPath || OPENCODE_BIN;
+  const runMessage = context.incognito
+    ? `[Incognito turn] Do not write memory files, daily notes, or run logs for this turn, and do not store anything about this exchange anywhere.\n\n${context.message}`
+    : context.message;
+  const args = ['run', runMessage, '--format', 'json'];
+  if (context.selectedAgent && context.selectedAgent !== 'danny') args.push('--agent', context.selectedAgent);
+  if (resumeId) args.push('--session', resumeId);
+  if (shouldUseOpenCodeModel(model)) args.push('--model', model);
+
+  const env = buildChatChildEnv();
+  const child = spawn(opencodeCmd, args, { cwd: ROOT, env });
+  run.child = child;
+  child.stdin.end();
+
+  let buffer = '';
+  run.stepFinished = false;
+
+  child.on('error', (err) => {
+    emitRunEvent(run, 'stderr', { text: `spawn error: ${err.message}` });
+    run.meta.is_error = true;
+    finalizeRun(run, { code: -1, isError: true });
+  });
+
+  child.stdout.on('data', (chunk) => {
+    buffer += chunk.toString();
+    let idx;
+    while ((idx = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, idx).trim();
+      buffer = buffer.slice(idx + 1);
+      if (line && run.active) forwardLine(line);
+    }
+  });
+
+  child.stderr.on('data', (chunk) => {
+    if (run.active) emitRunEvent(run, 'stderr', { text: String(chunk) });
+  });
+
+  child.on('close', (code) => {
+    run.processClosed = true;
+    if (!run.stepFinished && !run.resultEmitted) {
+      const fallbackText = String(run.finalText || run.lastErrorText || '').trim();
+      if (fallbackText) {
+        run.meta.duration_ms = run.meta.duration_ms ?? (Date.now() - run.startedAt);
+        if (run.lastErrorText && !run.finalText) run.meta.is_error = true;
+        emitAssistantResult(run, context.selectedAgent, fallbackText, { errorText: run.lastErrorText });
+      }
+    }
+    finalizeRun(run, { code, isError: Boolean(run.meta.is_error || (code !== 0 && !run.stepFinished)) });
+  });
+
+  function forwardLine(line) {
+    let ev;
+    try { ev = JSON.parse(line); } catch { return; }
+    const eventType = String(ev.type || '').trim().toLowerCase();
+    const sessionId = extractSessionIdFromEvent(ev);
+    const modelFromEvent = extractModelFromEvent(ev);
+    if (sessionId || modelFromEvent) {
+      emitRunConversationInit(run, context, {
+        sessionId: sessionId || run.meta.session_id,
+        model: modelFromEvent || run.meta.model,
+      });
+    }
+
+    if (eventType === 'text') {
+      const text = typeof ev.part?.text === 'string'
+        ? ev.part.text
+        : (typeof ev.text === 'string'
+          ? ev.text
+          : (typeof ev.delta === 'string' ? ev.delta : (typeof ev.message === 'string' ? ev.message : '')));
+      if (!text) return;
+      run.finalText += text;
+      emitRunEvent(run, 'delta', { text });
+      return;
+    }
+
+    if (eventType === 'tool_use') {
+      const name = String(ev.part?.tool || ev.name || ev.tool_name || ev.tool || 'tool').trim();
+      const detailSource = ev.part?.state ?? ev.detail ?? ev.input ?? ev.args ?? ev.payload;
+      let detail = '';
+      if (typeof detailSource === 'string') detail = detailSource;
+      else if (detailSource && typeof detailSource === 'object') detail = JSON.stringify(detailSource).slice(0, 180);
+      const toolEvent = { name, sub: false, detail };
+      emitRunEvent(run, 'tool', toolEvent);
+      if (context.convId) run.pendingToolEvents.push({ t: 'tool', ts: new Date().toISOString(), ...toolEvent });
+      return;
+    }
+
+    if (eventType === 'error') {
+      const errorText = extractOpenCodeErrorText(ev);
+      if (errorText) {
+        run.lastErrorText = errorText;
+        emitRunEvent(run, 'stderr', { text: errorText });
+      }
+      run.meta.is_error = true;
+      return;
+    }
+
+    if (eventType === 'step_finish') {
+      run.stepFinished = true;
+      const usage = parseOpenCodeTokenUsage(ev);
+      run.meta = {
+        ...run.meta,
+        session_id: sessionId || run.meta.session_id,
+        model: modelFromEvent || run.meta.model,
+        duration_ms: ev.duration_ms ?? ev.durationMs ?? ev.metrics?.duration_ms ?? run.meta.duration_ms ?? (Date.now() - run.startedAt),
+        cost_usd: ev.part?.cost ?? ev.cost_usd ?? ev.costUsd ?? ev.total_cost_usd ?? ev.metrics?.cost_usd ?? run.meta.cost_usd,
+        num_turns: ev.num_turns ?? ev.numTurns ?? run.meta.num_turns,
+        ...usage,
+        is_error: Boolean(run.meta.is_error || ev.is_error || ev.error),
+      };
+      const text = String(run.finalText || ev.result?.text || ev.result?.message || ev.message || run.lastErrorText || '').trim();
+      if (text) emitAssistantResult(run, context.selectedAgent, text, { errorText: run.lastErrorText });
+      return;
+    }
+  }
+}
+
 async function handleChat(req, res) {
   const payload = await readBody(req, res);
   if (!payload) return;
 
-    const message = typeof payload.message === 'string' ? payload.message.trim() : '';
-    const legacySessionId = typeof payload.sessionId === 'string' ? payload.sessionId.trim() : '';
-    const requestedConvId = typeof payload.conversationId === 'string' && SAFE_ID.test(payload.conversationId.trim())
-      ? payload.conversationId.trim() : '';
-    const model = typeof payload.model === 'string' ? payload.model.trim() : '';
-    const agent = resolveAgent(payload.agent);
-    const selectedAgent = agent.id;
-    const mode = selectedAgent === 'danny' ? 'danny' : 'direct_specialist';
-    // Incognito turns leave no trace: no history, no index entry, no memory
-    // writes (instructed below). Multi-turn continuity works in-memory via
-    // the legacy sessionId field, which the UI never persists.
-    const incognito = Boolean(payload.incognito);
+  const message = typeof payload.message === 'string' ? payload.message.trim() : '';
+  const legacySessionId = typeof payload.sessionId === 'string' ? payload.sessionId.trim() : '';
+  const requestedConvId = typeof payload.conversationId === 'string' && SAFE_ID.test(payload.conversationId.trim())
+    ? payload.conversationId.trim() : '';
+  const model = typeof payload.model === 'string' ? payload.model.trim() : '';
+  const agent = resolveAgent(payload.agent);
+  const selectedAgent = agent.id;
+  const mode = selectedAgent === 'danny' ? 'danny' : 'direct_specialist';
+  // Incognito turns leave no trace: no history, no index entry, no memory
+  // writes (instructed below). Multi-turn continuity works in-memory via
+  // the legacy sessionId field, which the UI never persists.
+  const incognito = Boolean(payload.incognito);
 
-    // Resolve the resume chain server-side: the index maps the stable
-    // conversation id to the latest session id.
-    const sessionsIndex = readSessions();
-    let convId = !incognito && requestedConvId && sessionsIndex[requestedConvId] ? requestedConvId : '';
-    const resumeId = convId ? sessionsIndex[convId].currentSessionId : legacySessionId;
-    const userEntry = { t: 'user', ts: new Date().toISOString(), text: message, agent: selectedAgent };
-    if (convId) appendHistory(convId, userEntry);
+  // Resolve the resume chain server-side: the index maps the stable
+  // conversation id to the latest session id.
+  const sessionsIndex = readSessions();
+  const context = {
+    convId: !incognito && requestedConvId && sessionsIndex[requestedConvId] ? requestedConvId : '',
+    message,
+    selectedAgent,
+    incognito,
+    userEntry: { t: 'user', ts: new Date().toISOString(), text: message, agent: selectedAgent },
+  };
+  const resumeId = context.convId ? sessionsIndex[context.convId].currentSessionId : legacySessionId;
+  if (context.convId) appendHistory(context.convId, context.userEntry);
 
-    if (!message) {
-      res.writeHead(400).end('message required');
-      return;
-    }
+  if (!message) {
+    res.writeHead(400).end('message required');
+    return;
+  }
 
-    if (!incognito && convId && isConversationRunning(convId)) {
-      sendJson(res, 409, { error: 'conversation already has an active run' });
-      return;
-    }
+  if (!incognito && context.convId && isConversationRunning(context.convId)) {
+    sendJson(res, 409, { error: 'conversation already has an active run' });
+    return;
+  }
 
-    openSse(res);
+  openSse(res);
 
-    const run = {
-      startedAt: Date.now(),
-      selectedAgent,
-      mode,
+  const run = {
+    startedAt: Date.now(),
+    selectedAgent,
+    mode,
+    model: model || 'default',
+    incognito,
+    conversationId: context.convId || null,
+    seq: 0,
+    events: [],
+    subscribers: new Set(),
+    finalState: null,
+    active: true,
+    stopRequested: false,
+    historyFlushed: false,
+    pendingToolEvents: [],
+    pendingAssistant: null,
+    finalText: '',
+    tokenUsage: {},
+    logged: false,
+    processClosed: false,
+    initEmitted: false,
+    resultEmitted: false,
+    lastErrorText: '',
+    meta: {
+      session_id: resumeId || null,
       model: model || 'default',
-      incognito,
-      conversationId: convId || null,
-      seq: 0,
-      events: [],
-      subscribers: new Set(),
-      finalState: null,
-      active: true,
-      stopRequested: false,
-      historyFlushed: false,
-      pendingToolEvents: [],
-      pendingAssistant: null,
-      finalText: '',
-      tokenUsage: {},
-      logged: false,
-      processClosed: false,
-      meta: {
-        session_id: resumeId || null,
-        model: model || 'default',
-        duration_ms: null,
-        cost_usd: null,
-        num_turns: null,
-        input_tokens: null,
-        output_tokens: null,
-        cache_creation_input_tokens: null,
-        cache_read_input_tokens: null,
-        total_tokens: null,
-        is_error: false,
-      },
-    };
-    addSubscriber(run, res);
-    if (!incognito && convId) RUN_REGISTRY.set(convId, run);
+      duration_ms: null,
+      cost_usd: null,
+      num_turns: null,
+      input_tokens: null,
+      output_tokens: null,
+      cache_creation_input_tokens: null,
+      cache_read_input_tokens: null,
+      total_tokens: null,
+      is_error: false,
+    },
+  };
+  addSubscriber(run, res);
+  if (!incognito && context.convId) RUN_REGISTRY.set(context.convId, run);
 
-    const runMessage = incognito
-      ? `[Incognito turn] Do not write memory files, daily notes, or run logs for this turn, and do not store anything about this exchange anywhere.\n\n${message}`
-      : message;
-    const args = [
-      '-p', runMessage,
-      '--output-format', 'stream-json',
-      '--include-partial-messages',
-      '--verbose',
-      '--permission-mode', PERMISSION_MODE,
-      '--allowedTools', ALLOWED_TOOLS,
-      '--append-system-prompt', buildSystemPrompt(agent),
-    ];
-    if (DISALLOWED_TOOLS) args.push('--disallowedTools', DISALLOWED_TOOLS);
-    if (resumeId) args.push('--resume', resumeId);
-    if (model && model !== 'default') args.push('--model', model);
+  if (ACTIVE_CHAT_RUNTIME === 'opencode') {
+    startOpenCodeChatRun({ run, context, resumeId, model });
+  } else {
+    startClaudeChatRun({ run, context, resumeId, model, agent });
+  }
 
-    const env = buildChatChildEnv();
-    delete env.CLAUDECODE;
-    delete env.CLAUDE_CODE_ENTRYPOINT;
-    delete env.CLAUDE_CODE_SSE_PORT;
-
-    const child = spawn(CLAUDE_BIN, args, { cwd: ROOT, env });
-    run.child = child;
-    child.stdin.end();
-
-    let buffer = '';
-
-    child.on('error', (err) => {
-      emitRunEvent(run, 'stderr', { text: `spawn error: ${err.message}` });
-      finalizeRun(run, { code: -1, isError: true });
-    });
-
-    child.stdout.on('data', (chunk) => {
-      buffer += chunk.toString();
-      let idx;
-      while ((idx = buffer.indexOf('\n')) >= 0) {
-        const line = buffer.slice(0, idx).trim();
-        buffer = buffer.slice(idx + 1);
-        if (line && run.active) forwardLine(line);
-      }
-    });
-
-    child.stderr.on('data', (chunk) => {
-      if (run.active) emitRunEvent(run, 'stderr', { text: String(chunk) });
-    });
-
-    child.on('close', (code) => {
-      run.processClosed = true;
-      finalizeRun(run, { code, isError: code !== 0 && !run.meta.duration_ms });
-    });
-
-    res.on('close', () => {
-      removeSubscriber(run, res);
-      if (incognito && run.active && !res.writableEnded) {
-        run.stopRequested = true;
-        try { child.kill('SIGTERM'); } catch {}
-      }
-    });
-
-    function forwardLine(line) {
-      let ev;
-      try { ev = JSON.parse(line); } catch { return; }
-      const isSub = !!ev.parent_tool_use_id;
-
-      if (ev.type === 'system' && ev.subtype === 'init') {
-        run.meta.session_id = ev.session_id || run.meta.session_id;
-        run.meta.model = ev.model || run.meta.model;
-        if (!convId && ev.session_id && !incognito) {
-          // first turn of a new conversation — the first session id becomes
-          // the stable conversation id
-          convId = ev.session_id;
-          run.conversationId = convId;
-          RUN_REGISTRY.set(convId, run);
-          const s = readSessions();
-          s[convId] = {
-            id: convId,
-            title: message.replace(/\s+/g, ' ').slice(0, 60),
-            agent: selectedAgent,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            turns: 0,
-            currentSessionId: convId,
-            archived: false,
-          };
-          writeSessions(s);
-          appendHistory(convId, userEntry);
-        }
-        if (convId) emitRunEvent(run, 'conversation', { id: convId });
-        emitRunEvent(run, 'init', { session_id: ev.session_id, model: ev.model, incognito });
-        return;
-      }
-
-      if (ev.type === 'stream_event' && !isSub) {
-        const e = ev.event;
-        if (e?.type === 'content_block_delta' && e.delta?.type === 'text_delta') {
-          run.finalText += e.delta.text;
-          emitRunEvent(run, 'delta', { text: e.delta.text });
-        }
-        return;
-      }
-
-      if (ev.type === 'assistant') {
-        if (ev.message?.usage) run.tokenUsage = ev.message.usage;
-        const blocks = ev.message?.content || [];
-        for (const b of blocks) {
-          if (b.type === 'tool_use') {
-            const toolEvent = { name: b.name, sub: isSub, detail: toolDetail(b) };
-            emitRunEvent(run, 'tool', toolEvent);
-            if (convId) run.pendingToolEvents.push({ t: 'tool', ts: new Date().toISOString(), ...toolEvent });
-          }
-        }
-        return;
-      }
-
-      if (ev.type === 'result') {
-        const text = ev.result || run.finalText;
-        run.meta = {
-          session_id: ev.session_id || run.meta.session_id,
-          model: run.meta.model,
-          duration_ms: ev.duration_ms,
-          cost_usd: ev.total_cost_usd,
-          num_turns: ev.num_turns,
-          input_tokens: run.tokenUsage.input_tokens ?? null,
-          output_tokens: run.tokenUsage.output_tokens ?? null,
-          cache_creation_input_tokens: run.tokenUsage.cache_creation_input_tokens ?? null,
-          cache_read_input_tokens: run.tokenUsage.cache_read_input_tokens ?? null,
-          total_tokens: run.tokenUsage.total_tokens ?? (
-            run.tokenUsage.input_tokens != null || run.tokenUsage.output_tokens != null
-              ? Number(run.tokenUsage.input_tokens || 0) + Number(run.tokenUsage.output_tokens || 0) + Number(run.tokenUsage.cache_creation_input_tokens || 0) + Number(run.tokenUsage.cache_read_input_tokens || 0)
-              : null
-          ),
-          is_error: Boolean(ev.is_error),
-        };
-        run.pendingAssistant = {
-          t: 'assistant',
-          ts: new Date().toISOString(),
-          text,
-          meta: {
-            session_id: run.meta.session_id,
-            model: run.meta.model,
-            duration_ms: run.meta.duration_ms,
-            cost_usd: run.meta.cost_usd,
-            num_turns: run.meta.num_turns,
-            total_tokens: run.meta.total_tokens,
-            is_error: run.meta.is_error,
-          },
-        };
-        emitRunEvent(run, 'result', {
-          session_id: run.meta.session_id,
-          model: run.meta.model,
-          duration_ms: run.meta.duration_ms,
-          cost_usd: run.meta.cost_usd,
-          num_turns: run.meta.num_turns,
-          input_tokens: run.meta.input_tokens,
-          output_tokens: run.meta.output_tokens,
-          total_tokens: run.meta.total_tokens,
-          is_error: run.meta.is_error,
-          error_text: run.meta.is_error && !run.finalText ? text : undefined,
-        });
-        emitRunEvent(run, 'gate', { issues: CONTENT_AGENTS.has(selectedAgent) ? lintText(text) : [] });
-      }
+  res.on('close', () => {
+    removeSubscriber(run, res);
+    if (incognito && run.active && !res.writableEnded) {
+      run.stopRequested = true;
+      try { run.child.kill('SIGTERM'); } catch {}
     }
+  });
 }
 
 const MIME = {
@@ -1655,7 +1946,7 @@ function staticSecurityHeaders(extra = {}) {
   ].join('; ');
   return {
     'X-Content-Type-Options': 'nosniff',
-    'Referrer-Policy': 'no-referrer',
+    'Referrer-Policy': 'same-origin',
     'Content-Security-Policy': csp,
     ...extra,
   };
@@ -1787,7 +2078,14 @@ const server = http.createServer((req, res) => {
   }
   if (req.method === 'GET' && url.pathname === '/api/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, port: PORT, claude_bin: CLAUDE_BIN }));
+    res.end(JSON.stringify({
+      ok: true,
+      port: PORT,
+      provider_mode: PROVIDER_MODE,
+      active_chat_runtime: ACTIVE_CHAT_RUNTIME,
+      claude_bin: CLAUDE_BIN,
+      opencode_bin: OPENCODE_BIN,
+    }));
     return;
   }
   serveStatic(req, res);
@@ -1810,6 +2108,9 @@ terminalWss.on('connection', (ws, req, session) => {
   clearTerminalTimer(session, 'noClientTimer');
   clearTerminalTimer(session, 'reapTimer');
   ws.send(JSON.stringify({ type: 'status', session: terminalSnapshot(session) }));
+  if (session.outputBuffer) {
+    ws.send(JSON.stringify({ type: 'output', sessionId: session.id, data: session.outputBuffer }));
+  }
 
   ws.on('message', (raw) => {
     const rawBytes = Buffer.isBuffer(raw) ? raw.length : Buffer.byteLength(String(raw || ''), 'utf8');
@@ -1915,7 +2216,9 @@ server.on('upgrade', (req, socket, head) => {
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`Steadymade AI OS Chat → http://localhost:${PORT}`);
+  console.log(`provider mode: ${PROVIDER_MODE} (active normal chat runtime: ${ACTIVE_CHAT_RUNTIME})`);
   console.log(`claude binary: ${CLAUDE_BIN}`);
+  console.log(`opencode binary: ${OPENCODE_BIN}`);
   if (!CHAT_CLI_BRIDGE_ENABLED) {
     console.log('CLI bridge: disabled (set CHAT_CLI_BRIDGE_ENABLED=1 to enable)');
   }

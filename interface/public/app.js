@@ -2829,7 +2829,7 @@ function paintArtifacts(el) {
 // ---------------------------------------------------------------- Usage / Memory
 
 function fmtUsd(v) {
-  return Number(v || 0).toLocaleString(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 3, maximumFractionDigits: 3 });
+  return Number(v || 0).toLocaleString(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function fmtInt(v) {
@@ -2859,7 +2859,7 @@ function usageDetailsHtml(data, { compact = false } = {}) {
 
     <div class="cc-grid">
       <div class="card stat-card"><div class="mono-label">ENTRIES</div><div class="stat-value">${fmtInt(s.count)}</div><div class="stat-note">${fmtInt(s.sessions)} sessions · ${fmtInt(s.errors)} errors</div></div>
-      <div class="card stat-card"><div class="mono-label">COST</div><div class="stat-value" style="font-size:28px">${fmtUsd(s.total_cost_usd)}</div><div class="stat-note">reported by Claude result metadata</div></div>
+      <div class="card stat-card"><div class="mono-label">COST</div><div class="stat-value" style="font-size:28px">${fmtUsd(s.total_cost_usd)}</div><div class="stat-note">reported by runtime result metadata when available</div></div>
       <div class="card stat-card"><div class="mono-label">DURATION</div><div class="stat-value" style="font-size:28px">${fmtDuration(s.total_duration_ms)}</div><div class="stat-note">sum of logged durations</div></div>
       <div class="card stat-card"><div class="mono-label">TOKENS</div><div class="stat-value" style="font-size:28px">${fmtInt(s.total_tokens)}</div><div class="stat-note">in ${fmtInt(s.input_tokens)} · out ${fmtInt(s.output_tokens)}</div></div>
     </div>
@@ -3809,6 +3809,7 @@ function renderChat() {
   if (!holder) return;
 
   if (!chatFrameState.frame) {
+    chatFrameState.ready = false;
     holder.innerHTML = `<div class="chat-offline-note">
       <strong>Chat runtime:</strong> embedded from <code>${esc(CHAT_URL)}</code>.
       If this area stays blank, run <code>node chat/server.mjs</code> or restart with <code>node scripts/start.mjs</code>.
@@ -3819,7 +3820,6 @@ function renderChat() {
     frame.title = 'Steadymade Danny Chat';
     frame.allow = 'clipboard-write';
     frame.addEventListener('load', () => {
-      chatFrameState.ready = false;
       holder.querySelector('.chat-offline-note')?.remove();
     });
     holder.appendChild(frame);

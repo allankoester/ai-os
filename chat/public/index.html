@@ -28,8 +28,8 @@
         </div>
         <div id="cliHeader" class="cli-header hidden">
           <button id="termStart" type="button">Start</button>
-          <button id="termStop" type="button" class="muted">Stop</button>
           <div id="termSessions" class="term-sessions" role="tablist" aria-label="Terminal sessions"></div>
+          <div id="termStatus" class="term-status" aria-live="polite"></div>
         </div>
         <div class="top-right">
           <div class="view-switch" role="tablist" aria-label="Main view">
@@ -52,8 +52,6 @@
         </main>
 
         <section id="cliPanel" class="cli-panel hidden" aria-live="polite">
-          <div id="cliHint" class="cli-hint"></div>
-          <div class="cli-note">Embedded PTY terminal for Claude/OpenCode. Sessions stay alive while you switch tabs. If embedding is blocked, use your host interface fallback.</div>
           <div class="terminal-stage">
             <div id="termEmpty" class="term-empty">No terminal session yet. Click Start to launch the current provider target.</div>
             <div id="terminalHost" class="terminal-host" aria-label="Embedded terminal"></div>
