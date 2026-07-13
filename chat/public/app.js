@@ -355,13 +355,17 @@ function addAssistantShell(speaker, withTyping = true) {
   return row;
 }
 
-// Turn a raw subagent slug (e.g. "clara-writer") into a friendly display name,
-// preferring the known agent roster.
+// Turn a raw subagent slug (e.g. "clara-writer") into a full display name.
+// Prefer the known roster ("Clara — Writer"); otherwise prettify the whole
+// slug ("kira-image-generation-agent" → "Kira Image Generation Agent") —
+// never truncate to a fragment.
 function prettyAgent(slug) {
-  const id = String(slug || '').split('-')[0].toLowerCase();
+  const raw = String(slug || '').trim();
+  const id = raw.split('-')[0].toLowerCase();
   const a = state.agentById.get(id);
-  if (a) return a.name;
-  return id ? id[0].toUpperCase() + id.slice(1) : 'Agent';
+  if (a) return a.function ? `${a.name} — ${a.function}` : a.name;
+  if (!raw) return 'Subagent';
+  return raw.replace(/[-_]+/g, ' ').replace(/(^|\s)\S/g, (c) => c.toUpperCase());
 }
 
 function prettyServer(server) {
@@ -376,9 +380,11 @@ function prettyServer(server) {
 function classifyTool(d) {
   const name = String(d.name || '');
   const detail = String(d.detail || '');
-  if (name === 'Task' || d.sub) {
+  // Only a real Task call is an agent hand-off. Tools that a subagent runs
+  // (d.sub) keep their own type and are shown indented under the hand-off.
+  if (name === 'Task') {
     const [who, ...rest] = detail.split(' · ');
-    const agentName = prettyAgent(who || name);
+    const agentName = prettyAgent(who);
     return { kind: 'agent', type: 'AGENT', target: agentName, note: rest.join(' · '), initial: (agentName[0] || 'A').toUpperCase() };
   }
   if (name === 'Skill') return { kind: 'skill', type: 'SKILL', target: detail || 'skill' };
@@ -401,7 +407,7 @@ function clearActiveTrace(activity) {
 function addToolChip(activity, d, { active = false } = {}) {
   const c = classifyTool(d);
   const item = document.createElement('span');
-  item.className = `trace-item ti-${c.kind}`;
+  item.className = `trace-item ti-${c.kind}${d.sub ? ' sub' : ''}`;
   const glyph = c.kind === 'agent'
     ? `<span class="ti-avatar">${esc(c.initial)}</span>`
     : '<span class="ti-dot"></span>';

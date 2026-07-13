@@ -180,33 +180,39 @@ select#agent:focus { background-color: var(--panel); outline: none; }
 .welcome h1 { font-family: var(--fd); font-size: 34px; margin: 8px 0 10px; }
 .welcome p { color: var(--muted); }
 
-/* Lower message density: more breathing room between turns, a clearer
-   speaker line, and a lighter assistant surface. */
-.msg { margin-bottom: 26px; display: flex; flex-direction: column; }
-.msg.user { align-items: flex-end; }
+/* Airy reading layout: user turns stay as compact green bubbles, assistant
+   turns render as plain text directly on the page (no box), with generous
+   spacing between turns. */
+.msg { margin-bottom: 36px; display: flex; flex-direction: column; }
+.msg.user { align-items: flex-end; margin-bottom: 28px; }
 .speaker {
   display: inline-flex; align-items: center; gap: 6px;
   font-family: var(--fm); font-size: 10px; letter-spacing: .07em;
-  color: var(--muted); margin-bottom: 7px;
+  color: var(--muted); margin-bottom: 10px;
 }
 .assistant .speaker::before {
   content: ''; width: 6px; height: 6px; border-radius: 50%;
   background: var(--green); display: inline-block;
 }
 .bubble {
-  max-width: 82%;
-  border-radius: 14px;
-  padding: 13px 16px;
-  line-height: 1.62;
-  font-size: 14px;
+  line-height: 1.7;
+  font-size: 15px;
   word-wrap: break-word;
 }
-.user .bubble { background: var(--green); color: #fff; border-bottom-right-radius: 4px; white-space: pre-wrap; }
-.assistant .bubble { max-width: 100%; background: #fff; border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+.user .bubble {
+  max-width: 82%;
+  background: var(--green); color: #fff;
+  border-radius: 14px; border-bottom-right-radius: 4px;
+  padding: 11px 16px;
+  font-size: 14.5px; line-height: 1.55;
+  white-space: pre-wrap;
+}
+/* assistant text is unboxed — it reads like a document, not a chat card */
+.assistant .bubble { max-width: 100%; color: var(--text); }
 
 .bubble > :first-child { margin-top: 0; }
 .bubble > :last-child { margin-bottom: 0; }
-.bubble p { margin: 0 0 11px; }
+.bubble p { margin: 0 0 13px; }
 .bubble h1, .bubble h2, .bubble h3, .bubble h4, .bubble h5, .bubble h6 {
   font-family: var(--fd); font-weight: 600; line-height: 1.3; margin: 18px 0 8px;
 }
@@ -290,11 +296,19 @@ select#agent:focus { background-color: var(--panel); outline: none; }
 }
 .trace-item .ti-target {
   font-size: 11.5px; font-weight: 600; color: var(--text);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 380px;
 }
 .trace-item .ti-note {
   font-size: 10.5px; color: var(--muted);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px;
+}
+
+/* tools executed inside a subagent: indented under the AGENT hand-off */
+.trace-item.sub { margin-left: 26px; position: relative; }
+.trace-item.sub::before {
+  content: '↳';
+  position: absolute; left: -17px; top: 50%; transform: translateY(-54%);
+  color: #B6BCB6; font-size: 11px;
 }
 
 /* per-kind accents */
@@ -319,7 +333,7 @@ select#agent:focus { background-color: var(--panel); outline: none; }
 .trace-item.ti-agent.active::after { background: var(--warn); }
 @keyframes pulseDot { 0%,100% { opacity: .3; } 50% { opacity: 1; } }
 
-.meta { font-family: var(--fm); font-size: 10px; color: var(--muted); margin-top: 6px; }
+.meta { font-family: var(--fm); font-size: 10px; color: var(--muted); margin-top: 10px; }
 .gate { margin-top: 8px; padding: 8px 10px; border-radius: 8px; font-family: var(--fm); font-size: 11px; }
 .gate.warn { background: var(--warn-soft); color: var(--warn); }
 .gate.note { background: var(--panel); color: var(--muted); border: 1px dashed var(--border); }
@@ -350,6 +364,23 @@ select#agent:focus { background-color: var(--panel); outline: none; }
 }
 
 .composer-right { display: flex; align-items: center; gap: 6px; }
+
+#addTask {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--fb);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 7px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.15s, color 0.15s;
+}
+#addTask:hover:not(:disabled),
+#addTask:focus-visible { background-color: var(--panel); color: var(--text); outline: none; }
+#addTask:disabled { opacity: .45; cursor: default; }
 select#model {
   appearance: none;
   -webkit-appearance: none;
