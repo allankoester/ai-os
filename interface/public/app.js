@@ -3320,7 +3320,7 @@ function paintSettingsBody(el) {
           <div class="section-title">Env vault (machine-local)</div>
           <div id="provider-env-list" class="provider-env-list"></div>
           <button class="chip" type="button" data-act="provider-env-add">+ Add variable</button>
-          <div class="stat-note provider-note">Local runtime env vault: values are stored machine-local in <code>interface/provider-settings.json</code>, masked in the UI and not logged. They apply to interface + chat runtime startup defaults; existing shell env vars always win.</div>
+          <div class="stat-note provider-note">Local runtime env vault: values are stored machine-local in <code>interface/provider-settings.json</code>, masked in the UI and not logged. They apply to interface + chat runtime startup defaults and override same-name shell variables.</div>
         </div>
       </div>
       <div class="provider-actions">
@@ -3371,7 +3371,7 @@ function paintSettingsBody(el) {
           </span>
         </div>`).join('') || '<div class="stat-note">Plugin manager unavailable.</div>'}
       <div class="stat-note" style="margin-top:8px;white-space:normal">
-        MCP and permission plugins take effect in <strong>new</strong> Claude sessions. External plugins are config-only.
+        MCP and permission plugins take effect in <strong>new</strong> runtime sessions (Claude/OpenCode). External plugins are config-only.
       </div>
     </div>` : ''}
 
@@ -3830,7 +3830,7 @@ function openPluginDrawer(p, onSaved) {
       ${p.kind === 'mcp' ? `<div class="drawer-section">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <button class="btn btn-small" id="pf-test">Test MCP</button>
-          <span class="stat-note">Runs command once with timeout, returns sanitized summary only.</span>
+          <span class="stat-note">Runs a short MCP connectivity check with timeout, returns sanitized summary only.</span>
         </div>
         <pre class="run-log" id="pf-test-result" style="max-height:180px;margin-top:8px;display:none"></pre>
       </div>` : ''}

@@ -30,8 +30,18 @@ const REGISTRY = [
     defaults: { command: 'npx', args: ['-y', '@upstash/context7-mcp'], env: {} },
   },
   {
+    id: 'twenty', name: 'Twenty CRM', kind: 'mcp',
+    description: 'Streamable HTTP MCP connection to the self-hosted Twenty CRM API endpoint.',
+    defaults: {
+      type: 'streamable-http',
+      url: 'https://crm.smapas.com/mcp',
+      headers: { Authorization: 'Bearer ${TWENTY_API_KEY}' },
+      envKeys: ['TWENTY_API_KEY'],
+    },
+  },
+  {
     id: 'mcp-custom', name: 'Custom MCP Server', kind: 'mcp',
-    description: 'A free slot for any additional MCP server (e.g. a company API). Configure command, args and env — the entry is written to .mcp.json.',
+    description: 'A free slot for any additional MCP server (e.g. a company API). Configure command/args/env or streamable-http url/headers — the entry is written to .mcp.json.',
     defaults: { command: '', args: [], env: {} },
   },
   {
@@ -98,6 +108,25 @@ export function createPluginManager({ rootDir }) {
       const p = state.plugins[def.id];
       if (!p?.enabled) continue;
       const cfg = { ...def.defaults, ...(p.config || {}) };
+      const isRemote = String(cfg.type || '').trim() === 'streamable-http' || (!cfg.command && cfg.url);
+      if (isRemote) {
+        const url = String(cfg.url || '').trim();
+        if (!url) continue;
+        const headers = cfg.headers && typeof cfg.headers === 'object' && !Array.isArray(cfg.headers)
+          ? Object.fromEntries(
+            Object.entries(cfg.headers)
+              .filter(([k, v]) => String(k || '').trim() && typeof v === 'string')
+              .map(([k, v]) => [String(k).trim(), v]),
+          )
+          : null;
+        mcp.mcpServers[def.id] = {
+          type: 'streamable-http',
+          url,
+          ...(headers && Object.keys(headers).length ? { headers } : {}),
+        };
+        managed.push(def.id);
+        continue;
+      }
       if (!cfg.command) continue; // unconfigured custom slot
       mcp.mcpServers[def.id] = {
         command: cfg.command,

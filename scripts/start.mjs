@@ -52,6 +52,15 @@ function readProviderSettings() {
   }
 }
 
+function parseEnvVaultKeys(raw) {
+  return new Set(
+    String(raw || '')
+      .split(',')
+      .map((k) => k.trim())
+      .filter((k) => /^[A-Z_][A-Z0-9_]*$/.test(k)),
+  );
+}
+
 function logHeader(title) {
   console.log(`\n== ${title} ==`);
 }
@@ -136,6 +145,7 @@ async function main() {
     STEADYMADE_KNOWLEDGE_BACKEND: process.env.STEADYMADE_KNOWLEDGE_BACKEND || 'fs',
   };
   const providerSettings = readProviderSettings();
+  const inheritedEnvVaultKeys = parseEnvVaultKeys(process.env.STEADYMADE_ENV_VAULT_KEYS);
   if (process.env.STEADYMADE_PROVIDER_MODE === undefined && providerSettings.runtimeMode) {
     env.STEADYMADE_PROVIDER_MODE = providerSettings.runtimeMode;
   }
@@ -146,9 +156,22 @@ async function main() {
     env.CHAT_CLI_BRIDGE_ENABLED = providerSettings.cliBridgeEnabled ? '1' : '0';
   }
   const envVaultKeys = [];
+
+  // If this process was started via a previous runtime restart, `process.env`
+  // may already contain old env-vault values. We only treat keys listed in the
+  // inherited marker as vault-managed and refresh/remove them from the current
+  // provider-settings source of truth.
+  for (const key of inheritedEnvVaultKeys) {
+    if (!(key in (providerSettings.envVault || {}))) {
+      delete env[key];
+    }
+  }
+
   for (const [key, value] of Object.entries(providerSettings.envVault || {})) {
     envVaultKeys.push(key);
-    if (process.env[key] === undefined) env[key] = value;
+    // Env vault is the source of truth for configured keys. This prevents stale
+    // shell/session variables from overriding saved local credentials.
+    env[key] = value;
   }
   env.STEADYMADE_ENV_VAULT_KEYS = envVaultKeys.join(',');
 

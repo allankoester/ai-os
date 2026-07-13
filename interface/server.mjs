@@ -338,11 +338,6 @@ function readOptionalDeleteBody(req) {
 
 async function testMcpPlugin(plugin) {
   const cfg = { ...(plugin?.config || {}) };
-  const command = String(cfg.command || '').trim();
-  if (!command) return { errors: ['mcp plugin command is empty'] };
-  const args = Array.isArray(cfg.args)
-    ? cfg.args.map((a) => String(a))
-    : String(cfg.args || '').split(/\s+/).filter(Boolean);
   const envAdd = cfg.env && typeof cfg.env === 'object' && !Array.isArray(cfg.env) ? cfg.env : {};
   const envKeys = Array.isArray(cfg.envKeys)
     ? cfg.envKeys.map((k) => String(k || '').trim()).filter((k) => PROVIDER_ENV_KEY_RE.test(k))
@@ -370,6 +365,88 @@ async function testMcpPlugin(plugin) {
     const val = testEnv[key];
     if (typeof val === 'string' && val) secretValues.add(val);
   }
+
+  const resolveTemplate = (value) => String(value || '')
+    .replace(/\$\{([A-Z_][A-Z0-9_]*)\}/g, (_, key) => (typeof testEnv[key] === 'string' ? testEnv[key] : ''))
+    .replace(/\{env:([A-Z_][A-Z0-9_]*)\}/g, (_, key) => (typeof testEnv[key] === 'string' ? testEnv[key] : ''));
+
+  const isRemote = String(cfg.type || '').trim() === 'streamable-http' || (!cfg.command && cfg.url);
+  if (isRemote) {
+    const url = String(cfg.url || '').trim();
+    if (!url) return { errors: ['mcp streamable-http plugin url is empty'] };
+    const headers = {};
+    const rawHeaders = cfg.headers && typeof cfg.headers === 'object' && !Array.isArray(cfg.headers)
+      ? cfg.headers
+      : {};
+    for (const [name, rawValue] of Object.entries(rawHeaders)) {
+      const key = String(name || '').trim();
+      if (!key) continue;
+      const value = resolveTemplate(rawValue);
+      if (!value) continue;
+      headers[key] = value;
+      secretValues.add(value);
+    }
+    const started = Date.now();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), MCP_TEST_TIMEOUT_MS);
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json, text/event-stream',
+          'Content-Type': 'application/json',
+          ...headers,
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'initialize',
+          params: {
+            protocolVersion: '2025-03-26',
+            capabilities: {},
+            clientInfo: { name: 'mcp-plugin-test', version: '1.0.0' },
+          },
+        }),
+        signal: controller.signal,
+      });
+      const bodyText = await response.text();
+      const responseHeaders = {};
+      for (const [name, value] of response.headers.entries()) {
+        const lower = name.toLowerCase();
+        if (lower === 'content-type' || lower === 'mcp-session-id' || lower === 'www-authenticate') {
+          responseHeaders[name] = value;
+        }
+      }
+      return {
+        ok: response.ok,
+        status: response.status,
+        statusText: response.statusText,
+        timedOut: false,
+        headers: responseHeaders,
+        bodyPreview: truncateOutput(maskSecretsInText(bodyText, secretValues), 1200),
+        durationMs: Date.now() - started,
+      };
+    } catch (err) {
+      const timedOut = err?.name === 'AbortError';
+      return {
+        ok: false,
+        status: null,
+        statusText: timedOut ? 'Timeout' : 'Error',
+        timedOut,
+        headers: {},
+        bodyPreview: truncateOutput(maskSecretsInText(String(err?.message || err), secretValues), 1200),
+        durationMs: Date.now() - started,
+      };
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  const command = String(cfg.command || '').trim();
+  if (!command) return { errors: ['mcp plugin command is empty'] };
+  const args = Array.isArray(cfg.args)
+    ? cfg.args.map((a) => String(a))
+    : String(cfg.args || '').split(/\s+/).filter(Boolean);
 
   return await new Promise((resolve) => {
     const started = Date.now();
