@@ -50,8 +50,9 @@ const VIEW_TITLES = {
   projects: 'Projects',
   map: 'Agent Map',
   knowledge: 'Knowledge Docs',
-  workflows: 'Workflows',
-  scheduler: 'Scheduler',
+  flows: 'Automations',
+  workflows: 'Automations',
+  scheduler: 'Automations',
   skills: 'Skill Hub',
   departments: 'Departments',
   artifacts: 'Artifacts',
@@ -284,6 +285,9 @@ function openChat(agentId, draftMessage) {
 }
 
 function setView(view) {
+  // Workflows and the Scheduler are fused into one "Automations" view; keep the
+  // old view keys working for existing links (search, command center, etc.).
+  if (view === 'workflows' || view === 'scheduler') view = 'flows';
   state.view = view;
   state.selectedAgent = state.selectedFolder = null;
   if (mapState.observer && view !== 'map') { mapState.observer.disconnect(); mapState.observer = null; }
@@ -308,7 +312,7 @@ function setView(view) {
   el.className = 'view view-enter';
   el.innerHTML = '';
   ({ command: renderCommand, projects: renderProjects, map: renderMap, knowledge: renderKnowledge,
-     workflows: renderWorkflows, scheduler: renderScheduler, skills: renderSkills,
+     flows: renderFlows, skills: renderSkills,
       departments: renderDepartments,
        artifacts: renderArtifacts, settings: renderSettings }[view])(el);
 }
@@ -383,6 +387,20 @@ function renderCommand(el) {
         <div class="stat-value" id="cc-usage-cost">…</div>
         <div class="stat-note" id="cc-usage-note">Loading usage summary…</div>
       </div>
+      <div class="card stat-card stat-link" data-goto="flows" title="Open Automations">
+        <div class="mono-label">AUTOMATIONS</div>
+        <div class="stat-value" id="cc-auto-value">…</div>
+        <div class="stat-note" id="cc-auto-note">Loading scheduler…</div>
+      </div>
+    </div>
+
+    <div id="cc-activity" class="card cc-activity">
+      <div class="section-title" style="display:flex;align-items:center;gap:8px">
+        <span class="cc-live-dot" id="cc-live-dot"></span>
+        <span style="flex:1">Live Activity &amp; Run History</span>
+        <button class="chip" data-goto="flows">MANAGE</button>
+      </div>
+      <div id="cc-activity-body"><div class="stat-note">Loading run history…</div></div>
     </div>
 
     <div class="cc-cols">
@@ -442,6 +460,106 @@ function renderCommand(el) {
   $$('[data-art-open]', el).forEach((b) => b.addEventListener('click', () =>
     window.open('/api/artifact?path=' + encodeURIComponent(b.dataset.artOpen), '_blank')));
   refreshCommandUsageCard(el);
+  refreshCommandActivity(el);
+}
+
+// ---- Command Center: n8n-style live activity + run history ----------------
+
+let ccActivityTimer = null;
+
+function runStatusMeta(status) {
+  switch (status) {
+    case 'ok': return { cls: 'ok', label: 'Success' };
+    case 'running': return { cls: 'running', label: 'Running' };
+    case 'timeout': return { cls: 'warn', label: 'Timeout' };
+    case 'stopped': return { cls: 'warn', label: 'Stopped' };
+    case 'error': return { cls: 'error', label: 'Error' };
+    default: return { cls: 'idle', label: String(status || 'unknown').replace(/^\w/, (c) => c.toUpperCase()) };
+  }
+}
+
+function runRowHtml(r) {
+  const m = runStatusMeta(r.status);
+  const dur = r.endedAt ? Math.max(1, Math.round((r.endedAt - r.startedAt) / 1000)) + 's' : '…';
+  return `<div class="run-row">
+      <span class="run-dot run-${m.cls}"></span>
+      <span class="run-name">${esc(r.jobName || 'Job')}</span>
+      <span class="run-trigger">${esc(r.trigger || '—')}</span>
+      <span class="run-when">${r.startedAt ? timeAgo(r.startedAt) : '—'}</span>
+      <span class="run-dur">${dur}</span>
+      <span class="run-pill run-${m.cls}">${m.label}</span>
+      <button class="chip" data-log="${esc(r.id)}">LOG</button>
+    </div>`;
+}
+
+async function refreshCommandActivity(el) {
+  clearTimeout(ccActivityTimer);
+  const body = $('#cc-activity-body', el);
+  const dot = $('#cc-live-dot', el);
+  const valueEl = $('#cc-auto-value', el);
+  const noteEl = $('#cc-auto-note', el);
+  if (!body) return;
+
+  let data;
+  try {
+    data = await apiJson('/api/scheduler');
+  } catch {
+    if (state.view !== 'command') return;
+    body.innerHTML = '<div class="stat-note">Scheduler unavailable. Start the interface server to see run history.</div>';
+    if (valueEl) valueEl.textContent = '—';
+    if (noteEl) noteEl.textContent = 'Scheduler offline';
+    return;
+  }
+  if (state.view !== 'command') return;
+
+  const jobs = data.jobs || [];
+  const runs = data.runs || [];
+  const running = runs.filter((r) => r.status === 'running');
+  const anyRunning = jobs.some((j) => j.running) || running.length > 0;
+  const enabled = jobs.filter((j) => j.enabled).length;
+
+  if (valueEl) valueEl.textContent = String(jobs.length);
+  if (noteEl) noteEl.textContent = `${enabled} on · ${running.length} running`;
+  if (dot) dot.classList.toggle('live', anyRunning);
+
+  const history = runs.filter((r) => r.status !== 'running').slice(0, 12);
+
+  body.innerHTML = `
+    ${running.length ? `<div class="run-live-strip">
+      <span class="mono-label" style="color:var(--apricot-deep)">RUNNING NOW</span>
+      ${running.map(runRowHtml).join('')}
+    </div>` : ''}
+    ${history.length ? `<div class="run-list">${history.map(runRowHtml).join('')}</div>`
+      : (running.length ? '' : '<div class="stat-note">No runs yet. Scheduled and manual job runs appear here.</div>')}
+  `;
+
+  $$('[data-log]', body).forEach((b) => b.addEventListener('click', () => openRunLog(b.dataset.log, runs)));
+
+  if (anyRunning && state.view === 'command') {
+    ccActivityTimer = setTimeout(() => refreshCommandActivity(el), 5000);
+  }
+}
+
+async function openRunLog(runId, runs) {
+  const run = (runs || []).find((r) => r.id === runId);
+  const res = await fetch(`/api/scheduler/runs/${runId}/log`);
+  let text = res.ok ? await res.text() : '';
+  if (!text.trim()) {
+    text = run
+      ? [`status: ${run.status}`, run.exitCode != null ? `exit code: ${run.exitCode}` : null, '', run.summary || (run.status === 'running' ? 'Run is still in progress — reopen this log when it finishes.' : '(no output captured)')].filter((l) => l !== null).join('\n')
+      : 'Log not found.';
+  }
+  const m = run ? runStatusMeta(run.status) : { label: '' };
+  openDrawer(`
+    <div class="drawer-head">
+      <button class="drawer-close">✕</button>
+      <div class="drawer-dept">RUN LOG</div>
+      <div class="drawer-name">${esc(run ? run.jobName : runId)}</div>
+      <div class="drawer-role">${run ? fmtWhen(run.startedAt) + ' · ' + m.label + (run.endedAt ? ' · ' + Math.max(1, Math.round((run.endedAt - run.startedAt) / 1000)) + 's' : '') : ''}</div>
+    </div>
+    <div class="drawer-body">
+      <pre class="run-log">${esc(text)}</pre>
+    </div>`);
 }
 
 async function refreshCommandUsageCard(el) {
@@ -1598,71 +1716,83 @@ function openNewDocDrawer(defaultFolder) {
   });
 }
 
-// ---------------------------------------------------------------- Workflows
+// ------------------------------------------------------- Automations (fused)
+// Workflows (agent chains) and the Scheduler (cron jobs) share one view. The
+// left rail groups everything by department (like the Departments view); the
+// right column shows that group's workflows and scheduled jobs. Run history
+// lives in the Command Center.
 
-function renderWorkflows(el) {
-  const deletedBuiltins = WORKFLOWS.filter((w) => flowsCfg.deleted.includes(w.id));
-  el.innerHTML = `<div class="view-pad">
-    <div class="card" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px">
-      <div style="flex:1;min-width:220px">
-        <div class="section-title" style="margin:0 0 4px">Agent Workflows</div>
-        <div class="stat-note" style="white-space:normal">Edit the steps of any workflow, create new ones or delete them. Changes apply to the scheduler's workflow selection and Danny's routing view.</div>
+const flowsState = { group: 'all', data: null, el: null, timer: null };
+
+// Home department for grouping. Built-ins use an explicit map; custom workflows
+// fall back to the most-represented department in their agent chain.
+const WF_DEPT = {
+  strategy_review: 'strategy', proposal: 'sales', marketing_content: 'marketing',
+  calendar_planning: 'marketing', document: 'documents', creative_image: 'creative',
+  knowledge_retrieval: 'knowledge', knowledge_intake: 'knowledge', setup_profile: 'knowledge',
+  security_audit: 'it', dev_spec: 'it', multi_department: 'core',
+};
+function workflowDept(w) {
+  if (WF_DEPT[w.id]) return WF_DEPT[w.id];
+  const counts = {};
+  for (const step of w.chain) {
+    const a = agentById(step);
+    if (a && a.dept !== 'core') counts[a.dept] = (counts[a.dept] || 0) + 1;
+  }
+  let best = 'core';
+  let n = 0;
+  for (const d of DEPARTMENTS.map((x) => x.id)) if ((counts[d] || 0) > n) { best = d; n = counts[d]; }
+  return best;
+}
+function jobDept(j) {
+  if (j.workflow) { const w = FLOWS.find((x) => x.id === j.workflow); if (w) return workflowDept(w); }
+  if (j.agent) { const a = agentById(String(j.agent).split('-')[0]); if (a) return a.dept; }
+  return 'core';
+}
+
+function workflowCardHtml(w) {
+  return `<div class="card wf-card">
+      <div class="wf-head">
+        <div class="wf-name">${esc(w.name)}</div>
+        <span class="badge badge-dark">${esc(w.id.toUpperCase())}</span>
+        ${w.builtin ? '' : '<span class="badge badge-gray">CUSTOM</span>'}
+        ${w.overridden ? '<span class="badge badge-apricot">EDITED</span>' : ''}
+        <span style="margin-left:auto;display:flex;gap:6px">
+          <button class="chip" data-wf-edit="${esc(w.id)}">EDIT</button>
+          ${w.overridden ? `<button class="chip" data-wf-reset="${esc(w.id)}">RESET</button>` : ''}
+          <button class="chip" data-wf-del="${esc(w.id)}" style="color:var(--apricot-deep)">DELETE</button>
+        </span>
       </div>
-      <button class="btn btn-primary btn-small" data-wf-new>New Workflow</button>
-    </div>
-    ${FLOWS.map((w) => `
-      <div class="card wf-card">
-        <div class="wf-head">
-          <div class="wf-name">${esc(w.name)}</div>
-          <span class="badge badge-dark">${esc(w.id.toUpperCase())}</span>
-          ${w.builtin ? '' : '<span class="badge badge-gray">CUSTOM</span>'}
-          ${w.overridden ? '<span class="badge badge-apricot">EDITED</span>' : ''}
-          <span style="margin-left:auto;display:flex;gap:6px">
-            <button class="chip" data-wf-edit="${esc(w.id)}">EDIT</button>
-            ${w.overridden ? `<button class="chip" data-wf-reset="${esc(w.id)}">RESET</button>` : ''}
-            <button class="chip" data-wf-del="${esc(w.id)}" style="color:var(--apricot-deep)">DELETE</button>
-          </span>
-        </div>
-        <div class="wf-desc">${esc(w.desc)}</div>
-        <div class="wf-chain">
-          ${w.chain.map((stepId, i) => {
-            const a = agentById(stepId);
-            const arrow = i < w.chain.length - 1 ? '<span class="wf-arrow">→</span>' : '';
-            if (a) {
-              return `<button class="wf-step ${stepId === 'danny' ? 'dark' : ''}" data-agent="${a.id}">
-                <span class="wf-step-name">${esc(a.name)}</span>
-                <span class="wf-step-role">${esc(a.title)}</span>
-              </button>${arrow}`;
-            }
-            const t = TERMINALS[stepId] || { name: stepId, role: 'step' };
-            return `<span class="wf-step terminal">
-              <span class="wf-step-name">${esc(t.name)}</span>
-              <span class="wf-step-role">${esc(t.role)}</span>
-            </span>${arrow}`;
-          }).join('')}
-        </div>
-      </div>`).join('')}
-    ${deletedBuiltins.length ? `
-    <div class="card">
-      <div class="section-title">Deleted Built-in Workflows</div>
-      ${deletedBuiltins.map((w) => `
-        <div class="list-row" style="cursor:default">
-          <span class="badge badge-gray">DELETED</span>
-          <span class="list-title">${esc(w.name)}</span>
-          <button class="chip" data-wf-restore="${esc(w.id)}">RESTORE</button>
-        </div>`).join('')}
-    </div>` : ''}
-  </div>`;
+      <div class="wf-desc">${esc(w.desc)}</div>
+      <div class="wf-chain">
+        ${w.chain.map((stepId, i) => {
+          const a = agentById(stepId);
+          const arrow = i < w.chain.length - 1 ? '<span class="wf-arrow">→</span>' : '';
+          if (a) {
+            return `<button class="wf-step ${stepId === 'danny' ? 'dark' : ''}" data-agent="${a.id}">
+              <span class="wf-step-name">${esc(a.name)}</span>
+              <span class="wf-step-role">${esc(a.title)}</span>
+            </button>${arrow}`;
+          }
+          const t = TERMINALS[stepId] || { name: stepId, role: 'step' };
+          return `<span class="wf-step terminal">
+            <span class="wf-step-name">${esc(t.name)}</span>
+            <span class="wf-step-role">${esc(t.role)}</span>
+          </span>${arrow}`;
+        }).join('')}
+      </div>
+    </div>`;
+}
 
-  $$('[data-agent]', el).forEach((b) => b.addEventListener('click', () => { setView('map'); selectMapAgent(b.dataset.agent); }));
-  $('[data-wf-new]', el).addEventListener('click', () => openWorkflowDrawer(null));
-  $$('[data-wf-edit]', el).forEach((b) => b.addEventListener('click', () => openWorkflowDrawer(FLOWS.find((w) => w.id === b.dataset.wfEdit))));
-  $$('[data-wf-reset]', el).forEach((b) => b.addEventListener('click', async () => {
+function bindWorkflowCardHandlers(scope) {
+  $$('[data-agent]', scope).forEach((b) => b.addEventListener('click', () => { setView('map'); selectMapAgent(b.dataset.agent); }));
+  $$('[data-wf-edit]', scope).forEach((b) => b.addEventListener('click', () => openWorkflowDrawer(FLOWS.find((w) => w.id === b.dataset.wfEdit))));
+  $$('[data-wf-reset]', scope).forEach((b) => b.addEventListener('click', async () => {
     delete flowsCfg.overrides[b.dataset.wfReset];
-    try { await saveFlowsCfg(); toast('WORKFLOW RESET TO DEFAULT'); renderWorkflows(el); }
+    try { await saveFlowsCfg(); toast('WORKFLOW RESET TO DEFAULT'); paintFlows(); }
     catch (e) { toast(e.message.toUpperCase(), true); }
   }));
-  $$('[data-wf-del]', el).forEach((b) => b.addEventListener('click', async () => {
+  $$('[data-wf-del]', scope).forEach((b) => b.addEventListener('click', async () => {
     const w = FLOWS.find((x) => x.id === b.dataset.wfDel);
     if (!confirm(`Delete workflow "${w.name}"?${w.builtin ? '\n\nBuilt-in workflows can be restored later.' : ''}`)) return;
     if (w.builtin) {
@@ -1671,14 +1801,142 @@ function renderWorkflows(el) {
     } else {
       flowsCfg.custom = flowsCfg.custom.filter((x) => x.id !== w.id);
     }
-    try { await saveFlowsCfg(); toast('WORKFLOW DELETED'); renderWorkflows(el); }
+    try { await saveFlowsCfg(); toast('WORKFLOW DELETED'); paintFlows(); }
     catch (e) { toast(e.message.toUpperCase(), true); }
   }));
-  $$('[data-wf-restore]', el).forEach((b) => b.addEventListener('click', async () => {
+  $$('[data-wf-restore]', scope).forEach((b) => b.addEventListener('click', async () => {
     flowsCfg.deleted = flowsCfg.deleted.filter((id) => id !== b.dataset.wfRestore);
-    try { await saveFlowsCfg(); toast('WORKFLOW RESTORED'); renderWorkflows(el); }
+    try { await saveFlowsCfg(); toast('WORKFLOW RESTORED'); paintFlows(); }
     catch (e) { toast(e.message.toUpperCase(), true); }
   }));
+}
+
+function jobRowHtml(j) {
+  return `<div class="list-row" style="cursor:default">
+      <span class="badge ${j.enabled ? 'badge-green' : 'badge-gray'}">${j.enabled ? 'ON' : j.scheduleType === 'once' && j.lastRun ? 'DONE' : 'OFF'}</span>
+      <span class="list-title">${esc(j.name)}${j.running ? ' <span class="badge badge-apricot">RUNNING</span>' : ''}</span>
+      <span class="list-meta mono-label">${j.scheduleType === 'once' ? 'once · ' + fmtWhen(j.runAt) : esc(j.schedule)}</span>
+      <span class="list-meta">${esc(j.workflow || '')}${j.workflow ? ' · ' : ''}${esc(j.agent || 'danny (main)')}</span>
+      <span class="list-meta">next: ${j.nextRun ? fmtWhen(j.nextRun) : j.enabled ? '—' : 'paused'}</span>
+      <span class="list-meta">${j.lastRun ? 'last: ' + esc(j.lastRun.status) : 'never ran'}</span>
+      <span style="display:flex;gap:6px">
+        <button class="chip" data-run="${j.id}">RUN NOW</button>
+        <button class="chip" data-edit="${j.id}">EDIT</button>
+        <button class="chip" data-toggle="${j.id}">${j.enabled ? 'PAUSE' : 'ENABLE'}</button>
+        <button class="chip" data-del="${j.id}" style="color:var(--apricot-deep)">DELETE</button>
+      </span>
+    </div>`;
+}
+
+function bindJobHandlers(scope, jobs) {
+  $$('[data-edit]', scope).forEach((b) => b.addEventListener('click', () => openJobDrawer(jobs.find((j) => j.id === b.dataset.edit))));
+  $$('[data-run]', scope).forEach((b) => b.addEventListener('click', async () => {
+    try { await apiJson(`/api/scheduler/jobs/${b.dataset.run}/run`, { method: 'POST' }); toast('JOB STARTED'); setTimeout(refreshFlows, 800); }
+    catch (e) { toast(e.message.toUpperCase(), true); }
+  }));
+  $$('[data-toggle]', scope).forEach((b) => b.addEventListener('click', async () => {
+    const j = jobs.find((x) => x.id === b.dataset.toggle);
+    try { await apiJson(`/api/scheduler/jobs/${j.id}`, { method: 'PUT', body: JSON.stringify({ enabled: !j.enabled }) }); refreshFlows(); }
+    catch (e) { toast(e.message.toUpperCase(), true); }
+  }));
+  $$('[data-del]', scope).forEach((b) => b.addEventListener('click', async () => {
+    const j = jobs.find((x) => x.id === b.dataset.del);
+    if (!confirm(`Delete job "${j.name}"?`)) return;
+    try { await apiJson(`/api/scheduler/jobs/${j.id}`, { method: 'DELETE' }); toast('JOB DELETED'); refreshFlows(); }
+    catch (e) { toast(e.message.toUpperCase(), true); }
+  }));
+}
+
+function renderFlows(el) {
+  flowsState.el = el;
+  el.innerHTML = '<div class="view-pad"><div class="card">Loading automations…</div></div>';
+  refreshFlows();
+}
+
+async function refreshFlows() {
+  try {
+    flowsState.data = await apiJson('/api/scheduler');
+  } catch (e) {
+    flowsState.data = { jobs: [], runs: [], error: e.message };
+  }
+  paintFlows();
+}
+
+function paintFlows() {
+  const el = flowsState.el;
+  if (!el || state.view !== 'flows') return;
+  const jobs = (flowsState.data && flowsState.data.jobs) || [];
+  const schedErr = flowsState.data && flowsState.data.error;
+  const deletedBuiltins = WORKFLOWS.filter((w) => flowsCfg.deleted.includes(w.id));
+
+  const groups = DEPARTMENTS.map((d) => ({
+    id: d.id, name: d.name, note: d.note,
+    flows: FLOWS.filter((w) => workflowDept(w) === d.id),
+    jobs: jobs.filter((j) => jobDept(j) === d.id),
+  })).filter((g) => g.flows.length || g.jobs.length);
+
+  const active = flowsState.group;
+  const grp = groups.find((g) => g.id === active);
+  const shownFlows = active === 'all' ? FLOWS : (grp ? grp.flows : []);
+  const shownJobs = active === 'all' ? jobs : (grp ? grp.jobs : []);
+  const activeName = active === 'all' ? 'All Automations' : (deptById(active)?.name || 'Automations');
+
+  el.innerHTML = `<div class="flows-layout">
+    <aside class="flows-rail">
+      <button class="flows-group ${active === 'all' ? 'active' : ''}" data-group="all">
+        <span class="fg-name">All Automations</span>
+        <span class="fg-count">${FLOWS.length} flows · ${jobs.length} jobs</span>
+      </button>
+      ${groups.map((g) => `
+        <button class="flows-group ${active === g.id ? 'active' : ''}" data-group="${g.id}">
+          <span class="fg-name">${esc(g.name)}</span>
+          <span class="fg-sub">${esc(g.note)}</span>
+          <span class="fg-count">${g.flows.length} flow${g.flows.length === 1 ? '' : 's'} · ${g.jobs.length} job${g.jobs.length === 1 ? '' : 's'}</span>
+        </button>`).join('')}
+    </aside>
+
+    <div class="flows-main">
+      <div class="card flows-head">
+        <div style="flex:1;min-width:200px">
+          <div class="section-title" style="margin:0 0 2px">${esc(activeName)}</div>
+          <div class="stat-note" style="white-space:normal">${shownFlows.length} workflow${shownFlows.length === 1 ? '' : 's'} · ${shownJobs.length} scheduled job${shownJobs.length === 1 ? '' : 's'}. Jobs run <code>claude -p</code> headless while the server is up.</div>
+        </div>
+        <button class="btn btn-primary btn-small" data-act="new-wf">New Workflow</button>
+        <button class="btn btn-small" data-act="new-job">New Job</button>
+        <button class="btn btn-ghost btn-small" data-act="refresh">Refresh</button>
+      </div>
+
+      <div class="flows-section-label">Workflows</div>
+      ${shownFlows.length ? shownFlows.map(workflowCardHtml).join('') : '<div class="card stat-note">No workflows in this group.</div>'}
+
+      <div class="flows-section-label">Scheduled Jobs${schedErr ? ' · <span style="color:var(--apricot-deep)">scheduler offline</span>' : ''}</div>
+      <div class="card">
+        ${shownJobs.length ? shownJobs.map(jobRowHtml).join('') : '<div class="stat-note" style="white-space:normal">No scheduled jobs in this group. Create one, for example a Monday-morning LinkedIn draft by Clara, or a weekly knowledge-inbox review by Mara.</div>'}
+        <div class="stat-note" style="margin-top:10px;white-space:normal">Cron format: <code>min hour day month weekday</code> — e.g. <code>0 7 * * 1-5</code> = weekdays 07:00. Run history is in the Command Center.</div>
+      </div>
+
+      ${deletedBuiltins.length && active === 'all' ? `<div class="flows-section-label">Deleted Built-in Workflows</div>
+      <div class="card">
+        ${deletedBuiltins.map((w) => `<div class="list-row" style="cursor:default">
+          <span class="badge badge-gray">DELETED</span>
+          <span class="list-title">${esc(w.name)}</span>
+          <button class="chip" data-wf-restore="${esc(w.id)}">RESTORE</button>
+        </div>`).join('')}
+      </div>` : ''}
+    </div>
+  </div>`;
+
+  $$('[data-group]', el).forEach((b) => b.addEventListener('click', () => { flowsState.group = b.dataset.group; paintFlows(); }));
+  $('[data-act="new-wf"]', el)?.addEventListener('click', () => openWorkflowDrawer(null));
+  $('[data-act="new-job"]', el)?.addEventListener('click', () => openJobDrawer(null));
+  $('[data-act="refresh"]', el)?.addEventListener('click', refreshFlows);
+  bindWorkflowCardHandlers(el);
+  bindJobHandlers(el, jobs);
+
+  clearTimeout(flowsState.timer);
+  if (jobs.some((j) => j.running)) {
+    flowsState.timer = setTimeout(() => { if (state.view === 'flows') refreshFlows(); }, 5000);
+  }
 }
 
 // Workflow editor drawer: name, description, and a step-by-step chain editor
@@ -1759,7 +2017,7 @@ function openWorkflowDrawer(flow) {
       await saveFlowsCfg();
       closeDrawer();
       toast(isNew ? 'WORKFLOW CREATED' : 'WORKFLOW SAVED');
-      if (state.view === 'workflows') renderWorkflows($('#view'));
+      if (state.view === 'flows') paintFlows();
     } catch (e) { toast(e.message.toUpperCase(), true); }
   });
 }
@@ -1793,9 +2051,8 @@ function renderDepartments(el) {
   $$('[data-agent]', el).forEach((b) => b.addEventListener('click', () => openAgentDrawer(b.dataset.agent)));
 }
 
-// ---------------------------------------------------------------- Scheduler
-
-const schedState = { data: null, el: null, timer: null };
+// ------------------------------------------------ Scheduler helpers + job drawer
+// Shared by the Automations view and the Command Center run history.
 
 const AGENT_OPTIONS = AGENTS
   .filter((a) => a.promptPath.startsWith('.claude/agents/'))
@@ -1829,144 +2086,6 @@ function fmtWhen(ts) {
   return ts ? new Date(ts).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' }) : '—';
 }
 
-function renderScheduler(el) {
-  schedState.el = el;
-  el.innerHTML = '<div class="view-pad"><div class="card">Loading scheduler…</div></div>';
-  refreshScheduler();
-}
-
-async function refreshScheduler() {
-  try {
-    schedState.data = await apiJson('/api/scheduler');
-  } catch (e) {
-    schedState.el.innerHTML = `<div class="view-pad"><div class="card">Scheduler unavailable: ${esc(e.message)}</div></div>`;
-    return;
-  }
-  paintScheduler();
-}
-
-function paintScheduler() {
-  const el = schedState.el;
-  if (!el || state.view !== 'scheduler') return;
-  const { jobs, runs } = schedState.data;
-
-  el.innerHTML = `
-  <div class="view-pad simple-list" style="max-width:980px">
-    <div class="card">
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">
-        <div class="section-title" style="flex:1;margin:0">Scheduled Jobs (cron → headless Claude runs)</div>
-        <button class="btn btn-primary btn-small" data-act="new-job">New Job</button>
-        <button class="btn btn-ghost btn-small" data-act="refresh">Refresh</button>
-      </div>
-      ${jobs.length ? jobs.map((j) => `
-        <div class="list-row" style="cursor:default">
-          <span class="badge ${j.enabled ? 'badge-green' : 'badge-gray'}">${j.enabled ? 'ON' : j.scheduleType === 'once' && j.lastRun ? 'DONE' : 'OFF'}</span>
-          <span class="list-title">${esc(j.name)}${j.running ? ' <span class="badge badge-apricot">RUNNING</span>' : ''}</span>
-          <span class="list-meta mono-label">${j.scheduleType === 'once' ? 'once · ' + fmtWhen(j.runAt) : esc(j.schedule)}</span>
-          <span class="list-meta">${esc(j.workflow || '')}${j.workflow ? ' · ' : ''}${esc(j.agent || 'danny (main)')}</span>
-          <span class="list-meta">next: ${j.nextRun ? fmtWhen(j.nextRun) : j.enabled ? '—' : 'paused'}</span>
-          <span class="list-meta">${j.lastRun ? 'last: ' + esc(j.lastRun.status) : 'never ran'}</span>
-          <span style="display:flex;gap:6px">
-            <button class="chip" data-run="${j.id}">RUN NOW</button>
-            <button class="chip" data-edit="${j.id}">EDIT</button>
-            <button class="chip" data-toggle="${j.id}">${j.enabled ? 'PAUSE' : 'ENABLE'}</button>
-            <button class="chip" data-del="${j.id}" style="color:var(--apricot-deep)">DELETE</button>
-          </span>
-        </div>`).join('') : '<div class="stat-note">No jobs yet. Create one — e.g. a Monday-morning LinkedIn draft by Clara, or a weekly knowledge-inbox review by Mara.</div>'}
-      <div class="stat-note" style="margin-top:10px">
-        Jobs run <code>claude -p</code> headless in this project (CLAUDE.md + subagents loaded), while this server is running.
-        Cron format: <code>min hour day month weekday</code> — e.g. <code>0 7 * * 1-5</code> = weekdays 07:00.
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="section-title">Run History</div>
-      ${runs.length ? runs.map((r) => `
-        <div class="list-row" style="cursor:default;align-items:flex-start">
-          ${runBadge(r.status)}
-          <span style="flex:1;min-width:0">
-            <span class="list-title" style="display:block">${esc(r.jobName)}</span>
-            ${r.summary ? `<span class="stat-note" style="display:block;white-space:normal">${esc(r.summary.slice(0, 180))}</span>` : ''}
-          </span>
-          <span class="list-meta">${esc(r.trigger)} · ${fmtWhen(r.startedAt)}</span>
-          <span class="list-meta">${r.endedAt ? Math.max(1, Math.round((r.endedAt - r.startedAt) / 1000)) + 's' : '…'}</span>
-          <span style="display:flex;gap:6px">
-            <button class="chip" data-log="${r.id}">LOG</button>
-            <button class="chip" data-run-del="${r.id}" style="color:var(--apricot-deep)">DELETE</button>
-          </span>
-        </div>`).join('') : '<div class="stat-note">No runs yet.</div>'}
-      <div class="stat-note" style="margin-top:10px;white-space:normal">
-        History is persisted in <code>scheduler/runs.json</code> and per-run logs in <code>scheduler/logs/</code>.
-        Cron windows missed while the app is off are skipped. One-time jobs past due run after restart.
-      </div>
-    </div>
-  </div>`;
-
-  $('[data-act="new-job"]', el).addEventListener('click', () => openJobDrawer(null));
-  $('[data-act="refresh"]', el).addEventListener('click', refreshScheduler);
-  $$('[data-edit]', el).forEach((b) => b.addEventListener('click', () => openJobDrawer(jobs.find((j) => j.id === b.dataset.edit))));
-  $$('[data-run]', el).forEach((b) => b.addEventListener('click', async () => {
-    try { await apiJson(`/api/scheduler/jobs/${b.dataset.run}/run`, { method: 'POST' }); toast('JOB STARTED'); setTimeout(refreshScheduler, 800); }
-    catch (e) { toast(e.message.toUpperCase(), true); }
-  }));
-  $$('[data-toggle]', el).forEach((b) => b.addEventListener('click', async () => {
-    const j = jobs.find((x) => x.id === b.dataset.toggle);
-    try { await apiJson(`/api/scheduler/jobs/${j.id}`, { method: 'PUT', body: JSON.stringify({ enabled: !j.enabled }) }); refreshScheduler(); }
-    catch (e) { toast(e.message.toUpperCase(), true); }
-  }));
-  $$('[data-del]', el).forEach((b) => b.addEventListener('click', async () => {
-    const j = jobs.find((x) => x.id === b.dataset.del);
-    if (!confirm(`Delete job "${j.name}"?`)) return;
-    try { await apiJson(`/api/scheduler/jobs/${j.id}`, { method: 'DELETE' }); toast('JOB DELETED'); refreshScheduler(); }
-    catch (e) { toast(e.message.toUpperCase(), true); }
-  }));
-  $$('[data-log]', el).forEach((b) => b.addEventListener('click', async () => {
-    const res = await fetch(`/api/scheduler/runs/${b.dataset.log}/log`);
-    const run = runs.find((r) => r.id === b.dataset.log);
-    let text = res.ok ? await res.text() : '';
-    // spawn failures and very short runs leave an empty log file — the run
-    // summary (exit reason / error message) is then the real information
-    if (!text.trim()) {
-      text = run
-        ? [`status: ${run.status}`, run.exitCode !== null ? `exit code: ${run.exitCode}` : null, '', run.summary || (run.status === 'running' ? 'Run is still in progress — reopen this log when it finishes.' : '(no output captured)')].filter((l) => l !== null).join('\n')
-        : 'Log not found.';
-    }
-    openDrawer(`
-      <div class="drawer-head">
-        <button class="drawer-close">✕</button>
-        <div class="drawer-dept">RUN LOG</div>
-        <div class="drawer-name">${esc(run ? run.jobName : b.dataset.log)}</div>
-        <div class="drawer-role">${run ? fmtWhen(run.startedAt) + ' · ' + esc(run.status) + (run.endedAt ? ' · ' + Math.max(1, Math.round((run.endedAt - run.startedAt) / 1000)) + 's' : '') : ''}</div>
-      </div>
-      <div class="drawer-body">
-        <pre class="run-log">${esc(text)}</pre>
-      </div>`);
-  }));
-  $$('[data-run-del]', el).forEach((b) => b.addEventListener('click', async () => {
-    const run = runs.find((x) => x.id === b.dataset.runDel);
-    if (!run) return;
-    if (!confirm(`Delete run history entry "${run.jobName}"?`)) return;
-    try {
-      const res = await fetch(`/api/scheduler/runs/${run.id}`, { method: 'DELETE' });
-      const data = await res.json().catch(() => ({}));
-      if (res.status === 409) {
-        toast('RUN IS STILL ACTIVE — WAIT FOR IT TO FINISH BEFORE DELETING HISTORY', true);
-        return;
-      }
-      if (!res.ok) throw new Error((data.errors && data.errors.join('; ')) || data.error || `HTTP ${res.status}`);
-      toast('RUN HISTORY ENTRY DELETED');
-      refreshScheduler();
-    } catch (e) {
-      toast(e.message.toUpperCase(), true);
-    }
-  }));
-
-  // live view: refresh automatically while something is running
-  clearTimeout(schedState.timer);
-  if (jobs.some((j) => j.running) || runs.some((r) => r.status === 'running')) {
-    schedState.timer = setTimeout(() => { if (state.view === 'scheduler') refreshScheduler(); }, 5000);
-  }
-}
 
 const CRON_PRESETS = [
   { label: 'Weekdays 07:00', value: '0 7 * * 1-5' },
@@ -2165,7 +2284,7 @@ function openJobDrawer(job) {
       else await apiJson('/api/scheduler/jobs', { method: 'POST', body });
       closeDrawer();
       toast(job ? 'JOB UPDATED' : 'JOB CREATED');
-      refreshScheduler();
+      refreshFlows();
     } catch (e) { toast(e.message.toUpperCase(), true); }
   });
 }
