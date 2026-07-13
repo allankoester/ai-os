@@ -42,6 +42,27 @@ function resolveInsideRoot(root, subpath) {
   return abs;
 }
 
+async function direntIsDirectory(parentAbs, dirent) {
+  if (dirent.isDirectory()) return true;
+  if (!dirent.isSymbolicLink()) return false;
+  try {
+    return (await fsp.stat(path.join(parentAbs, dirent.name))).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+async function direntIsMarkdownFile(parentAbs, dirent) {
+  if (!dirent.name.endsWith('.md')) return false;
+  if (dirent.isFile()) return true;
+  if (!dirent.isSymbolicLink()) return false;
+  try {
+    return (await fsp.stat(path.join(parentAbs, dirent.name))).isFile();
+  } catch {
+    return false;
+  }
+}
+
 async function buildEntry(absPath, relPath) {
   const stat = await fsp.stat(absPath);
   const text = await fsp.readFile(absPath, 'utf8');
@@ -82,12 +103,16 @@ export function createFsKnowledgeStorage({ root }) {
         dirents.sort((a, b) => a.name.localeCompare(b.name));
         const docs = [];
         for (const dirent of dirents) {
-          if (dirent.isFile() && dirent.name.endsWith('.md')) {
+          if (await direntIsMarkdownFile(dirAbs, dirent)) {
             const absPath = path.join(dirAbs, dirent.name);
             docs.push(await buildEntry(absPath, `${KNOWLEDGE_PREFIX}${dirRel}/${dirent.name}`));
           }
         }
-        const subdirs = dirents.filter((d) => d.isDirectory() && d.name !== '_artifacts');
+        const subdirs = [];
+        for (const dirent of dirents) {
+          if (dirent.name === '_artifacts') continue;
+          if (await direntIsDirectory(dirAbs, dirent)) subdirs.push(dirent);
+        }
         // Pure container dirs (no direct .md files, only subfolders) are not listed themselves.
         if (docs.length > 0 || subdirs.length === 0) folders.push({ name: dirRel, docs });
         for (const dirent of subdirs) {
@@ -97,7 +122,8 @@ export function createFsKnowledgeStorage({ root }) {
       const top = await fsp.readdir(root, { withFileTypes: true });
       top.sort((a, b) => a.name.localeCompare(b.name));
       for (const dirent of top) {
-        if (dirent.isDirectory() && dirent.name !== '_artifacts') await walk(path.join(root, dirent.name), dirent.name);
+        if (dirent.name === '_artifacts') continue;
+        if (await direntIsDirectory(root, dirent)) await walk(path.join(root, dirent.name), dirent.name);
       }
       return folders;
     },
