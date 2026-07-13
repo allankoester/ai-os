@@ -1825,3 +1825,33 @@ button.wf-step:hover { border-color: var(--green-light); }
   opacity: 0.5;
   pointer-events: none;
 }
+
+/* Subtask UI */
+.subtask-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.subtask-toggle {
+  cursor: pointer;
+  accent-color: var(--green);
+}
+.subtask-text {
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--headline);
+  padding: 6px 8px;
+  font-size: 12.5px;
+  outline: none;
+}
+.subtask-text:focus {
+  border-color: var(--green-light);
+  background: var(--white);
+}
+.subtask-text.completed {
+  text-decoration: line-through;
+  color: var(--muted);
+}

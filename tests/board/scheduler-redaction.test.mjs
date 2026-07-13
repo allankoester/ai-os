@@ -71,3 +71,52 @@ test('scheduler redacts runtime secret values from summary, log, and callback su
     await fsp.rm(rootDir, { recursive: true, force: true });
   }
 });
+
+test('opencode NDJSON error event marks run as error even with exit code 0', async () => {
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scheduler-opencode-error-'));
+  const rootDir = await fsp.realpath(tempDir);
+  const fakeBin = path.join(rootDir, 'fake-opencode-error.sh');
+  await fsp.writeFile(
+    fakeBin,
+    `#!/bin/sh\nprintf '{"type":"info","message":"starting"}\\n'\nprintf '{"type":"error","message":"structured failure"}\\n'\nexit 0\n`,
+    'utf8',
+  );
+  await fsp.chmod(fakeBin, 0o755);
+
+  const scheduler = createScheduler({
+    rootDir,
+    resolveRuntimeContext: async () => ({
+      runtimeMode: 'opencode',
+      opencodeBin: fakeBin,
+      envVault: {},
+    }),
+  });
+
+  try {
+    const created = await scheduler.createJob({
+      name: 'OpenCode Error Event Test',
+      prompt: 'run',
+      scheduleType: 'once',
+      runAt: Date.now() + 60_000,
+      enabled: true,
+      timeoutMinutes: 1,
+    });
+    assert.ok(created.job?.id);
+
+    const started = await scheduler.runNow(created.job.id);
+    assert.ok(started.run?.id);
+
+    const done = await waitUntil(() => {
+      const run = scheduler.listRuns(1)[0];
+      return run && run.status !== 'running';
+    });
+    assert.equal(done, true);
+
+    const run = scheduler.listRuns(1)[0];
+    assert.equal(run.status, 'error');
+    assert.equal(run.exitCode, 0);
+    assert.match(String(run.summary || ''), /structured failure/i);
+  } finally {
+    await fsp.rm(rootDir, { recursive: true, force: true });
+  }
+});

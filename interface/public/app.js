@@ -4088,8 +4088,8 @@ function ensureProjectSelection() {
 }
 
 function assigneeLabel(task) {
+  if (task.assignee_type === 'human') return task.human_assignee_label || task.assignee_id || 'Human';
   if (task.assignee_type === 'unassigned' || !task.assignee_id) return 'Unassigned';
-  if (task.assignee_type === 'human') return task.assignee_id;
   const a = projectState.metadata?.agents?.find((x) => x.id === task.assignee_id) || AGENTS.find((x) => x.id === task.assignee_id);
   return a?.name || task.assignee_id;
 }
@@ -4217,6 +4217,7 @@ function renderProjects(el) {
 
 function openProjectCreateDrawer() {
   const meta = projectState.metadata || normalizeMetadata({});
+  const hideTeam = !meta.visibilityOptions.includes('team');
   openDrawer(`
     <div class="drawer-head">
       <button class="drawer-close">✕</button>
@@ -4228,7 +4229,10 @@ function openProjectCreateDrawer() {
       <div class="form-field"><label>Name</label><input id="pj-new-name" placeholder="Project name"></div>
       <div class="form-field"><label>Description</label><textarea id="pj-new-desc" rows="4"></textarea></div>
       <div class="form-field"><label>Visibility</label>
-        <select id="pj-new-visibility">${meta.visibilityOptions.map((v) => `<option value="${esc(v)}" ${v === meta.defaults.visibility ? 'selected' : ''}>${esc(statusLabel(v))}</option>`).join('')}</select>
+        <select id="pj-new-visibility" ${hideTeam ? 'disabled' : ''}>
+          ${meta.visibilityOptions.map((v) => `<option value="${esc(v)}" ${v === meta.defaults.visibility ? 'selected' : ''}>${esc(statusLabel(v))}</option>`).join('')}
+        </select>
+        ${hideTeam ? '<div class="stat-note" style="margin-top:4px">Team visibility requires a backend configured for teams.</div>' : ''}
       </div>
       <div class="drawer-actions"><button id="pj-new-save" class="btn btn-primary">Create project</button></div>
     </div>
@@ -4256,6 +4260,7 @@ function openProjectCreateDrawer() {
 
 function openProjectEditDrawer(project) {
   const meta = projectState.metadata || normalizeMetadata({});
+  const hideTeam = !meta.visibilityOptions.includes('team');
   openDrawer(`
     <div class="drawer-head">
       <button class="drawer-close">✕</button>
@@ -4264,21 +4269,32 @@ function openProjectEditDrawer(project) {
       <div class="drawer-role">${esc(project.name)}</div>
     </div>
     <div class="drawer-body">
-      <div class="form-field"><label>Name</label><div>${esc(project.name)}</div></div>
-      <div class="form-field"><label>Description</label><div style="white-space:pre-wrap">${esc(project.description || '—')}</div></div>
+      <div class="form-field"><label>Name</label><input id="pj-edit-name" value="${esc(project.name)}" placeholder="Project name"></div>
+      <div class="form-field"><label>Description</label><textarea id="pj-edit-desc" rows="4">${esc(project.description || '')}</textarea></div>
       <div class="form-field"><label>Status</label>
         <select id="pj-edit-status">${PROJECT_STATUS_OPTIONS.map((s) => `<option value="${esc(s)}" ${s === project.status ? 'selected' : ''}>${esc(statusLabel(s))}</option>`).join('')}</select>
       </div>
       <div class="form-field"><label>Visibility</label>
-        <select id="pj-edit-visibility">${meta.visibilityOptions.map((v) => `<option value="${esc(v)}" ${v === project.visibility ? 'selected' : ''}>${esc(statusLabel(v))}</option>`).join('')}</select>
+        <select id="pj-edit-visibility" ${hideTeam ? 'disabled' : ''}>
+          ${meta.visibilityOptions.map((v) => `<option value="${esc(v)}" ${v === project.visibility ? 'selected' : ''}>${esc(statusLabel(v))}</option>`).join('')}
+          ${hideTeam && project.visibility === 'team' ? `<option value="team" selected>Team (Unsupported)</option>` : ''}
+        </select>
+        ${hideTeam ? '<div class="stat-note" style="margin-top:4px">Team visibility requires a backend configured for teams.</div>' : ''}
       </div>
-      <div class="drawer-actions"><button id="pj-edit-save" class="btn btn-primary">Save</button></div>
+      <div class="drawer-actions">
+        <button id="pj-edit-save" class="btn btn-primary">Save</button>
+        <button id="pj-edit-delete" class="btn btn-ghost" style="color:var(--apricot-deep)">Delete Project</button>
+      </div>
     </div>
   `);
   $('#pj-edit-save', $('#drawer'))?.addEventListener('click', async () => {
     const ops = [];
+    const n = $('#pj-edit-name')?.value.trim();
+    const d = $('#pj-edit-desc')?.value.trim();
     const s = $('#pj-edit-status')?.value || project.status;
     const v = $('#pj-edit-visibility')?.value || project.visibility;
+    if (n && n !== project.name) ops.push({ op: 'set_name', value: n });
+    if (d !== (project.description || '')) ops.push({ op: 'set_description', value: d });
     if (s !== project.status) ops.push({ op: 'set_status', value: s });
     if (!ops.length && v === project.visibility) return closeDrawer();
     try {
@@ -4305,6 +4321,20 @@ function openProjectEditDrawer(project) {
       toast('PROJECT UPDATED');
       refreshProjectsView();
     } catch (e) { toast((e.message || 'UPDATE FAILED').toUpperCase(), true); }
+  });
+  $('#pj-edit-delete', $('#drawer'))?.addEventListener('click', async () => {
+    if (!confirm('Are you sure you want to delete this project? This will permanently delete the project and ALL its tasks. This cannot be undone.')) return;
+    try {
+      await boardApi(`/api/projects/${encodeURIComponent(project.id)}`, {
+        method: 'DELETE',
+        body: { version: project.version, confirm: true },
+      });
+      projectState.projects = projectState.projects.filter((p) => p.id !== project.id);
+      if (projectState.selectedProjectId === project.id) projectState.selectedProjectId = null;
+      closeDrawer();
+      toast('PROJECT DELETED');
+      refreshProjectsView();
+    } catch (e) { toast((e.message || 'DELETE FAILED').toUpperCase(), true); }
   });
 }
 
@@ -4356,7 +4386,7 @@ function openTaskCreateDrawer(projectId, { prefill = null } = {}) {
       <div class="form-field" id="task-assignee-agent-wrap"><label>Assignee</label>
         <select id="task-new-assignee-agent">${meta.agents.map((a) => `<option value="${esc(a.id)}" ${a.id === agentDefault ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>
       </div>
-      <div class="form-field hidden" id="task-assignee-human-wrap"><label>Human assignee id</label><input id="task-new-assignee-human" placeholder="username"></div>
+      <div class="form-field hidden" id="task-assignee-human-wrap"><label>Human assignee name</label><input id="task-new-assignee-human-label" placeholder="Full name"></div>
       <div class="drawer-actions"><button id="task-new-save" class="btn btn-primary">Create task</button></div>
     </div>
   `);
@@ -4376,8 +4406,9 @@ function openTaskCreateDrawer(projectId, { prefill = null } = {}) {
     if (!title) return toast('TASK TITLE IS REQUIRED', true);
     const type = $('#task-new-assignee-type', drawer)?.value || 'agent';
     let assigneeId = null;
+    let humanAssigneeLabel = null;
     if (type === 'agent') assigneeId = $('#task-new-assignee-agent', drawer)?.value || defaults.assignee_id || 'danny';
-    if (type === 'human') assigneeId = $('#task-new-assignee-human', drawer)?.value.trim() || '';
+    if (type === 'human') humanAssigneeLabel = $('#task-new-assignee-human-label', drawer)?.value.trim() || null;
     try {
       const task = await boardApi('/api/tasks', {
         method: 'POST',
@@ -4390,6 +4421,7 @@ function openTaskCreateDrawer(projectId, { prefill = null } = {}) {
           priority: $('#task-new-priority', drawer)?.value || 'medium',
           assignee_type: type,
           assignee_id: type === 'unassigned' ? null : assigneeId,
+          human_assignee_label: type === 'human' ? humanAssigneeLabel : null,
         },
       });
       closeDrawer();
@@ -4445,40 +4477,252 @@ function openTaskDrawer(taskId) {
   const task = projectState.tasks.find((t) => t.id === taskId);
   if (!task) return;
   const project = projectState.projects.find((p) => p.id === task.project_id);
+  const meta = projectState.metadata || normalizeMetadata({});
   const canReview = task.review?.required && task.review?.state === 'needs_review';
   const artifactEntries = extractAttemptArtifactEntries(task);
+  const updates = task.execution?.execution_updates || [];
+  const initialSubtasks = (task.subtasks || [])
+    .map((st) => ({ ...st }))
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  let currentSubtasks = initialSubtasks.map((st) => ({ ...st }));
+  const originalSubtasksJson = JSON.stringify(initialSubtasks.map((st) => ({
+    id: st.id,
+    text: st.text,
+    completed: Boolean(st.completed),
+    order: Number.isInteger(st.order) ? st.order : 0,
+  })));
+
+  const renderSubtasks = () => {
+    const listHtml = currentSubtasks.length ? currentSubtasks.map((st, i) => `
+      <div class="subtask-row" data-subtask-id="${esc(st.id)}">
+        <input type="checkbox" ${st.completed ? 'checked' : ''} class="subtask-toggle">
+        <input type="text" class="subtask-text ${st.completed ? 'completed' : ''}" value="${esc(st.text)}" placeholder="Subtask text">
+        <button class="btn btn-ghost btn-small subtask-up" ${i === 0 ? 'disabled' : ''}>↑</button>
+        <button class="btn btn-ghost btn-small subtask-down" ${i === currentSubtasks.length - 1 ? 'disabled' : ''}>↓</button>
+        <button class="btn btn-ghost btn-small subtask-del" style="color:var(--apricot-deep)">✕</button>
+      </div>
+    `).join('') : '<div class="stat-note" style="margin-bottom:6px">No subtasks.</div>';
+    
+    return `
+      <div id="subtasks-container">
+        ${listHtml}
+        <button class="btn btn-ghost btn-small" id="btn-add-subtask">+ Add subtask</button>
+      </div>
+    `;
+  };
+
+  const bindSubtasks = (drawer) => {
+    $$('.subtask-row', drawer).forEach((row, i) => {
+      const id = row.dataset.subtaskId;
+      const st = currentSubtasks.find(s => s.id === id);
+      if (!st) return;
+      
+      row.querySelector('.subtask-toggle')?.addEventListener('change', (e) => {
+        st.completed = e.target.checked;
+        const textInput = row.querySelector('.subtask-text');
+        if (textInput) textInput.classList.toggle('completed', st.completed);
+      });
+      row.querySelector('.subtask-text')?.addEventListener('input', (e) => { st.text = e.target.value; });
+      row.querySelector('.subtask-up')?.addEventListener('click', () => {
+        if (i > 0) {
+          const temp = currentSubtasks[i-1];
+          currentSubtasks[i-1] = currentSubtasks[i];
+          currentSubtasks[i] = temp;
+          refreshSubtasks();
+        }
+      });
+      row.querySelector('.subtask-down')?.addEventListener('click', () => {
+        if (i < currentSubtasks.length - 1) {
+          const temp = currentSubtasks[i+1];
+          currentSubtasks[i+1] = currentSubtasks[i];
+          currentSubtasks[i] = temp;
+          refreshSubtasks();
+        }
+      });
+      row.querySelector('.subtask-del')?.addEventListener('click', () => {
+        currentSubtasks = currentSubtasks.filter(s => s.id !== id);
+        refreshSubtasks();
+      });
+    });
+    
+    $('#btn-add-subtask', drawer)?.addEventListener('click', () => {
+      currentSubtasks.push({
+        id: 'st_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        text: '',
+        completed: false,
+        order: currentSubtasks.length
+      });
+      refreshSubtasks();
+    });
+  };
+
+  const refreshSubtasks = () => {
+    const wrap = $('#subtasks-wrap');
+    if (wrap) {
+      // Re-assign order based on array position
+      currentSubtasks.forEach((st, i) => st.order = i);
+      wrap.innerHTML = renderSubtasks();
+      bindSubtasks(wrap);
+    }
+  };
+
   openDrawer(`
     <div class="drawer-head">
       <button class="drawer-close">✕</button>
       <div class="drawer-dept">TASK</div>
-      <div class="drawer-name">${esc(task.title)}</div>
+      <div class="drawer-name">Edit Task</div>
       <div class="drawer-role">${esc(project?.name || task.project_id)}</div>
     </div>
     <div class="drawer-body">
-      <div class="drawer-section">
-        <span class="badge badge-gray">${esc(statusLabel(task.status))}</span>
-        <span class="badge badge-gray">${esc(statusLabel(task.priority))}</span>
-        ${execStateBadge(task.execution?.state || 'none')}
+      <div class="form-field"><label>Title</label><input id="task-edit-title" value="${esc(task.title)}" placeholder="Task title"></div>
+      
+      <div class="form-field"><label>Instruction</label><textarea id="task-edit-desc" rows="4">${esc(task.description || '')}</textarea></div>
+      
+      <div class="form-field"><label>Status</label>
+        <select id="task-edit-status">
+          ${TASK_STATUS_OPTIONS.map((s) => `<option value="${esc(s)}" ${s === task.status ? 'selected' : ''}>${esc(statusLabel(s))}</option>`).join('')}
+        </select>
       </div>
-      <div class="drawer-section"><div class="section-title">Assignee</div><div>${esc(assigneeLabel(task))}</div></div>
-      <div class="drawer-section"><div class="section-title">Description</div><div style="white-space:pre-wrap">${esc(task.description || '—')}</div></div>
-      <div class="drawer-section"><div class="section-title">Workflow</div><div>${esc(task.workflow_id || '—')}</div></div>
+      
+      <div class="form-field"><label>Priority</label>
+        <select id="task-edit-priority">${PRIORITY_OPTIONS.map((p) => `<option value="${esc(p)}" ${p === task.priority ? 'selected' : ''}>${esc(statusLabel(p))}</option>`).join('')}</select>
+      </div>
+
+      <div class="form-field"><label>Workflow</label>
+        <select id="task-edit-workflow"><option value="">(none)</option>${meta.workflows.map((w) => `<option value="${esc(w)}" ${w === task.workflow_id ? 'selected' : ''}>${esc(w)}</option>`).join('')}</select>
+      </div>
+
+      <div class="form-field"><label>Assignee Type</label>
+        <select id="task-edit-assignee-type">
+          <option value="agent" ${task.assignee_type === 'agent' ? 'selected' : ''}>Agent</option>
+          <option value="human" ${task.assignee_type === 'human' ? 'selected' : ''}>Human</option>
+          <option value="unassigned" ${task.assignee_type === 'unassigned' ? 'selected' : ''}>Unassigned</option>
+        </select>
+      </div>
+      <div class="form-field ${task.assignee_type !== 'agent' ? 'hidden' : ''}" id="task-edit-assignee-agent-wrap"><label>Assignee Agent</label>
+        <select id="task-edit-assignee-agent">${meta.agents.map((a) => `<option value="${esc(a.id)}" ${a.id === task.assignee_id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>
+      </div>
+      <div class="form-field ${task.assignee_type !== 'human' ? 'hidden' : ''}" id="task-edit-assignee-human-wrap"><label>Human Assignee Label</label>
+        <input id="task-edit-assignee-human-label" value="${esc(task.human_assignee_label || '')}" placeholder="Optional display name">
+      </div>
+
       <div class="drawer-section">
-        <div class="section-title">Execution</div>
-        <div class="tag-row">
+        <div class="section-title">Subtasks</div>
+        <div id="subtasks-wrap">
+          ${renderSubtasks()}
+        </div>
+      </div>
+
+      <div class="drawer-actions" style="margin-bottom:16px;">
+        <button id="task-edit-save" class="btn btn-primary">Save Task</button>
+        <button id="task-edit-delete" class="btn btn-ghost" style="color:var(--apricot-deep)">Delete Task</button>
+      </div>
+
+      <div class="drawer-section">
+        <div class="section-title">Execution Controls</div>
+        <div class="tag-row" style="margin-bottom:8px">
           <button class="btn btn-small" data-task-run>Run</button>
           <button class="btn btn-ghost btn-small" data-task-cancel>Cancel</button>
           <button class="btn btn-ghost btn-small" data-task-retry>Retry</button>
         </div>
+        <div>${execStateBadge(task.execution?.state || 'none')}</div>
         ${artifactEntries.length ? `<div style="margin-top:10px;display:flex;flex-direction:column;gap:6px">
           ${artifactEntries.slice(0, 12).map((entry) => `<a class="chip" data-task-artifact="${esc(entry.key)}" style="text-decoration:none;display:inline-flex;justify-content:space-between;gap:8px" href="${esc(boardArtifactHref(task.id, entry.attemptId, entry.relPath))}" target="_blank" rel="noopener noreferrer"><span>${esc(entry.name)}</span><span class="mono-label">${esc(entry.attemptId.slice(0, 8))}</span></a>`).join('')}
           ${artifactEntries.length > 12 ? `<span class="stat-note">+${artifactEntries.length - 12} more artifacts on older attempts.</span>` : ''}
         </div>` : '<div class="stat-note" style="margin-top:10px">No linked artifacts yet.</div>'}
       </div>
+
+      ${updates.length ? `<div class="drawer-section"><div class="section-title">Execution Feed</div>
+        <div style="display:flex;flex-direction:column;gap:6px;max-height:200px;overflow-y:auto;padding-right:4px;">
+          ${updates.map(u => `
+            <div style="font-size:11px;padding:6px;background:var(--bg-layer);border-radius:4px;">
+              <div style="display:flex;justify-content:space-between;margin-bottom:2px;color:var(--text-muted)">
+                <span>${esc(u.source || 'system')}</span>
+                <span>${timeAgo(Date.parse(u.timestamp))}</span>
+              </div>
+              <div><strong style="color:var(--text-normal)">${esc(u.state)}:</strong> ${esc(u.summary)}</div>
+            </div>
+          `).join('')}
+        </div>
+      </div>` : ''}
+
       ${canReview ? `<div class="drawer-section"><div class="section-title">Review</div><div class="tag-row"><button class="btn btn-small" data-review-approve>Approve</button><button class="btn btn-ghost btn-small" data-review-changes>Request changes</button></div></div>` : ''}
     </div>
   `);
+  
   const drawer = $('#drawer');
+  bindSubtasks(drawer);
+
+  const typeEl = $('#task-edit-assignee-type', drawer);
+  typeEl?.addEventListener('change', () => {
+    const type = typeEl.value;
+    $('#task-edit-assignee-agent-wrap', drawer)?.classList.toggle('hidden', type !== 'agent');
+    $('#task-edit-assignee-human-wrap', drawer)?.classList.toggle('hidden', type !== 'human');
+  });
+
+  $('#task-edit-save', drawer)?.addEventListener('click', async () => {
+    const ops = [];
+    const t = $('#task-edit-title', drawer)?.value.trim();
+    const d = $('#task-edit-desc', drawer)?.value.trim();
+    const s = $('#task-edit-status', drawer)?.value;
+    const p = $('#task-edit-priority', drawer)?.value;
+    const w = $('#task-edit-workflow', drawer)?.value || null;
+    const aType = typeEl?.value;
+    let aId = null;
+    let hLabel = null;
+    
+    if (aType === 'agent') aId = $('#task-edit-assignee-agent', drawer)?.value || null;
+    else if (aType === 'human') {
+      aId = null;
+      hLabel = $('#task-edit-assignee-human-label', drawer)?.value.trim() || null;
+    }
+
+    if (t && t !== task.title) ops.push({ op: 'set_title', value: t });
+    if (d !== (task.description || '')) ops.push({ op: 'set_description', value: d });
+    if (s && s !== task.status) ops.push({ op: 'set_status', value: s });
+    if (p && p !== task.priority) ops.push({ op: 'set_priority', value: p });
+    if (w !== task.workflow_id) ops.push({ op: 'set_workflow_id', value: w });
+    
+    if (aType !== task.assignee_type || aId !== task.assignee_id || hLabel !== task.human_assignee_label) {
+      ops.push({ op: 'set_assignee', value: { assignee_type: aType, assignee_id: aId, human_assignee_label: hLabel } });
+    }
+
+    // Compare subtasks
+    const cleanCurrent = currentSubtasks
+      .filter((st) => st.text.trim() !== '')
+      .map((st) => ({ id: st.id, text: st.text, completed: Boolean(st.completed), order: st.order }));
+    if (JSON.stringify(cleanCurrent) !== originalSubtasksJson) {
+      ops.push({ op: 'set_subtasks', value: cleanCurrent });
+    }
+
+    if (!ops.length) return closeDrawer();
+
+    try {
+      const updated = await boardApi(`/api/tasks/${encodeURIComponent(task.id)}`, {
+        method: 'PATCH',
+        body: { version: task.version, ops },
+      });
+      applyTaskToState(updated);
+      closeDrawer();
+      toast('TASK UPDATED');
+      refreshProjectsView();
+    } catch (e) { toast((e.message || 'UPDATE FAILED').toUpperCase(), true); }
+  });
+
+  $('#task-edit-delete', drawer)?.addEventListener('click', async () => {
+    if (!confirm('Are you sure you want to delete this task? This cannot be undone.')) return;
+    try {
+      await boardApi(`/api/tasks/${encodeURIComponent(task.id)}`, {
+        method: 'DELETE',
+        body: { version: task.version, confirm: true },
+      });
+      projectState.tasks = projectState.tasks.filter((t) => t.id !== task.id);
+      closeDrawer();
+      toast('TASK DELETED');
+      refreshProjectsView();
+    } catch (e) { toast((e.message || 'DELETE FAILED').toUpperCase(), true); }
+  });
+
   $('[data-task-run]', drawer)?.addEventListener('click', () => runTaskExecution(task, 'run'));
   $('[data-task-cancel]', drawer)?.addEventListener('click', () => runTaskExecution(task, 'cancel'));
   $('[data-task-retry]', drawer)?.addEventListener('click', () => runTaskExecution(task, 'retry'));

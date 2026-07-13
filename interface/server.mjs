@@ -208,7 +208,10 @@ function endpointExpectsJsonBody(req, url) {
     if (/^\/api\/scheduler\/jobs\/[0-9a-f-]+\/run$/i.test(url.pathname)) return false;
     return true;
   }
-  if (req.method === 'DELETE') return false;
+  if (req.method === 'DELETE') {
+    if (/^\/api\/(projects|tasks)\/[^/]+$/i.test(url.pathname)) return true;
+    return false;
+  }
   return false;
 }
 
@@ -994,6 +997,10 @@ async function handleApi(req, res, url) {
       const body = await readBody(req, { maxBytes: 256 * 1024 });
       return sendBoard(200, await boardService.patchProject(projectMatch[1], body, actor));
     }
+    if (projectMatch && req.method === 'DELETE') {
+      const body = await readBody(req, { maxBytes: 256 * 1024 });
+      return sendBoard(200, await boardService.deleteProject(projectMatch[1], body, actor));
+    }
     const projectStreamMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/(activity|audit)$/);
     if (projectStreamMatch && req.method === 'GET') {
       const [, id, kind] = projectStreamMatch;
@@ -1021,6 +1028,10 @@ async function handleApi(req, res, url) {
     if (taskMatch && req.method === 'PATCH') {
       const body = await readBody(req, { maxBytes: 256 * 1024 });
       return sendBoard(200, await boardService.patchTask(taskMatch[1], body, actor));
+    }
+    if (taskMatch && req.method === 'DELETE') {
+      const body = await readBody(req, { maxBytes: 256 * 1024 });
+      return sendBoard(200, await boardService.deleteTask(taskMatch[1], body, actor));
     }
     const taskReviewDecisionMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/review\/decision$/);
     if (taskReviewDecisionMatch && req.method === 'POST') {

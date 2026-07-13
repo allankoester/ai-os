@@ -21,7 +21,9 @@ import {
   ensureLength,
   ensureId,
   normalizeDueAt,
+  sanitizeHumanAssigneeLabel,
   sanitizeReviewers,
+  sanitizeSubtasks,
   validateLinkedPaths,
   validateLinkedRuns,
   validateProjectCreate,
@@ -76,6 +78,32 @@ function clearBlockedState(task) {
     reason: '',
     since: null,
   };
+}
+
+function normalizeTaskShape(task) {
+  task.subtasks = Array.isArray(task.subtasks) ? task.subtasks : [];
+  task.human_assignee_label = sanitizeHumanAssigneeLabel(task.human_assignee_label);
+  task.execution = task.execution && typeof task.execution === 'object' ? task.execution : {};
+  task.execution.attempts = Array.isArray(task.execution.attempts) ? task.execution.attempts : [];
+  task.execution.execution_updates = Array.isArray(task.execution.execution_updates) ? task.execution.execution_updates : [];
+  task.execution.artifact_paths = Array.isArray(task.execution.artifact_paths) ? task.execution.artifact_paths : [];
+}
+
+function appendExecutionUpdate(task, update) {
+  normalizeTaskShape(task);
+  const entry = {
+    timestamp: nowIso(),
+    attempt_id: task.execution?.attempt_id || null,
+    state: String(update?.state || task.execution?.state || 'none'),
+    summary: ensureLength(String(update?.summary || '').trim(), 'execution_updates.summary', 0, LIMITS.failureSummaryMax),
+    source: String(update?.source || 'scheduler'),
+  };
+  task.execution.execution_updates = appendNewestBounded(
+    task.execution.execution_updates || [],
+    [entry],
+    LIMITS.executionUpdatesMax,
+    (item) => `${item.timestamp}:${item.attempt_id || 'none'}:${item.state}:${item.source}:${item.summary}`,
+  );
 }
 
 function appendNewestBounded(existing, incoming, max, keyFor) {
@@ -250,6 +278,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
         throw boardError(403, 'forbidden', 'task access denied');
       }
       const existing = located.task;
+      normalizeTaskShape(existing);
       const before = existing.version;
       const next = await mutator(existing);
       next.schema_version = SCHEMA_VERSION;
@@ -271,14 +300,17 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
   }
 
   async function assertCanonicalTaskRouting(task) {
+    normalizeTaskShape(task);
     if (task.assignee_type === 'agent') {
       if (!task.assignee_id) throw boardError(422, 'validation_error', 'assignee_id required for assignee_type=agent');
       const agents = await listCanonicalAgentIds();
       if (!agents.has(task.assignee_id)) throw boardError(422, 'unknown_assignee', `unknown agent assignee_id: ${task.assignee_id}`);
+      task.human_assignee_label = null;
     }
     if (task.assignee_type !== 'agent' && task.assignee_id) {
       ensureId(task.assignee_id, 'assignee_id');
     }
+    if (task.assignee_type !== 'human') task.human_assignee_label = null;
     if (task.workflow_id) {
       const workflows = await listCanonicalWorkflowIds();
       if (!workflows.has(task.workflow_id)) throw boardError(422, 'unknown_workflow', `unknown workflow_id: ${task.workflow_id}`);
@@ -286,6 +318,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
   }
 
   function applyInvariants(task) {
+    normalizeTaskShape(task);
     if (task.status === 'blocked') task.blocked.is_blocked = true;
     if (task.blocked?.is_blocked) {
       task.status = 'blocked';
@@ -334,6 +367,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
   }
 
   async function createExecutionAttempt(task, actorId, idempotencyKey, trigger = 'manual') {
+    normalizeTaskShape(task);
     const runtime = await getRuntimeSettingsRaw();
     if (!runtime?.runtimeMode) throw boardError(503, 'runtime_unavailable', 'runtime mode unavailable');
     if (!SUPPORTED_RUNTIME_MODES.has(runtime.runtimeMode)) {
@@ -372,6 +406,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       scheduler_job_id: null,
       scheduler_run_id: null,
       output_root: outputRootRel,
+      instruction_snapshot: ensureLength(task.description || '', 'instruction_snapshot', 0, LIMITS.descriptionMax),
       started_at: null,
       completed_at: null,
       result_summary: null,
@@ -423,7 +458,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       workflow: task.workflow_id || null,
       prompt: [
         `Board task ${task.id} (${task.title})`,
-        task.description || '',
+        attempt.instruction_snapshot || '',
         `Project: ${task.project_id}`,
         `Output root: ${attempt.output_root}`,
       ].filter(Boolean).join('\n'),
@@ -466,38 +501,6 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
     return out;
   }
 
-  async function writeServerGeneratedAttemptArtifacts(task, attemptId, callbackState, summary, schedulerRunId, secretValues = []) {
-    const visibility = task.visibility || 'private';
-    const { rel: outputRootRel, abs: outputRootAbs } = outputRootForAttempt(visibility, task.id, attemptId);
-    await fsp.mkdir(outputRootAbs, { recursive: true });
-    const real = await fsp.realpath(outputRootAbs).catch(() => null);
-    if (!real || !isPathWithin(path.join(rootDir, 'artifacts', 'project-board', visibility), real)) {
-      throw boardError(422, 'output_root_invalid', 'attempt output root escaped confinement');
-    }
-    const generated = [];
-    const summaryText = [
-      `state: ${callbackState}`,
-      `task_id: ${task.id}`,
-      `attempt_id: ${attemptId}`,
-      `scheduler_run_id: ${schedulerRunId || ''}`,
-      '',
-      redactSecretsInText(String(summary || '').trim() || '(no summary)', secretValues),
-    ].join('\n');
-    const summaryRel = path.posix.join(outputRootRel, 'server-summary.txt');
-    await fsp.writeFile(path.join(outputRootAbs, 'server-summary.txt'), summaryText, 'utf8');
-    generated.push({ path: summaryRel, kind: 'file' });
-
-    if (schedulerRunId && typeof scheduler.getRunLog === 'function') {
-      const log = await scheduler.getRunLog(String(schedulerRunId));
-      if (typeof log === 'string' && log.length) {
-        const transcriptRel = path.posix.join(outputRootRel, 'server-transcript.log');
-        await fsp.writeFile(path.join(outputRootAbs, 'server-transcript.log'), redactSecretsInText(log, secretValues), 'utf8');
-        generated.push({ path: transcriptRel, kind: 'file' });
-      }
-    }
-    return generated;
-  }
-
   async function persistTaskMutation(scope, taskId, task, actorId, action, details = null) {
     const before = task.version;
     task.version = before + 1;
@@ -522,6 +525,10 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       completed_at: nowIso(),
       failure_summary: ensureLength(summary || 'dispatch failed', 'failure_summary', 0, LIMITS.failureSummaryMax),
     });
+    appendExecutionUpdate(task, {
+      state: 'failed',
+      summary: ensureLength(summary || 'dispatch failed', 'execution_updates.summary', 0, LIMITS.failureSummaryMax),
+    });
     task.status = 'blocked';
     task.blocked = {
       is_blocked: true,
@@ -536,6 +543,13 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
     const attemptId = cur.attempt_id;
     const attempts = (cur.attempts || []).map((a) => (a.attempt_id === attemptId ? { ...a, ...partial } : a));
     task.execution = { ...cur, ...partial, attempts };
+  }
+
+  function parseDeletePayload(body) {
+    const requestedVersion = Number(body?.version);
+    if (!Number.isInteger(requestedVersion) || requestedVersion < 1) throw boardError(422, 'validation_error', 'version is required');
+    if (body?.confirm !== true) throw boardError(422, 'validation_error', 'confirm=true is required');
+    return requestedVersion;
   }
 
   return {
@@ -604,6 +618,12 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
             case 'set_status':
               project.status = ensureEnum(op.value, PROJECT_STATUSES, 'status');
               break;
+            case 'set_name':
+              project.name = ensureLength(op.value || '', 'name', 1, LIMITS.projectNameMax);
+              break;
+            case 'set_description':
+              project.description = ensureLength(op.value || '', 'description', 0, LIMITS.descriptionMax);
+              break;
             case 'set_linked_paths':
               project.linked_paths = await validateLinkedPaths({ items: op.value, rootDir, guardrails });
               break;
@@ -616,6 +636,49 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
         }
         return project;
       }, 'patch_project');
+    },
+
+    async deleteProject(id, body, actor) {
+      const requestedVersion = parseDeletePayload(body);
+      const projectId = ensureId(id);
+      return storage.withLock(`project:${projectId}`, async () => {
+        const actorId = actorIdFrom(actor);
+        const located = await findProjectScoped(projectId);
+        if (!located) throw boardError(404, 'not_found', 'project not found');
+        if (!canWriteProject(located.project, actor)) throw boardError(403, 'forbidden', 'project access denied');
+        if (located.project.version !== requestedVersion) {
+          throw boardError(409, 'conflict', 'Version mismatch', { expected: located.project.version, got: requestedVersion });
+        }
+        const tasks = await storage.listProjectTasks(located.scope, projectId);
+        const activeTask = tasks.find((task) => ACTIVE_EXECUTION_STATES.has(task.execution?.state || 'none'));
+        if (activeTask) {
+          throw boardError(409, 'execution_active', `cannot delete project while task ${activeTask.id} has active execution`);
+        }
+        for (const task of tasks) {
+          await storage.deleteTask(located.scope, task.id);
+          await appendEvents(located.scope, makeEvent({
+            entityType: 'task',
+            entityId: task.id,
+            projectId,
+            action: 'delete_task_cascade',
+            actorId,
+            oldVersion: task.version,
+            newVersion: task.version + 1,
+          }));
+        }
+        await storage.deleteProject(located.scope, projectId);
+        await appendEvents(located.scope, makeEvent({
+          entityType: 'project',
+          entityId: projectId,
+          projectId,
+          action: 'delete_project',
+          actorId,
+          oldVersion: located.project.version,
+          newVersion: located.project.version + 1,
+          details: { deleted_task_ids: tasks.map((task) => task.id) },
+        }));
+        return { id: projectId, deleted: true, cascade_deleted_tasks: tasks.length };
+      });
     },
 
     async listTasks(query, actor) {
@@ -637,6 +700,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       if (query?.assignee_id) all = all.filter((t) => t.assignee_id === query.assignee_id);
       const q = String(query?.q || '').trim().toLowerCase();
       if (q) all = all.filter((t) => t.title.toLowerCase().includes(q) || String(t.description || '').toLowerCase().includes(q));
+      for (const task of all) normalizeTaskShape(task);
       const limit = Math.max(1, Math.min(200, Number(query?.limit || 50)));
       const offset = Math.max(0, Number(query?.offset || 0));
       return { items: asItemList(all, { limit, offset }), total: all.length };
@@ -656,6 +720,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       task.visibility = project.visibility || 'private';
       task.linked_paths = await validateLinkedPaths({ items: body?.linked_paths || [], rootDir, guardrails });
       task.linked_runs = validateLinkedRuns(body?.linked_runs || []);
+      normalizeTaskShape(task);
       await assertCanonicalTaskRouting(task);
       applyInvariants(task);
 
@@ -678,6 +743,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
 
     async getTask(id, actor) {
       const located = await assertTaskReadable(id, actor);
+      normalizeTaskShape(located.task);
       return located.task;
     },
 
@@ -690,6 +756,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       }
       return mutateTask(ensureId(id), actor, async (task) => {
         const actorId = actorIdFrom(actor);
+        normalizeTaskShape(task);
         const touchesReviewRoster = ops.some((op) => op.op === 'set_review_required' || op.op === 'set_reviewers');
         if (touchesReviewRoster) {
           const project = (await findProjectScoped(task.project_id))?.project;
@@ -703,14 +770,32 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
           switch (op.op) {
             case 'set_status': {
               const nextStatus = ensureEnum(op.value, TASK_STATUSES, 'status');
-              assertTaskStatusTransition(task.status, nextStatus);
+              if (nextStatus === 'backlog' && ACTIVE_EXECUTION_STATES.has(task.execution?.state || 'none')) {
+                throw boardError(422, 'invalid_transition', 'cannot move task to backlog while execution is active');
+              }
+              if (nextStatus !== 'backlog') {
+                assertTaskStatusTransition(task.status, nextStatus);
+              }
               if (task.status === 'blocked' && nextStatus !== 'blocked') {
                 clearBlockedState(task);
+              }
+              if (nextStatus === 'backlog') {
+                clearBlockedState(task);
+                task.review.state = 'none';
+                task.review.decision = null;
+                task.review.decided_at = null;
+                task.review.decided_by = null;
               }
               task.status = nextStatus;
               if (nextStatus === 'needs_review') task.review.state = 'needs_review';
               break;
             }
+            case 'set_title':
+              task.title = ensureLength(op.value || '', 'title', 1, LIMITS.taskTitleMax);
+              break;
+            case 'set_description':
+              task.description = ensureLength(op.value || '', 'description', 0, LIMITS.descriptionMax);
+              break;
             case 'set_priority':
               task.priority = ensureEnum(op.value, PRIORITIES, 'priority');
               break;
@@ -719,9 +804,16 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
               task.assignee_type = type;
               task.assignee_id = op?.value?.assignee_id ? ensureId(op.value.assignee_id, 'assignee_id') : null;
               task.workflow_id = op?.value?.workflow_id ? ensureId(op.value.workflow_id, 'workflow_id') : task.workflow_id;
+              task.human_assignee_label = sanitizeHumanAssigneeLabel(op?.value?.human_assignee_label);
               await assertCanonicalTaskRouting(task);
               break;
             }
+            case 'set_workflow_id':
+              task.workflow_id = op?.value ? ensureId(op.value, 'workflow_id') : null;
+              break;
+            case 'set_subtasks':
+              task.subtasks = sanitizeSubtasks(op.value);
+              break;
             case 'set_due_at':
               task.due_at = normalizeDueAt(op.value);
               break;
@@ -754,6 +846,33 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       }, 'patch_task');
     },
 
+    async deleteTask(id, body, actor) {
+      const requestedVersion = parseDeletePayload(body);
+      const taskId = ensureId(id);
+      return storage.withLock(`task:${taskId}`, async () => {
+        const actorId = actorIdFrom(actor);
+        const located = await assertTaskReadable(taskId, actor);
+        if (!canWriteProject(located.project, actor)) throw boardError(403, 'forbidden', 'task access denied');
+        if (located.task.version !== requestedVersion) {
+          throw boardError(409, 'conflict', 'Version mismatch', { expected: located.task.version, got: requestedVersion });
+        }
+        if (ACTIVE_EXECUTION_STATES.has(located.task.execution?.state || 'none')) {
+          throw boardError(409, 'execution_active', 'cannot delete task while execution is active');
+        }
+        await storage.deleteTask(located.scope, taskId);
+        await appendEvents(located.scope, makeEvent({
+          entityType: 'task',
+          entityId: taskId,
+          projectId: located.task.project_id,
+          action: 'delete_task',
+          actorId,
+          oldVersion: located.task.version,
+          newVersion: located.task.version + 1,
+        }));
+        return { id: taskId, deleted: true };
+      });
+    },
+
     async runTask(taskId, body, actor) {
       const actorId = actorIdFrom(actor);
       if (!actor?.isHuman) throw boardError(403, 'forbidden', 'run requires authenticated human');
@@ -766,6 +885,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
         const located = await assertTaskReadable(id, actor);
         if (!canWriteProject(located.project, actor)) throw boardError(403, 'forbidden', 'task access denied');
         const task = located.task;
+        normalizeTaskShape(task);
         const priorAttempt = (task.execution?.attempts || []).find((a) => a.idempotency_key === idempotencyKey);
         if (priorAttempt) return { task, statusCode: 202 };
         if (task.version !== requestedVersion) throw boardError(409, 'conflict', 'Version mismatch', { expected: task.version, got: requestedVersion });
@@ -776,6 +896,10 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
         const prepared = await createExecutionAttempt(task, actorId, idempotencyKey, 'manual');
         if (prepared.sameAttempt) return { task, statusCode: 202 };
 
+        appendExecutionUpdate(task, {
+          state: 'prepared',
+          summary: 'execution prepared',
+        });
         await persistTaskMutation(located.scope, id, task, actorId, 'run_task_prepared', {
           attempt_id: prepared.attempt.attempt_id,
         });
@@ -794,6 +918,10 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
         await updateAttemptRecord(task, {
           state: 'queued',
           scheduler_job_id: created.job.id,
+        });
+        appendExecutionUpdate(task, {
+          state: 'queued',
+          summary: `queued in scheduler job ${created.job.id}`,
         });
         await persistTaskMutation(located.scope, id, task, actorId, 'run_task_queued', {
           attempt_id: prepared.attempt.attempt_id,
@@ -833,6 +961,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       if (!Number.isInteger(requestedVersion)) throw boardError(422, 'validation_error', 'version is required');
       const id = ensureId(taskId);
       return mutateTask(id, actor, async (task) => {
+        normalizeTaskShape(task);
         if (task.version !== requestedVersion) throw boardError(409, 'conflict', 'Version mismatch', { expected: task.version, got: requestedVersion });
         if (!ACTIVE_EXECUTION_STATES.has(task.execution?.state)) throw boardError(409, 'execution_inactive', 'no active attempt to cancel');
         const runId = task.execution.scheduler_run_id;
@@ -841,6 +970,10 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
           if (result?.errors) throw boardError(422, 'scheduler_error', 'cancel failed', { errors: result.errors });
         }
         await updateAttemptRecord(task, { state: 'cancel_requested' });
+        appendExecutionUpdate(task, {
+          state: 'cancel_requested',
+          summary: 'cancel requested',
+        });
         return task;
       }, 'cancel_task_execution');
     },
@@ -857,6 +990,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
         const located = await assertTaskReadable(id, actor);
         if (!canWriteProject(located.project, actor)) throw boardError(403, 'forbidden', 'task access denied');
         const task = located.task;
+        normalizeTaskShape(task);
         const priorAttempt = (task.execution?.attempts || []).find((a) => a.idempotency_key === idempotencyKey);
         if (priorAttempt) return { task, statusCode: 202 };
         if (task.version !== requestedVersion) throw boardError(409, 'conflict', 'Version mismatch', { expected: task.version, got: requestedVersion });
@@ -871,6 +1005,10 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
         const prepared = await createExecutionAttempt(task, actorId, idempotencyKey, 'retry');
         if (prepared.sameAttempt) return { task, statusCode: 202 };
 
+        appendExecutionUpdate(task, {
+          state: 'prepared',
+          summary: 'retry execution prepared',
+        });
         await persistTaskMutation(located.scope, id, task, actorId, 'retry_task_prepared', {
           attempt_id: prepared.attempt.attempt_id,
         });
@@ -889,6 +1027,10 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
         await updateAttemptRecord(task, {
           state: 'queued',
           scheduler_job_id: created.job.id,
+        });
+        appendExecutionUpdate(task, {
+          state: 'queued',
+          summary: `retry queued in scheduler job ${created.job.id}`,
         });
         await persistTaskMutation(located.scope, id, task, actorId, 'retry_task_queued', {
           attempt_id: prepared.attempt.attempt_id,
@@ -940,6 +1082,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
         const located = await findTaskScoped(taskId);
         if (!located) throw boardError(404, 'not_found', 'task not found');
         const task = located.task;
+        normalizeTaskShape(task);
         if (task.execution?.attempt_id !== attemptId) {
           await appendIgnoredCallbackEvent({
             scope: located.scope,
@@ -1005,21 +1148,15 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
         const before = task.version;
         if (state === 'queued') {
           await updateAttemptRecord(task, { state: 'queued' });
+          appendExecutionUpdate(task, { state: 'queued', summary: 'scheduler queued callback received' });
         } else if (state === 'started') {
           await updateAttemptRecord(task, {
             state: 'running',
             started_at: task.execution?.started_at || nowIso(),
           });
+          appendExecutionUpdate(task, { state: 'running', summary: 'scheduler started callback received' });
         } else if (state === 'succeeded') {
           const runId = body?.scheduler_run_id || task.execution?.scheduler_run_id;
-          await writeServerGeneratedAttemptArtifacts(
-            task,
-            attemptId,
-            'succeeded',
-            redactedResultSummary || task.execution?.result_summary || '',
-            runId,
-            runtimeSecretValues,
-          );
           const artifacts = await registerAttemptArtifacts(task.visibility || 'private', task.id, attemptId);
           task.linked_runs = appendNewestBounded(
             task.linked_runs || [],
@@ -1042,20 +1179,16 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
             scheduler_run_id: runId || null,
             scheduler_job_id: callbackJobId || task.execution?.scheduler_job_id || null,
           });
+          appendExecutionUpdate(task, {
+            state: 'succeeded',
+            summary: ensureLength(redactedResultSummary || 'execution succeeded', 'execution_updates.summary', 0, LIMITS.failureSummaryMax),
+          });
           task.status = 'needs_review';
           task.review.state = 'needs_review';
           clearBlockedState(task);
         } else {
           const failedState = state === 'failed' ? 'failed' : state === 'timed_out' ? 'timed_out' : 'cancelled';
           const runId = callbackRunId || task.execution?.scheduler_run_id || null;
-          await writeServerGeneratedAttemptArtifacts(
-            task,
-            attemptId,
-            failedState,
-            redactedFailureSummary || failedState,
-            runId,
-            runtimeSecretValues,
-          );
           const artifacts = await registerAttemptArtifacts(task.visibility || 'private', task.id, attemptId);
           task.linked_paths = appendNewestBounded(
             task.linked_paths || [],
@@ -1076,6 +1209,10 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
             scheduler_run_id: runId,
             scheduler_job_id: callbackJobId || task.execution?.scheduler_job_id || null,
             artifact_paths: artifacts.map((a) => a.path),
+          });
+          appendExecutionUpdate(task, {
+            state: failedState,
+            summary: ensureLength(redactedFailureSummary || failedState, 'execution_updates.summary', 0, LIMITS.failureSummaryMax),
           });
           task.status = 'blocked';
           task.blocked = {
@@ -1152,6 +1289,22 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
     async getMetadata() {
       const agents = [...(await listCanonicalAgentIds())].sort();
       const workflows = [...(await listCanonicalWorkflowIds())].sort();
+      let teamConfigured = true;
+      let teamAvailable = true;
+      try {
+        storage.resolveScopeRoot('team');
+      } catch (err) {
+        if (err?.code === 'team_root_unconfigured') {
+          teamConfigured = false;
+          teamAvailable = false;
+        } else if (err?.code === 'team_root_unavailable') {
+          teamConfigured = true;
+          teamAvailable = false;
+        } else {
+          throw err;
+        }
+      }
+      const visibilityOptions = teamAvailable ? ['private', 'team'] : ['private'];
       const statusTransitions = Object.fromEntries(
         Object.entries(TASK_STATUS_TRANSITIONS).map(([from, allowed]) => [from, [...allowed.values()]])
       );
@@ -1165,7 +1318,11 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
           assignee_id: 'danny',
           visibility: 'private',
         },
-        visibility_options: ['private', 'team'],
+        visibility: {
+          team_root_configured: teamConfigured,
+          team_root_available: teamAvailable,
+        },
+        visibility_options: visibilityOptions,
         task_status_transitions: statusTransitions,
       };
     },

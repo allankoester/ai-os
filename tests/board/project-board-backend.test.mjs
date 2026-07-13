@@ -156,6 +156,33 @@ test('explicit run creates one attempt/job', async () => {
   }
 });
 
+test('run snapshots task description into attempt and dispatch prompt', async () => {
+  const h = await createHarness();
+  try {
+    const project = await h.service.createProject({ id: 'proj_instruction_snap', name: 'Instruction Snapshot' }, HUMAN_ACTOR);
+    const task = await h.service.createTask({
+      id: 'task_instruction_snap',
+      project_id: project.id,
+      title: 'Instruction Task',
+      description: 'Instruction v1',
+      status: 'todo',
+      assignee_type: 'agent',
+      assignee_id: 'agent_alpha',
+      workflow_id: 'workflow_alpha',
+    }, HUMAN_ACTOR);
+
+    const run = await h.service.runTask(task.id, {
+      version: task.version,
+      idempotency_key: 'idem_instruction_snapshot',
+    }, HUMAN_ACTOR);
+
+    assert.equal(run.task.execution.instruction_snapshot, 'Instruction v1');
+    assert.match(h.scheduler.calls.createJob[0].prompt, /Instruction v1/);
+  } finally {
+    await cleanupRoot(h.rootDir);
+  }
+});
+
 test('idempotency key replay does not duplicate attempt', async () => {
   const h = await createHarness();
   try {
@@ -318,7 +345,7 @@ test('lifecycle callback success transitions task to needs_review and writes lin
   }
 });
 
-test('callback success writes server artifacts into confined attempt output root', async () => {
+test('callback success does not auto-write server summary/transcript artifacts', async () => {
   const h = await createHarness({ schedulerOptions: { runLogs: { run_1: 'scheduler transcript line' } } });
   try {
     const { task } = await h.createProjectAndTask();
@@ -346,17 +373,17 @@ test('callback success writes server artifacts into confined attempt output root
 
     const summaryPath = `${runResult.task.execution.output_root}/server-summary.txt`;
     const transcriptPath = `${runResult.task.execution.output_root}/server-transcript.log`;
-    assert.ok(updated.execution.artifact_paths.includes(summaryPath));
-    assert.ok(updated.execution.artifact_paths.includes(transcriptPath));
-    assert.ok(updated.linked_paths.some((p) => p.path === summaryPath));
-    assert.ok(updated.linked_paths.some((p) => p.path === transcriptPath));
+    assert.ok(!updated.execution.artifact_paths.includes(summaryPath));
+    assert.ok(!updated.execution.artifact_paths.includes(transcriptPath));
+    assert.ok(!updated.linked_paths.some((p) => p.path === summaryPath));
+    assert.ok(!updated.linked_paths.some((p) => p.path === transcriptPath));
 
     const summaryAbs = path.join(h.rootDir, summaryPath);
     const transcriptAbs = path.join(h.rootDir, transcriptPath);
-    const summaryText = await fsp.readFile(summaryAbs, 'utf8');
-    const transcriptText = await fsp.readFile(transcriptAbs, 'utf8');
-    assert.match(summaryText, /state: succeeded/);
-    assert.match(transcriptText, /scheduler transcript line/);
+    const summaryExists = await fsp.stat(summaryAbs).then(() => true).catch(() => false);
+    const transcriptExists = await fsp.stat(transcriptAbs).then(() => true).catch(() => false);
+    assert.equal(summaryExists, false);
+    assert.equal(transcriptExists, false);
   } finally {
     await cleanupRoot(h.rootDir);
   }
@@ -400,6 +427,7 @@ test('execution-linked references keep newest entries when bounded', async () =>
       scheduler_job_id: 'job_1',
       scheduler_run_id: 'run_1',
     }, INTERNAL_ACTOR);
+    await fsp.writeFile(path.join(h.rootDir, run.task.execution.output_root, 'result.txt'), 'bounded output', 'utf8');
     const updated = await h.service.executionCallback({
       task_id: task.id,
       attempt_id: run.task.execution.attempt_id,
@@ -413,7 +441,7 @@ test('execution-linked references keep newest entries when bounded', async () =>
     assert.ok(updated.linked_runs.some((r) => r.id === 'run_1'));
     assert.ok(!updated.linked_runs.some((r) => r.id === 'run_old_0'));
     assert.equal(updated.linked_paths.length, 30);
-    assert.ok(updated.linked_paths.some((p) => p.path.endsWith('/server-summary.txt')));
+    assert.ok(updated.linked_paths.some((p) => p.path.endsWith('/result.txt')));
     assert.ok(!updated.linked_paths.some((p) => p.path === 'artifacts/project-board/seed/0.txt'));
   } finally {
     await cleanupRoot(h.rootDir);
@@ -1177,6 +1205,207 @@ test('blocked -> todo status transition clears blocked metadata', async () => {
   }
 });
 
+test('project and task rename/description patch ops are supported', async () => {
+  const h = await createHarness();
+  try {
+    const { project, task } = await h.createProjectAndTask();
+    const renamedProject = await h.service.patchProject(project.id, {
+      version: project.version,
+      ops: [
+        { op: 'set_name', value: 'Project Alpha Renamed' },
+        { op: 'set_description', value: 'Updated project description' },
+      ],
+    }, HUMAN_ACTOR);
+    assert.equal(renamedProject.name, 'Project Alpha Renamed');
+    assert.equal(renamedProject.description, 'Updated project description');
+    assert.equal(renamedProject.id, project.id);
+
+    const updatedTask = await h.service.patchTask(task.id, {
+      version: task.version,
+      ops: [
+        { op: 'set_title', value: 'Task Alpha Renamed' },
+        { op: 'set_description', value: 'Use this exact instruction snapshot text.' },
+      ],
+    }, HUMAN_ACTOR);
+    assert.equal(updatedTask.title, 'Task Alpha Renamed');
+    assert.equal(updatedTask.description, 'Use this exact instruction snapshot text.');
+    assert.equal(updatedTask.id, task.id);
+  } finally {
+    await cleanupRoot(h.rootDir);
+  }
+});
+
+test('task patch supports workflow/subtasks and human assignee label', async () => {
+  const h = await createHarness();
+  try {
+    const { task } = await h.createProjectAndTask();
+    const patched = await h.service.patchTask(task.id, {
+      version: task.version,
+      ops: [
+        {
+          op: 'set_assignee',
+          value: {
+            assignee_type: 'human',
+            assignee_id: null,
+            human_assignee_label: 'Allan K. (Ops)',
+          },
+        },
+        { op: 'set_workflow_id', value: 'workflow_beta' },
+        {
+          op: 'set_subtasks',
+          value: [
+            { id: 'st_1', text: 'Prep brief', completed: false, order: 1 },
+            { id: 'st_2', text: 'Review output', completed: true, order: 2 },
+          ],
+        },
+      ],
+    }, HUMAN_ACTOR);
+
+    assert.equal(patched.assignee_type, 'human');
+    assert.equal(patched.human_assignee_label, 'Allan K. (Ops)');
+    assert.equal(patched.workflow_id, 'workflow_beta');
+    assert.deepEqual(patched.subtasks, [
+      { id: 'st_1', text: 'Prep brief', completed: false, order: 1 },
+      { id: 'st_2', text: 'Review output', completed: true, order: 2 },
+    ]);
+  } finally {
+    await cleanupRoot(h.rootDir);
+  }
+});
+
+test('task can move back to backlog from done when execution is not active', async () => {
+  const h = await createHarness();
+  try {
+    const project = await h.service.createProject({ id: 'proj_backlog_return', name: 'Backlog Return' }, HUMAN_ACTOR);
+    const task = await h.service.createTask({
+      id: 'task_backlog_return',
+      project_id: project.id,
+      title: 'Backlog Return Task',
+      status: 'done',
+      assignee_type: 'agent',
+      assignee_id: 'agent_alpha',
+      workflow_id: 'workflow_alpha',
+      review: { required: false },
+    }, HUMAN_ACTOR);
+    const moved = await h.service.patchTask(task.id, {
+      version: task.version,
+      ops: [{ op: 'set_status', value: 'backlog' }],
+    }, HUMAN_ACTOR);
+    assert.equal(moved.status, 'backlog');
+    assert.equal(moved.blocked.is_blocked, false);
+  } finally {
+    await cleanupRoot(h.rootDir);
+  }
+});
+
+test('delete task requires confirm/version and rejects active execution', async () => {
+  const h = await createHarness();
+  try {
+    const { task } = await h.createProjectAndTask();
+    await assert.rejects(
+      h.service.deleteTask(task.id, { version: task.version }, HUMAN_ACTOR),
+      (err) => err?.status === 422,
+    );
+
+    const run = await h.service.runTask(task.id, {
+      version: task.version,
+      idempotency_key: 'idem_delete_active',
+    }, HUMAN_ACTOR);
+    await assert.rejects(
+      h.service.deleteTask(task.id, { version: run.task.version, confirm: true }, HUMAN_ACTOR),
+      (err) => err?.status === 409 && err?.code === 'execution_active',
+    );
+
+    const done = await h.service.executionCallback({
+      task_id: task.id,
+      attempt_id: run.task.execution.attempt_id,
+      state: 'failed',
+      scheduler_job_id: 'job_1',
+      scheduler_run_id: 'run_1',
+      failure_summary: 'failed for deletion',
+    }, INTERNAL_ACTOR);
+
+    const deleted = await h.service.deleteTask(task.id, { version: done.version, confirm: true }, HUMAN_ACTOR);
+    assert.equal(deleted.deleted, true);
+    await assert.rejects(
+      h.service.getTask(task.id, HUMAN_ACTOR),
+      (err) => err?.status === 404,
+    );
+  } finally {
+    await cleanupRoot(h.rootDir);
+  }
+});
+
+test('delete project cascades tasks and rejects active task execution', async () => {
+  const h = await createHarness();
+  try {
+    const project = await h.service.createProject({ id: 'proj_delete_cascade', name: 'Delete Cascade' }, HUMAN_ACTOR);
+    const activeTask = await h.service.createTask({
+      id: 'task_delete_active',
+      project_id: project.id,
+      title: 'Active Task',
+      status: 'todo',
+      assignee_type: 'agent',
+      assignee_id: 'agent_alpha',
+      workflow_id: 'workflow_alpha',
+    }, HUMAN_ACTOR);
+    const passiveTask = await h.service.createTask({
+      id: 'task_delete_passive',
+      project_id: project.id,
+      title: 'Passive Task',
+      status: 'todo',
+      assignee_type: 'human',
+      human_assignee_label: 'Manual owner',
+    }, HUMAN_ACTOR);
+    const run = await h.service.runTask(activeTask.id, {
+      version: activeTask.version,
+      idempotency_key: 'idem_project_delete_active',
+    }, HUMAN_ACTOR);
+
+    await assert.rejects(
+      h.service.deleteProject(project.id, { version: project.version, confirm: true }, HUMAN_ACTOR),
+      (err) => err?.status === 409 && err?.code === 'execution_active',
+    );
+
+    await h.service.executionCallback({
+      task_id: activeTask.id,
+      attempt_id: run.task.execution.attempt_id,
+      state: 'failed',
+      scheduler_job_id: 'job_1',
+      scheduler_run_id: 'run_1',
+      failure_summary: 'done running',
+    }, INTERNAL_ACTOR);
+
+    const projectNow = await h.service.getProject(project.id, HUMAN_ACTOR);
+    const deleted = await h.service.deleteProject(project.id, { version: projectNow.version, confirm: true }, HUMAN_ACTOR);
+    assert.equal(deleted.deleted, true);
+    assert.equal(deleted.cascade_deleted_tasks, 2);
+
+    await assert.rejects(h.service.getProject(project.id, HUMAN_ACTOR), (err) => err?.status === 404);
+    await assert.rejects(h.service.getTask(activeTask.id, HUMAN_ACTOR), (err) => err?.status === 404);
+    await assert.rejects(h.service.getTask(passiveTask.id, HUMAN_ACTOR), (err) => err?.status === 404);
+  } finally {
+    await cleanupRoot(h.rootDir);
+  }
+});
+
+test('metadata visibility options hide team when team root is unavailable', async () => {
+  const privateRoot = path.join(os.tmpdir(), `board-private-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const missingTeamRoot = path.join(os.tmpdir(), `board-team-missing-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const h = await createHarness({ boardRoots: { privateRoot, teamRoot: missingTeamRoot } });
+  try {
+    await fsp.rm(missingTeamRoot, { recursive: true, force: true });
+    const metadata = await h.service.getMetadata();
+    assert.equal(metadata.visibility.team_root_configured, true);
+    assert.equal(metadata.visibility.team_root_available, false);
+    assert.deepEqual(metadata.visibility_options, ['private']);
+  } finally {
+    await cleanupRoot(h.rootDir);
+    await fsp.rm(privateRoot, { recursive: true, force: true });
+    await fsp.rm(missingTeamRoot, { recursive: true, force: true });
+  }
+});
+
 test('migration replay to same visibility is a no-op and keeps tasks', async () => {
   const privateRoot = path.join(os.tmpdir(), `board-private-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const teamRoot = path.join(os.tmpdir(), `board-team-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -1291,6 +1520,49 @@ test('legacy private fallback includes tasks when primary root has none', async 
   }
 });
 
+test('legacy private fallback project can be deleted via service deleteProject', async () => {
+  const privateRoot = path.join(os.tmpdir(), `board-private-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const h = await createHarness({ boardRoots: { privateRoot, teamRoot: null } });
+  try {
+    await fsp.mkdir(path.join(h.rootDir, 'project-board', 'projects'), { recursive: true });
+    await fsp.mkdir(path.join(h.rootDir, 'project-board', 'tasks'), { recursive: true });
+    await fsp.writeFile(path.join(h.rootDir, 'project-board', 'projects', 'legacy_project.json'), JSON.stringify({
+      id: 'legacy_project',
+      name: 'Legacy Project',
+      visibility: 'private',
+      owner_id: HUMAN_ACTOR.id,
+      status: 'active',
+      description: '',
+      version: 1,
+    }), 'utf8');
+    await fsp.writeFile(path.join(h.rootDir, 'project-board', 'tasks', 'legacy_task.json'), JSON.stringify({
+      id: 'legacy_task',
+      project_id: 'legacy_project',
+      title: 'Legacy Task',
+      status: 'todo',
+      priority: 'medium',
+      assignee_type: 'unassigned',
+      assignee_id: null,
+      version: 1,
+    }), 'utf8');
+
+    const projectsBefore = await h.service.listProjects({}, HUMAN_ACTOR);
+    assert.ok(projectsBefore.items.some((p) => p.id === 'legacy_project'));
+
+    const deleted = await h.service.deleteProject('legacy_project', { version: 1, confirm: true }, HUMAN_ACTOR);
+    assert.equal(deleted.deleted, true);
+    assert.equal(deleted.cascade_deleted_tasks, 1);
+
+    const projectsAfter = await h.service.listProjects({}, HUMAN_ACTOR);
+    assert.ok(!projectsAfter.items.some((p) => p.id === 'legacy_project'));
+    const tasksAfter = await h.service.listTasks({ project_id: 'legacy_project' }, HUMAN_ACTOR);
+    assert.equal(tasksAfter.items.length, 0);
+  } finally {
+    await cleanupRoot(h.rootDir);
+    await fsp.rm(privateRoot, { recursive: true, force: true });
+  }
+});
+
 test('malformed task entity fails closed as storage corruption on direct read', async () => {
   const privateRoot = path.join(os.tmpdir(), `board-private-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const h = await createHarness({ boardRoots: { privateRoot, teamRoot: null } });
@@ -1395,6 +1667,85 @@ test('forged Origin/Referer headers do not bypass board auth when token is confi
   }
 });
 
+test('DELETE project/task API routes enforce confirm/version and return board envelope', async () => {
+  const port = 45780 + Math.floor(Math.random() * 300);
+  const server = spawn(process.execPath, ['interface/server.mjs'], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PORT: String(port),
+      HOST: '127.0.0.1',
+      STEADYMADE_INTERFACE_TOKEN: 'token_for_delete_routes',
+      BOARD_INTERNAL_TOKEN: 'board_secret_test_token',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const headers = { 'content-type': 'application/json', 'x-steadymade-token': 'token_for_delete_routes' };
+
+  const waitUntilReady = async () => {
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}/api/system`);
+        if (response.ok) return;
+      } catch {
+        // startup race
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error('server did not start in time');
+  };
+
+  try {
+    await waitUntilReady();
+    const createdProjectRes = await fetch(`http://127.0.0.1:${port}/api/projects`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ id: 'proj_api_delete', name: 'API Delete Project' }),
+    });
+    const createdProject = await createdProjectRes.json();
+    assert.equal(createdProjectRes.status, 201);
+
+    const createdTaskRes = await fetch(`http://127.0.0.1:${port}/api/tasks`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        id: 'task_api_delete',
+        project_id: 'proj_api_delete',
+        title: 'API Delete Task',
+        status: 'todo',
+        assignee_type: 'human',
+        human_assignee_label: 'Manual owner',
+      }),
+    });
+    const createdTask = await createdTaskRes.json();
+    assert.equal(createdTaskRes.status, 201);
+
+    const deleteTaskRes = await fetch(`http://127.0.0.1:${port}/api/tasks/task_api_delete`, {
+      method: 'DELETE',
+      headers,
+      body: JSON.stringify({ version: createdTask.data.version, confirm: true }),
+    });
+    const deleteTaskBody = await deleteTaskRes.json();
+    assert.equal(deleteTaskRes.status, 200);
+    assert.equal(deleteTaskBody.ok, true);
+    assert.equal(deleteTaskBody.data.deleted, true);
+
+    const deleteProjectRes = await fetch(`http://127.0.0.1:${port}/api/projects/proj_api_delete`, {
+      method: 'DELETE',
+      headers,
+      body: JSON.stringify({ version: createdProject.data.version, confirm: true }),
+    });
+    const deleteProjectBody = await deleteProjectRes.json();
+    assert.equal(deleteProjectRes.status, 200);
+    assert.equal(deleteProjectBody.ok, true);
+    assert.equal(deleteProjectBody.data.deleted, true);
+  } finally {
+    server.kill('SIGTERM');
+    await new Promise((resolve) => server.once('exit', resolve));
+  }
+});
+
 test('queued then directly succeeded callback transitions task to needs_review', async () => {
   const h = await createHarness();
   try {
@@ -1428,7 +1779,7 @@ test('queued then directly succeeded callback transitions task to needs_review',
   }
 });
 
-test('board transcript and summary artifacts redact runtime secrets', async () => {
+test('execution callback stores lifecycle updates and does not auto-link server artifacts', async () => {
   const secret = 'board_super_secret_value';
   const h = await createHarness({
     runtimeEnvVault: { BOARD_SECRET: secret },
@@ -1444,20 +1795,32 @@ test('board transcript and summary artifacts redact runtime secrets', async () =
     await h.service.executionCallback({
       task_id: task.id,
       attempt_id: runResult.task.execution.attempt_id,
+      state: 'started',
+      scheduler_job_id: 'job_1',
+      scheduler_run_id: 'run_1',
+    }, INTERNAL_ACTOR);
+
+    const updated = await h.service.executionCallback({
+      task_id: task.id,
+      attempt_id: runResult.task.execution.attempt_id,
       state: 'succeeded',
       scheduler_job_id: 'job_1',
       scheduler_run_id: 'run_1',
       result_summary: `result carries ${secret}`,
     }, INTERNAL_ACTOR);
 
+    assert.ok(Array.isArray(updated.execution.execution_updates));
+    assert.ok(updated.execution.execution_updates.some((u) => u.state === 'running'));
+    assert.ok(updated.execution.execution_updates.some((u) => u.state === 'succeeded'));
+    assert.ok(!updated.linked_paths.some((p) => p.path.endsWith('/server-summary.txt')));
+    assert.ok(!updated.linked_paths.some((p) => p.path.endsWith('/server-transcript.log')));
+
     const summaryPath = path.join(h.rootDir, runResult.task.execution.output_root, 'server-summary.txt');
     const transcriptPath = path.join(h.rootDir, runResult.task.execution.output_root, 'server-transcript.log');
-    const summaryText = await fsp.readFile(summaryPath, 'utf8');
-    const transcriptText = await fsp.readFile(transcriptPath, 'utf8');
-    assert.ok(!summaryText.includes(secret));
-    assert.ok(!transcriptText.includes(secret));
-    assert.ok(summaryText.includes('****'));
-    assert.ok(transcriptText.includes('****'));
+    const summaryExists = await fsp.stat(summaryPath).then(() => true).catch(() => false);
+    const transcriptExists = await fsp.stat(transcriptPath).then(() => true).catch(() => false);
+    assert.equal(summaryExists, false);
+    assert.equal(transcriptExists, false);
   } finally {
     await cleanupRoot(h.rootDir);
   }

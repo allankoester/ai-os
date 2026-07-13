@@ -13,8 +13,13 @@ export const TERMINAL_EXECUTION_STATES = new Set(['succeeded', 'failed', 'timed_
 
 export const PATCH_OPS = new Set([
   'set_status',
+  'set_name',
+  'set_title',
+  'set_description',
   'set_priority',
   'set_assignee',
+  'set_workflow_id',
+  'set_subtasks',
   'set_due_at',
   'set_review_required',
   'set_reviewers',
@@ -25,11 +30,11 @@ export const PATCH_OPS = new Set([
 
 export const TASK_STATUS_TRANSITIONS = {
   backlog: new Set(['todo']),
-  todo: new Set(['in_progress', 'blocked']),
-  in_progress: new Set(['needs_review', 'blocked', 'todo']),
-  needs_review: new Set(['in_progress', 'done', 'blocked']),
-  blocked: new Set(['todo', 'in_progress']),
-  done: new Set(['in_progress']),
+  todo: new Set(['in_progress', 'blocked', 'backlog']),
+  in_progress: new Set(['needs_review', 'blocked', 'todo', 'backlog']),
+  needs_review: new Set(['in_progress', 'done', 'blocked', 'backlog']),
+  blocked: new Set(['todo', 'in_progress', 'backlog']),
+  done: new Set(['in_progress', 'backlog']),
 };
 
 export const REVIEW_TRANSITIONS = {
@@ -44,9 +49,13 @@ export const CALLBACK_STATES = new Set(['queued', 'started', 'succeeded', 'faile
 export const LIMITS = {
   projectNameMax: 120,
   taskTitleMax: 160,
+  humanAssigneeLabelMax: 120,
   descriptionMax: 4000,
+  subtasksMax: 100,
+  subtaskTextMax: 280,
   resultSummaryMax: 4000,
   failureSummaryMax: 1000,
+  executionUpdatesMax: 200,
   tagsMax: 20,
   linkedPathsMax: 30,
   linkedRunsMax: 30,
