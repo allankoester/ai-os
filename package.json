@@ -3,6 +3,10 @@
   "private": true,
   "version": "0.0.0",
   "description": "Steadymade AI OS chat runtime terminal dependencies",
+  "scripts": {
+    "test:board": "node --test tests/board/*.test.mjs",
+    "test": "node --test tests/board/*.test.mjs"
+  },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
     "node-pty": "^1.2.0-beta.12",

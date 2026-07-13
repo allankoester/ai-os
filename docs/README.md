@@ -3,6 +3,7 @@
 ## Canonical Docs
 
 - `docs/status-and-roadmap.md`
+- `docs/spec-desktop-app-electron-macos-first.md`
 - `docs/ai-os-migration-status.md`
 - `docs/guide-how-to-start.md`
 - `docs/runbook-stage1-onboarding.md`

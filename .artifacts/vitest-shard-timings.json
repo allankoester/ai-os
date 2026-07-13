@@ -1,0 +1,515 @@
+{
+  "version": 1,
+  "configs": {
+    "test/vitest/vitest.gateway-server.config.ts": {
+      "averageMs": 392,
+      "lastMs": 278,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.gateway-methods.config.ts": {
+      "averageMs": 397,
+      "lastMs": 290,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.utils.config.ts": {
+      "averageMs": 395,
+      "lastMs": 305,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.unit-fast-fake-timers.config.ts": {
+      "averageMs": 428,
+      "lastMs": 249,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.tui.config.ts": {
+      "averageMs": 389,
+      "lastMs": 275,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.gateway-client.config.ts": {
+      "averageMs": 407,
+      "lastMs": 275,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.ui.config.ts": {
+      "averageMs": 393,
+      "lastMs": 276,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.gateway-core.config.ts": {
+      "averageMs": 413,
+      "lastMs": 277,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.agents-core.config.ts": {
+      "averageMs": 297,
+      "lastMs": 261,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.shared-core.config.ts": {
+      "averageMs": 321,
+      "lastMs": 299,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.agents-embedded-agent.config.ts": {
+      "averageMs": 345,
+      "lastMs": 371,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.tui-pty.config.ts": {
+      "averageMs": 352,
+      "lastMs": 374,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.process.config.ts": {
+      "averageMs": 323,
+      "lastMs": 264,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-voice-call.config.ts": {
+      "averageMs": 357,
+      "lastMs": 387,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.commands.config.ts": {
+      "averageMs": 400,
+      "lastMs": 328,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.tooling-docker.config.ts": {
+      "averageMs": 421,
+      "lastMs": 348,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.agents-support.config.ts": {
+      "averageMs": 447,
+      "lastMs": 407,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extensions.config.ts": {
+      "averageMs": 446,
+      "lastMs": 342,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.hooks.config.ts": {
+      "averageMs": 436,
+      "lastMs": 258,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-codex-app-server-attempt.config.ts": {
+      "averageMs": 468,
+      "lastMs": 302,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.media-understanding.config.ts": {
+      "averageMs": 513,
+      "lastMs": 279,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.logging.config.ts": {
+      "averageMs": 571,
+      "lastMs": 419,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.agents-tools.config.ts": {
+      "averageMs": 514,
+      "lastMs": 311,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-qa.config.ts": {
+      "averageMs": 523,
+      "lastMs": 416,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-provider-openai.config.ts": {
+      "averageMs": 636,
+      "lastMs": 382,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.tasks.config.ts": {
+      "averageMs": 522,
+      "lastMs": 276,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-misc.config.ts": {
+      "averageMs": 573,
+      "lastMs": 276,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.runtime-config.config.ts": {
+      "averageMs": 625,
+      "lastMs": 304,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-media.config.ts": {
+      "averageMs": 585,
+      "lastMs": 322,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-browser.config.ts": {
+      "averageMs": 607,
+      "lastMs": 429,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.channels.config.ts": {
+      "averageMs": 564,
+      "lastMs": 328,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.acp.config.ts": {
+      "averageMs": 562,
+      "lastMs": 271,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.tooling-isolated.config.ts": {
+      "averageMs": 391,
+      "lastMs": 311,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.auto-reply-reply.config.ts": {
+      "averageMs": 388,
+      "lastMs": 263,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.unit-fast.config.ts": {
+      "averageMs": 407,
+      "lastMs": 277,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-active-memory.config.ts": {
+      "averageMs": 349,
+      "lastMs": 277,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-msteams.config.ts": {
+      "averageMs": 442,
+      "lastMs": 277,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.infra.config.ts": {
+      "averageMs": 435,
+      "lastMs": 271,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.secrets.config.ts": {
+      "averageMs": 474,
+      "lastMs": 258,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-memory.config.ts": {
+      "averageMs": 442,
+      "lastMs": 295,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.cron.config.ts": {
+      "averageMs": 423,
+      "lastMs": 260,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.wizard.config.ts": {
+      "averageMs": 396,
+      "lastMs": 255,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-diffs.config.ts": {
+      "averageMs": 412,
+      "lastMs": 269,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.unit-src.config.ts": {
+      "averageMs": 414,
+      "lastMs": 247,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-signal.config.ts": {
+      "averageMs": 416,
+      "lastMs": 324,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-acpx.config.ts": {
+      "averageMs": 450,
+      "lastMs": 291,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-codex-app-server-attempt-extra.config.ts": {
+      "averageMs": 429,
+      "lastMs": 271,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-line.config.ts": {
+      "averageMs": 425,
+      "lastMs": 273,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-matrix.config.ts": {
+      "averageMs": 438,
+      "lastMs": 285,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-imessage.config.ts": {
+      "averageMs": 418,
+      "lastMs": 271,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-discord.config.ts": {
+      "averageMs": 469,
+      "lastMs": 310,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-providers.config.ts": {
+      "averageMs": 445,
+      "lastMs": 342,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-mattermost.config.ts": {
+      "averageMs": 428,
+      "lastMs": 270,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-messaging.config.ts": {
+      "averageMs": 479,
+      "lastMs": 319,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-feishu.config.ts": {
+      "averageMs": 431,
+      "lastMs": 283,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-telegram.config.ts": {
+      "averageMs": 452,
+      "lastMs": 318,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-whatsapp.config.ts": {
+      "averageMs": 434,
+      "lastMs": 324,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-irc.config.ts": {
+      "averageMs": 441,
+      "lastMs": 274,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.auto-reply-core.config.ts": {
+      "averageMs": 434,
+      "lastMs": 286,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.contracts-plugin.config.ts": {
+      "averageMs": 447,
+      "lastMs": 319,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-zalo.config.ts": {
+      "averageMs": 408,
+      "lastMs": 311,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-codex-app-server-runtime.config.ts": {
+      "averageMs": 457,
+      "lastMs": 271,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.unit-support.config.ts": {
+      "averageMs": 465,
+      "lastMs": 294,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.cli.config.ts": {
+      "averageMs": 466,
+      "lastMs": 286,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.contracts-channel-config.config.ts": {
+      "averageMs": 453,
+      "lastMs": 305,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.tooling.config.ts": {
+      "averageMs": 519,
+      "lastMs": 301,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.unit-security.config.ts": {
+      "averageMs": 599,
+      "lastMs": 259,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.media.config.ts": {
+      "averageMs": 570,
+      "lastMs": 281,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-codex-app-server-attempt-light.config.ts": {
+      "averageMs": 580,
+      "lastMs": 323,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.boundary.config.ts": {
+      "averageMs": 592,
+      "lastMs": 356,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.contracts-channel-registry.config.ts": {
+      "averageMs": 535,
+      "lastMs": 365,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.plugins.config.ts": {
+      "averageMs": 565,
+      "lastMs": 338,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.bundled.config.ts": {
+      "averageMs": 538,
+      "lastMs": 271,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-codex-app-server-attempt-support.config.ts": {
+      "averageMs": 447,
+      "lastMs": 259,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.daemon.config.ts": {
+      "averageMs": 504,
+      "lastMs": 327,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-codex-app-server-tools.config.ts": {
+      "averageMs": 399,
+      "lastMs": 270,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.plugin-sdk-light.config.ts": {
+      "averageMs": 492,
+      "lastMs": 351,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.auto-reply-top-level.config.ts": {
+      "averageMs": 488,
+      "lastMs": 360,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-slack.config.ts": {
+      "averageMs": 432,
+      "lastMs": 294,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.plugin-sdk.config.ts": {
+      "averageMs": 446,
+      "lastMs": 365,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-codex-app-server-support.config.ts": {
+      "averageMs": 359,
+      "lastMs": 269,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.commands-light.config.ts": {
+      "averageMs": 363,
+      "lastMs": 312,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.contracts-channel-session.config.ts": {
+      "averageMs": 322,
+      "lastMs": 244,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.extension-codex-surface.config.ts": {
+      "averageMs": 347,
+      "lastMs": 287,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    },
+    "test/vitest/vitest.contracts-channel-surface.config.ts": {
+      "averageMs": 349,
+      "lastMs": 404,
+      "sampleCount": 3,
+      "updatedAt": "2026-07-13T05:15:42.297Z"
+    }
+  }
+}

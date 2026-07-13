@@ -13,7 +13,7 @@ import { randomUUID } from 'node:crypto';
 const TICK_MS = 20_000;
 const MAX_RUNS_KEPT = 200;
 const SCHEDULER_PERMISSION_MODE = process.env.SCHEDULER_PERMISSION_MODE || 'default';
-const SCHEDULER_ALLOWED_TOOLS = process.env.SCHEDULER_ALLOWED_TOOLS || 'Task,Read,Glob,Grep,Skill,WebFetch';
+const SCHEDULER_ALLOWED_TOOLS = process.env.SCHEDULER_ALLOWED_TOOLS || 'Read,Glob,Grep,Task,Skill,WebFetch';
 
 // Locate the Claude Code CLI. The binary is not always on PATH (e.g. when the
 // CLI ships inside the VS Code extension), so try in order:
@@ -99,7 +99,7 @@ export function cronNext(expr, from = new Date()) {
 
 // ---------- scheduler ----------
 
-export function createScheduler({ rootDir }) {
+export function createScheduler({ rootDir, onRunEvent = null, resolveRuntimeContext = null }) {
   const stateDir = path.join(rootDir, 'scheduler');
   const logsDir = path.join(stateDir, 'logs');
   const jobsFile = path.join(stateDir, 'jobs.json');
@@ -133,7 +133,28 @@ export function createScheduler({ rootDir }) {
     }
     const timeout = Number(input.timeoutMinutes ?? 15);
     if (!(timeout >= 1 && timeout <= 120)) errors.push('timeoutMinutes must be between 1 and 120');
+    if (input.meta !== undefined && (typeof input.meta !== 'object' || !input.meta || Array.isArray(input.meta))) {
+      errors.push('meta must be an object when provided');
+    }
     return errors;
+  }
+
+  function emitRunEvent(event) {
+    if (typeof onRunEvent !== 'function') return;
+    const maxAttempts = 3;
+    const delaysMs = [200, 700, 1500];
+    const attempt = (n) => {
+      Promise.resolve(onRunEvent(event)).catch((err) => {
+        if (n >= maxAttempts) {
+          const msg = String(err?.message || err || 'unknown callback error');
+          console.error(`[scheduler] board callback failed after ${maxAttempts} attempts: ${msg}`);
+          return;
+        }
+        const delay = delaysMs[n - 1] ?? 1500;
+        setTimeout(() => attempt(n + 1), delay).unref?.();
+      });
+    };
+    attempt(1);
   }
 
   function oncePending(job) {
@@ -168,6 +189,16 @@ export function createScheduler({ rootDir }) {
     } catch {
       // scheduler telemetry must never break run execution
     }
+  }
+
+  function redactSecretsInText(text, secretValues) {
+    let out = String(text || '');
+    for (const rawSecret of secretValues || []) {
+      const secret = String(rawSecret || '');
+      if (!secret) continue;
+      out = out.split(secret).join('****');
+    }
+    return out;
   }
 
   function logSchedulerUsage(run, job) {
@@ -215,12 +246,41 @@ export function createScheduler({ rootDir }) {
     return parts.join('\n\n');
   }
 
+  async function resolveJobRuntime(job) {
+    const runtimeModeFromJob = String(job?.meta?.runtime_mode || '').trim();
+    let runtimeSettings = null;
+    if (typeof resolveRuntimeContext === 'function') {
+      try { runtimeSettings = await resolveRuntimeContext(); } catch { runtimeSettings = null; }
+    }
+    const runtimeMode = runtimeModeFromJob || String(runtimeSettings?.runtimeMode || 'claude-subscription');
+    const envVault = runtimeSettings?.envVault && typeof runtimeSettings.envVault === 'object' && !Array.isArray(runtimeSettings.envVault)
+      ? runtimeSettings.envVault
+      : {};
+    const secretValues = [];
+    const env = { ...process.env };
+    for (const [key, value] of Object.entries(envVault)) {
+      const asString = String(value ?? '');
+      env[key] = asString;
+      if (asString) secretValues.push(asString);
+    }
+    return {
+      runtimeMode,
+      env,
+      opencodeBin: String(runtimeSettings?.opencodeBin || '').trim() || 'opencode',
+      secretValues,
+    };
+  }
+
   async function executeJob(job, trigger) {
     if (running.has(job.id)) {
       return { error: 'job is already running' };
     }
-    const claudeBin = resolveClaudeBin();
-    if (!claudeBin) {
+    const runtime = await resolveJobRuntime(job);
+    const runtimeMode = runtime.runtimeMode === 'opencode' ? 'opencode' : runtime.runtimeMode;
+    const usesClaudeDriver = runtimeMode === 'claude-subscription' || runtimeMode === 'anthropic-api';
+    const usesOpenCodeDriver = runtimeMode === 'opencode';
+    const claudeBin = usesClaudeDriver ? resolveClaudeBin() : null;
+    if (usesClaudeDriver && !claudeBin) {
       return { error: 'Claude Code CLI not found — install it or set CLAUDE_BIN to the binary path' };
     }
     const run = {
@@ -236,24 +296,30 @@ export function createScheduler({ rootDir }) {
     };
     runs.unshift(run);
     await persistRuns();
+    emitRunEvent({ type: 'queued', runId: run.id, jobId: job.id, trigger, meta: job.meta || null, summary: '' });
 
     const logFile = path.join(logsDir, `${run.id}.log`);
-    const args = ['-p', buildPrompt(job), '--output-format', 'text',
-      '--permission-mode', SCHEDULER_PERMISSION_MODE,
-      '--allowedTools', SCHEDULER_ALLOWED_TOOLS,
-      // curated long-term memory is draft-only for unattended runs — same
-      // block as the chat runtime (Simon audit, phase 6)
-      '--disallowedTools', 'Write(./memory/MEMORY.md),Edit(./memory/MEMORY.md)'];
-    if (job.model) args.push('--model', job.model);
+    const args = usesOpenCodeDriver
+      ? ['run', buildPrompt(job), '--format', 'json']
+      : ['-p', buildPrompt(job), '--output-format', 'text',
+        '--permission-mode', SCHEDULER_PERMISSION_MODE,
+        '--allowedTools', SCHEDULER_ALLOWED_TOOLS,
+        '--disallowedTools', 'Write(./memory/MEMORY.md),Edit(./memory/MEMORY.md)'];
+    if (job.model && usesClaudeDriver) args.push('--model', job.model);
 
     let output = '';
     let spawnFailed = false;
-    const child = spawn(claudeBin, args, {
+    const execBin = usesOpenCodeDriver ? runtime.opencodeBin : claudeBin;
+    if (!execBin) {
+      return { error: `runtime mode ${runtimeMode} is not supported by scheduler` };
+    }
+    const child = spawn(execBin, args, {
       cwd: rootDir,
-      env: process.env,
+      env: runtime.env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     running.set(job.id, child);
+    emitRunEvent({ type: 'started', runId: run.id, jobId: job.id, trigger, meta: job.meta || null, summary: '' });
 
     const timeoutMs = (Number(job.timeoutMinutes) || 15) * 60_000;
     const timer = setTimeout(() => {
@@ -270,10 +336,11 @@ export function createScheduler({ rootDir }) {
       spawnFailed = true;
       run.status = 'error';
       run.endedAt = Date.now();
-      run.summary = `failed to start claude CLI (${claudeBin}): ${err.message}`;
+      run.summary = redactSecretsInText(`failed to start scheduler CLI (${execBin}): ${err.message}`, runtime.secretValues).slice(0, 400);
       await fsp.writeFile(logFile, run.summary + '\n', 'utf8').catch(() => {});
       await persistRuns();
       logSchedulerUsage(run, job);
+      emitRunEvent({ type: 'error', runId: run.id, jobId: job.id, trigger, meta: job.meta || null, summary: run.summary });
     });
 
     child.on('close', async (code) => {
@@ -283,8 +350,9 @@ export function createScheduler({ rootDir }) {
       run.endedAt = Date.now();
       run.exitCode = code;
       if (run.status === 'running') run.status = code === 0 ? 'ok' : 'error';
-      run.summary = output.trim().slice(0, 400);
-      await fsp.writeFile(logFile, output, 'utf8').catch(() => {});
+      const redactedOutput = redactSecretsInText(output, runtime.secretValues);
+      run.summary = redactedOutput.trim().slice(0, 400);
+      await fsp.writeFile(logFile, redactedOutput, 'utf8').catch(() => {});
       const stored = jobs.find((j) => j.id === job.id);
       if (stored) {
         stored.lastRun = { runId: run.id, status: run.status, at: run.startedAt };
@@ -292,6 +360,14 @@ export function createScheduler({ rootDir }) {
       }
       await persistRuns();
       logSchedulerUsage(run, job);
+      emitRunEvent({
+        type: run.status === 'ok' ? 'ok' : run.status === 'timeout' ? 'timeout' : run.status === 'cancelled' ? 'cancelled' : 'error',
+        runId: run.id,
+        jobId: job.id,
+        trigger,
+        meta: job.meta || null,
+        summary: run.summary,
+      });
     });
 
     return { run };
@@ -353,6 +429,7 @@ export function createScheduler({ rootDir }) {
         enabled: input.enabled !== false,
         timeoutMinutes: Number(input.timeoutMinutes ?? 15),
         model: input.model || null,
+        meta: input.meta && typeof input.meta === 'object' && !Array.isArray(input.meta) ? input.meta : null,
         createdAt: Date.now(),
         lastRun: null,
       };
@@ -371,6 +448,7 @@ export function createScheduler({ rootDir }) {
       merged.schedule = String(merged.schedule || '').trim();
       merged.runAt = merged.scheduleType === 'once' ? Number(merged.runAt) : null;
       merged.workflow = merged.workflow || null;
+      merged.meta = merged.meta && typeof merged.meta === 'object' && !Array.isArray(merged.meta) ? merged.meta : null;
       merged.timeoutMinutes = Number(merged.timeoutMinutes);
       merged.enabled = Boolean(merged.enabled);
       jobs = jobs.map((j) => (j.id === id ? merged : j));
@@ -414,6 +492,19 @@ export function createScheduler({ rootDir }) {
       const result = await executeJob(job, 'manual');
       if (result.error) return { errors: [result.error] };
       return { run: result.run };
+    },
+    async cancelRun(runId) {
+      if (!/^[0-9a-f-]+$/i.test(String(runId || ''))) return { errors: ['run not found'] };
+      const run = runs.find((r) => r.id === runId);
+      if (!run) return { errors: ['run not found'] };
+      const child = running.get(run.jobId);
+      if (!child) return { ok: true, alreadyFinished: true };
+      run.status = 'cancelled';
+      try { child.kill('SIGTERM'); } catch {}
+      setTimeout(() => {
+        try { child.kill('SIGKILL'); } catch {}
+      }, 1000).unref?.();
+      return { ok: true };
     },
   };
 }

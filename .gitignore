@@ -8,6 +8,11 @@ runs/*
 !runs/README.md
 !runs/run-log-template.md
 
+# Project board state is machine-local runtime coordination data
+project-board/*
+!project-board/README.md
+artifacts/project-board/*
+
 # Personal agent memory is machine-local (contract doc stays tracked)
 memory/*
 !memory/README.md
@@ -52,6 +57,9 @@ CLAUDE.local.md
 
 # Local JS dependencies
 node_modules/
+
+# Local deep-work orchestration state
+.slim/deepwork/
 
 # OS/editor noise
 .DS_Store

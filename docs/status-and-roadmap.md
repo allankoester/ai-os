@@ -121,6 +121,14 @@ Roadmap baseline references:
 | 4 | VM execution runtime and common harness | planned | Runtime migration not active yet; target SQLite-backed scheduler harness |
 | 5 | Enterprise connectors/policy | planned | Not implemented |
 
+### Desktop packaging track (new spec drafted 2026-07-13)
+
+- A macOS-first desktop packaging specification is now documented:
+  `docs/spec-desktop-app-electron-macos-first.md`.
+- Scope in this checkpoint is specification only (architecture, dependencies,
+  external storage/API/terminal proposals, risk register, release gates).
+- No runtime/package implementation is active yet; status remains **planned**.
+
 ### OneDrive knowledge migration status
 
 - Phase 1 (docs and decision lock): implemented

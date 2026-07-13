@@ -5,6 +5,7 @@ const stageEl = document.getElementById('stage');
 const chatEl = document.getElementById('chat');
 const inputEl = document.getElementById('input');
 const sendBtn = document.getElementById('send');
+const addTaskBtn = document.getElementById('addTask');
 const statusEl = document.getElementById('status');
 const sessEl = document.getElementById('sess');
 const modelSel = document.getElementById('model');
@@ -268,6 +269,44 @@ function addMetaLine(shell, d) {
 function autosize() {
   inputEl.style.height = 'auto';
   inputEl.style.height = `${Math.min(inputEl.scrollHeight, 180)}px`;
+}
+
+function canAddTaskHandoff() {
+  if (window.parent === window) return false;
+  if (incogEl.checked) return false;
+  return Boolean(state.conversationId);
+}
+
+function updateAddTaskButtonState() {
+  if (!addTaskBtn) return;
+  const enabled = canAddTaskHandoff();
+  addTaskBtn.disabled = !enabled;
+  if (!enabled) {
+    addTaskBtn.title = incogEl.checked ? 'Unavailable in incognito mode' : 'Open or start a conversation first';
+  } else {
+    addTaskBtn.title = 'Send selected/current text to Projects as task draft';
+  }
+}
+
+function boundedText(raw) {
+  return String(raw || '').trim().slice(0, 4000);
+}
+
+function sendAddTaskHandoff() {
+  if (!canAddTaskHandoff()) return;
+  const source = String(inputEl.value || '');
+  const hasSelection = Number.isInteger(inputEl.selectionStart)
+    && Number.isInteger(inputEl.selectionEnd)
+    && inputEl.selectionEnd > inputEl.selectionStart;
+  const selectedText = hasSelection ? boundedText(source.slice(inputEl.selectionStart, inputEl.selectionEnd)) : '';
+  const composerText = boundedText(source);
+  if (!selectedText && !composerText) return;
+  window.parent.postMessage({
+    type: 'steadymade-chat-add-task',
+    conversationId: state.conversationId,
+    selectedText,
+    composerText,
+  }, trustedParentOrigin());
 }
 
 function setBusy(busy) {
@@ -814,6 +853,7 @@ function handleStreamEvent(ev, d, streamAgentId) {
         state.conversationId = d.id;
         state.streamConversationId = d.id;
         localStorage.setItem(CONV_KEY, d.id);
+        updateAddTaskButtonState();
       }
       break;
     case 'init':
@@ -933,6 +973,7 @@ async function loadConversation(id) {
   try {
     const { session, events } = await apiJson(`/api/session?id=${encodeURIComponent(id)}`);
     state.conversationId = id;
+    updateAddTaskButtonState();
     localStorage.setItem(CONV_KEY, id);
     selectAgent(session.agent || 'danny');
     sessEl.textContent = `Conversation ${id.slice(0, 8)} · ${session.turns || 0} turns`;
@@ -1018,6 +1059,7 @@ function resetConversation() {
   detachStream();
   state.conversationId = null;
   state.incognitoSessionId = null;
+  updateAddTaskButtonState();
   if (incogEl.checked) {
     incogEl.checked = false;
     incogEl.parentElement.classList.remove('on');
@@ -1044,6 +1086,7 @@ function resetConversation() {
 
   const savedMode = localStorage.getItem(UI_MODE_KEY);
   setUiMode(savedMode === 'cli' ? 'cli' : 'chat');
+  updateAddTaskButtonState();
 })();
 
 window.addEventListener('message', (e) => {
@@ -1109,11 +1152,13 @@ incogEl.addEventListener('change', () => {
   state.incognitoSessionId = null;
   if (incogEl.checked) {
     state.conversationId = null;
+    updateAddTaskButtonState();
     sessEl.textContent = 'Incognito — leaves no trace';
     showWelcome();
     renderConvList(state.sessions);
   } else {
     sessEl.textContent = '';
+    updateAddTaskButtonState();
     showWelcome();
   }
   statusEl.textContent = 'ready';
@@ -1137,6 +1182,7 @@ inputEl.addEventListener('keydown', (e) => {
 });
 inputEl.addEventListener('input', autosize);
 newBtn.addEventListener('click', resetConversation);
+if (addTaskBtn) addTaskBtn.addEventListener('click', sendAddTaskHandoff);
 viewChatBtn.addEventListener('click', () => {
   if (cliState.modeLocked) return;
   setUiMode('chat');

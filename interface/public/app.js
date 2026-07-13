@@ -47,6 +47,7 @@ const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').
 const VIEW_TITLES = {
   chat: 'Chat',
   command: 'Command Center',
+  projects: 'Projects',
   map: 'Agent Map',
   knowledge: 'Knowledge Docs',
   workflows: 'Workflows',
@@ -306,7 +307,7 @@ function setView(view) {
 
   el.className = 'view view-enter';
   el.innerHTML = '';
-  ({ command: renderCommand, map: renderMap, knowledge: renderKnowledge,
+  ({ command: renderCommand, projects: renderProjects, map: renderMap, knowledge: renderKnowledge,
      workflows: renderWorkflows, scheduler: renderScheduler, skills: renderSkills,
       departments: renderDepartments,
        artifacts: renderArtifacts, settings: renderSettings }[view])(el);
@@ -3948,6 +3949,730 @@ function mdToHtml(src) {
   return fm + out.join('\n');
 }
 
+// ---------------------------------------------------------------- Projects
+
+const PROJECT_PREFS_KEY = 'steadymade.projects.prefs.v1';
+const TASK_STATUS_OPTIONS = ['backlog', 'todo', 'in_progress', 'needs_review', 'blocked', 'done'];
+const PROJECT_STATUS_OPTIONS = ['active', 'paused', 'archived'];
+const PRIORITY_OPTIONS = ['low', 'medium', 'high'];
+
+const projectState = {
+  el: null,
+  loading: false,
+  denied: false,
+  error: null,
+  metadata: null,
+  projects: [],
+  tasks: [],
+  activity: [],
+  audit: [],
+  streamLoading: false,
+  streamError: null,
+  selectedProjectId: null,
+  selectedTaskId: null,
+  projectQuery: '',
+  taskQuery: '',
+  taskLayout: 'board',
+  showSidebar: true,
+  showDetail: true,
+};
+
+function loadPjPrefs() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PROJECT_PREFS_KEY) || '{}');
+    if (typeof raw.taskLayout === 'string') projectState.taskLayout = raw.taskLayout === 'list' ? 'list' : 'board';
+    if (typeof raw.showSidebar === 'boolean') projectState.showSidebar = raw.showSidebar;
+    if (typeof raw.showDetail === 'boolean') projectState.showDetail = raw.showDetail;
+  } catch {}
+}
+
+function savePjPrefs() {
+  try {
+    localStorage.setItem(PROJECT_PREFS_KEY, JSON.stringify({
+      taskLayout: projectState.taskLayout,
+      showSidebar: projectState.showSidebar,
+      showDetail: projectState.showDetail,
+    }));
+  } catch {}
+}
+
+function statusLabel(v) {
+  return String(v || '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function execStateBadge(stateName) {
+  const v = String(stateName || 'none');
+  if (v === 'running' || v === 'queued' || v === 'prepared' || v === 'cancel_requested') return `<span class="badge badge-apricot">${esc(statusLabel(v))}</span>`;
+  if (v === 'succeeded') return '<span class="badge badge-green">Succeeded</span>';
+  if (v === 'failed' || v === 'timed_out' || v === 'cancelled') return `<span class="badge badge-apricot">${esc(statusLabel(v))}</span>`;
+  return '<span class="badge badge-gray">None</span>';
+}
+
+function selectedProject() {
+  return projectState.projects.find((p) => p.id === projectState.selectedProjectId) || null;
+}
+
+function projectTaskCounts(projectId) {
+  const tasks = projectState.tasks.filter((t) => t.project_id === projectId);
+  const by = {};
+  TASK_STATUS_OPTIONS.forEach((k) => { by[k] = 0; });
+  tasks.forEach((t) => { by[t.status] = (by[t.status] || 0) + 1; });
+  return { total: tasks.length, by };
+}
+
+function normalizeMetadata(raw) {
+  const canonical = raw?.canonical || {};
+  const canonicalAgentIds = Array.isArray(canonical.agents) ? canonical.agents : [];
+  const agents = canonicalAgentIds.map((id) => {
+    const ui = AGENTS.find((a) => a.id === id);
+    return { id, name: ui?.name || id };
+  });
+  if (!agents.some((a) => a.id === 'danny')) agents.unshift({ id: 'danny', name: 'Danny' });
+  return {
+    agents,
+    workflows: Array.isArray(canonical.workflows) ? canonical.workflows : [],
+    defaults: {
+      assignee_type: raw?.defaults?.assignee_type || 'agent',
+      assignee_id: raw?.defaults?.assignee_id || 'danny',
+      visibility: raw?.defaults?.visibility || 'private',
+    },
+    visibilityOptions: Array.isArray(raw?.visibility_options) ? raw.visibility_options : ['private', 'team'],
+    transitions: raw?.task_status_transitions || {},
+  };
+}
+
+function unwrapBoardList(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (payload && Array.isArray(payload.items)) return payload.items;
+  return [];
+}
+
+async function fetchBoardListAll(basePath, { limit = 200, query = {} } = {}) {
+  const out = [];
+  const safeLimit = Math.max(1, Math.min(200, Number(limit) || 200));
+  let offset = 0;
+  for (;;) {
+    const params = new URLSearchParams({ ...query, limit: String(safeLimit), offset: String(offset) });
+    const page = await boardApi(`${basePath}?${params.toString()}`);
+    const items = unwrapBoardList(page);
+    out.push(...items);
+    const total = Number(page?.total);
+    if (!items.length) break;
+    if (Number.isFinite(total) && out.length >= total) break;
+    if (items.length < safeLimit) break;
+    offset += safeLimit;
+  }
+  return out;
+}
+
+async function boardApi(path, opts = {}) {
+  const req = { ...(opts || {}) };
+  if (req.body && typeof req.body !== 'string') req.body = JSON.stringify(req.body);
+  if (req.body) req.headers = { 'Content-Type': 'application/json', ...(req.headers || {}) };
+  const res = await fetch(path, req);
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok || payload.ok === false) {
+    const errData = payload?.error || {};
+    const err = new Error(errData.message || payload.error || `HTTP ${res.status}`);
+    err.status = res.status;
+    err.code = errData.code;
+    err.details = errData.details;
+    throw err;
+  }
+  return payload.data;
+}
+
+function ensureProjectSelection() {
+  if (projectState.selectedProjectId && projectState.projects.some((p) => p.id === projectState.selectedProjectId)) return;
+  projectState.selectedProjectId = projectState.projects[0]?.id || null;
+}
+
+function assigneeLabel(task) {
+  if (task.assignee_type === 'unassigned' || !task.assignee_id) return 'Unassigned';
+  if (task.assignee_type === 'human') return task.assignee_id;
+  const a = projectState.metadata?.agents?.find((x) => x.id === task.assignee_id) || AGENTS.find((x) => x.id === task.assignee_id);
+  return a?.name || task.assignee_id;
+}
+
+function boardArtifactHref(taskId, attemptId, artifactPath) {
+  return `/api/board/artifacts/${encodeURIComponent(taskId)}/${encodeURIComponent(attemptId)}/${artifactPath.split('/').map((seg) => encodeURIComponent(seg)).join('/')}`;
+}
+
+function extractAttemptArtifactEntries(task) {
+  const attempts = Array.isArray(task?.execution?.attempts) ? [...task.execution.attempts] : [];
+  attempts.sort((a, b) => String(b.requested_at || '').localeCompare(String(a.requested_at || '')));
+  const out = [];
+  for (const attempt of attempts) {
+    const attemptId = String(attempt?.attempt_id || '').trim();
+    if (!attemptId) continue;
+    const root = String(attempt?.output_root || '').trim();
+    for (const rawPath of (attempt?.artifact_paths || [])) {
+      const fullPath = String(rawPath || '').trim();
+      if (!fullPath) continue;
+      let relPath = '';
+      if (root && fullPath.startsWith(root + '/')) {
+        relPath = fullPath.slice(root.length + 1);
+      } else {
+        const marker = `/${attemptId}/`;
+        const idx = fullPath.indexOf(marker);
+        if (idx >= 0) relPath = fullPath.slice(idx + marker.length);
+      }
+      if (!relPath) continue;
+      out.push({
+        key: `${attemptId}:${relPath}`,
+        attemptId,
+        relPath,
+        name: relPath.split('/').pop() || relPath,
+      });
+    }
+  }
+  return out;
+}
+
+function applyProjectToState(project) {
+  const idx = projectState.projects.findIndex((p) => p.id === project.id);
+  if (idx >= 0) projectState.projects[idx] = project;
+  else projectState.projects.unshift(project);
+}
+
+function applyTaskToState(task) {
+  const idx = projectState.tasks.findIndex((t) => t.id === task.id);
+  if (idx >= 0) projectState.tasks[idx] = task;
+  else projectState.tasks.unshift(task);
+  paintProjects();
+}
+
+async function loadProjectStreams(projectId) {
+  if (!projectId) return;
+  projectState.streamLoading = true;
+  projectState.streamError = null;
+  paintProjects();
+  try {
+    const [activity, audit] = await Promise.all([
+      boardApi(`/api/projects/${encodeURIComponent(projectId)}/activity`),
+      boardApi(`/api/projects/${encodeURIComponent(projectId)}/audit`),
+    ]);
+    if (projectState.selectedProjectId !== projectId) return;
+    projectState.activity = Array.isArray(activity) ? activity : [];
+    projectState.audit = Array.isArray(audit) ? audit : [];
+  } catch (e) {
+    projectState.streamError = e;
+    projectState.activity = [];
+    projectState.audit = [];
+  } finally {
+    projectState.streamLoading = false;
+    paintProjects();
+  }
+}
+
+async function loadProjectTasks(projectId) {
+  if (!projectId) {
+    projectState.tasks = [];
+    paintProjects();
+    return;
+  }
+  try {
+    const items = await fetchBoardListAll('/api/tasks', { limit: 200, query: { project_id: projectId } });
+    if (projectState.selectedProjectId !== projectId) return;
+    projectState.tasks = items;
+  } catch (e) {
+    if (projectState.selectedProjectId !== projectId) return;
+    projectState.error = e;
+  } finally {
+    paintProjects();
+  }
+}
+
+async function refreshProjectsView() {
+  projectState.loading = true;
+  projectState.error = null;
+  projectState.denied = false;
+  paintProjects();
+  try {
+    if (!projectState.metadata) projectState.metadata = normalizeMetadata(await boardApi('/api/board/metadata'));
+    const projects = await fetchBoardListAll('/api/projects', { limit: 200 });
+    projectState.projects = projects;
+    ensureProjectSelection();
+    const selectedId = projectState.selectedProjectId;
+    projectState.tasks = selectedId
+      ? await fetchBoardListAll('/api/tasks', { limit: 200, query: { project_id: selectedId } })
+      : [];
+    ensureProjectSelection();
+    if (projectState.selectedProjectId) loadProjectStreams(projectState.selectedProjectId);
+  } catch (e) {
+    projectState.error = e;
+    projectState.denied = e.status === 401 || e.status === 403;
+  } finally {
+    projectState.loading = false;
+    paintProjects();
+  }
+}
+
+function renderProjects(el) {
+  projectState.el = el;
+  loadPjPrefs();
+  paintProjects();
+  refreshProjectsView();
+}
+
+function openProjectCreateDrawer() {
+  const meta = projectState.metadata || normalizeMetadata({});
+  openDrawer(`
+    <div class="drawer-head">
+      <button class="drawer-close">✕</button>
+      <div class="drawer-dept">PROJECT BOARD</div>
+      <div class="drawer-name">New Project</div>
+      <div class="drawer-role">Create a project first, then add tasks.</div>
+    </div>
+    <div class="drawer-body">
+      <div class="form-field"><label>Name</label><input id="pj-new-name" placeholder="Project name"></div>
+      <div class="form-field"><label>Description</label><textarea id="pj-new-desc" rows="4"></textarea></div>
+      <div class="form-field"><label>Visibility</label>
+        <select id="pj-new-visibility">${meta.visibilityOptions.map((v) => `<option value="${esc(v)}" ${v === meta.defaults.visibility ? 'selected' : ''}>${esc(statusLabel(v))}</option>`).join('')}</select>
+      </div>
+      <div class="drawer-actions"><button id="pj-new-save" class="btn btn-primary">Create project</button></div>
+    </div>
+  `);
+  $('#pj-new-save', $('#drawer'))?.addEventListener('click', async () => {
+    const name = $('#pj-new-name')?.value.trim();
+    if (!name) return toast('PROJECT NAME IS REQUIRED', true);
+    try {
+      const project = await boardApi('/api/projects', {
+        method: 'POST',
+        body: {
+          name,
+          description: $('#pj-new-desc')?.value.trim() || '',
+          visibility: $('#pj-new-visibility')?.value || meta.defaults.visibility,
+        },
+      });
+      applyProjectToState(project);
+      projectState.selectedProjectId = project.id;
+      closeDrawer();
+      toast('PROJECT CREATED');
+      refreshProjectsView();
+    } catch (e) { toast((e.message || 'CREATE FAILED').toUpperCase(), true); }
+  });
+}
+
+function openProjectEditDrawer(project) {
+  const meta = projectState.metadata || normalizeMetadata({});
+  openDrawer(`
+    <div class="drawer-head">
+      <button class="drawer-close">✕</button>
+      <div class="drawer-dept">PROJECT BOARD</div>
+      <div class="drawer-name">Edit Project</div>
+      <div class="drawer-role">${esc(project.name)}</div>
+    </div>
+    <div class="drawer-body">
+      <div class="form-field"><label>Name</label><div>${esc(project.name)}</div></div>
+      <div class="form-field"><label>Description</label><div style="white-space:pre-wrap">${esc(project.description || '—')}</div></div>
+      <div class="form-field"><label>Status</label>
+        <select id="pj-edit-status">${PROJECT_STATUS_OPTIONS.map((s) => `<option value="${esc(s)}" ${s === project.status ? 'selected' : ''}>${esc(statusLabel(s))}</option>`).join('')}</select>
+      </div>
+      <div class="form-field"><label>Visibility</label>
+        <select id="pj-edit-visibility">${meta.visibilityOptions.map((v) => `<option value="${esc(v)}" ${v === project.visibility ? 'selected' : ''}>${esc(statusLabel(v))}</option>`).join('')}</select>
+      </div>
+      <div class="drawer-actions"><button id="pj-edit-save" class="btn btn-primary">Save</button></div>
+    </div>
+  `);
+  $('#pj-edit-save', $('#drawer'))?.addEventListener('click', async () => {
+    const ops = [];
+    const s = $('#pj-edit-status')?.value || project.status;
+    const v = $('#pj-edit-visibility')?.value || project.visibility;
+    if (s !== project.status) ops.push({ op: 'set_status', value: s });
+    if (!ops.length && v === project.visibility) return closeDrawer();
+    try {
+      let updated = project;
+      if (ops.length) {
+        updated = await boardApi(`/api/projects/${encodeURIComponent(project.id)}`, {
+          method: 'PATCH',
+          body: { version: updated.version, ops },
+        });
+      }
+      if (v !== updated.visibility) {
+        updated = await boardApi(`/api/projects/${encodeURIComponent(project.id)}/visibility-migration`, {
+          method: 'POST',
+          body: {
+            version: updated.version,
+            to_visibility: v,
+            operation_id: `mig_${Date.now().toString(36)}`,
+            action: 'start',
+          },
+        });
+      }
+      applyProjectToState(updated);
+      closeDrawer();
+      toast('PROJECT UPDATED');
+      refreshProjectsView();
+    } catch (e) { toast((e.message || 'UPDATE FAILED').toUpperCase(), true); }
+  });
+}
+
+function makeTaskPrefill(payload) {
+  const text = String(payload?.selectedText || payload?.composerText || payload?.text || '').trim();
+  return {
+    conversationId: String(payload?.conversationId || '').trim(),
+    title: (text.split(/\r?\n/)[0] || '').slice(0, 160),
+    description: text,
+  };
+}
+
+function openTaskCreateDrawer(projectId, { prefill = null } = {}) {
+  const meta = projectState.metadata || normalizeMetadata({});
+  const defaults = meta.defaults || { assignee_type: 'agent', assignee_id: 'danny' };
+  const selectedProjectId = projectId || projectState.selectedProjectId || '';
+  const assigneeType = defaults.assignee_type === 'human' ? 'human' : (defaults.assignee_type === 'unassigned' ? 'unassigned' : 'agent');
+  const agentDefault = defaults.assignee_id || 'danny';
+  openDrawer(`
+    <div class="drawer-head">
+      <button class="drawer-close">✕</button>
+      <div class="drawer-dept">PROJECT BOARD</div>
+      <div class="drawer-name">New Task</div>
+      <div class="drawer-role">Confirm details before creating.</div>
+    </div>
+    <div class="drawer-body">
+      ${prefill?.conversationId ? `<div class="stat-note" style="margin-bottom:8px">From chat conversation ${esc(prefill.conversationId.slice(0, 10))}…</div>` : ''}
+      <div class="form-field"><label>Project</label>
+        <select id="task-new-project">${projectState.projects.map((p) => `<option value="${esc(p.id)}" ${p.id === selectedProjectId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
+      </div>
+      <div class="form-field"><label>Title</label><input id="task-new-title" value="${esc(prefill?.title || '')}" placeholder="Task title"></div>
+      <div class="form-field"><label>Description</label><textarea id="task-new-desc" rows="6">${esc(prefill?.description || '')}</textarea></div>
+      <div class="form-field"><label>Workflow</label>
+        <select id="task-new-workflow"><option value="">(none)</option>${meta.workflows.map((w) => `<option value="${esc(w)}">${esc(w)}</option>`).join('')}</select>
+      </div>
+      <div class="form-field"><label>Status</label>
+        <select id="task-new-status">${TASK_STATUS_OPTIONS.map((s) => `<option value="${esc(s)}" ${s === 'todo' ? 'selected' : ''}>${esc(statusLabel(s))}</option>`).join('')}</select>
+      </div>
+      <div class="form-field"><label>Priority</label>
+        <select id="task-new-priority">${PRIORITY_OPTIONS.map((p) => `<option value="${esc(p)}" ${p === 'medium' ? 'selected' : ''}>${esc(statusLabel(p))}</option>`).join('')}</select>
+      </div>
+      <div class="form-field"><label>Assignee Type</label>
+        <select id="task-new-assignee-type">
+          <option value="agent" ${assigneeType === 'agent' ? 'selected' : ''}>Agent</option>
+          <option value="human" ${assigneeType === 'human' ? 'selected' : ''}>Human</option>
+          <option value="unassigned" ${assigneeType === 'unassigned' ? 'selected' : ''}>Unassigned</option>
+        </select>
+      </div>
+      <div class="form-field" id="task-assignee-agent-wrap"><label>Assignee</label>
+        <select id="task-new-assignee-agent">${meta.agents.map((a) => `<option value="${esc(a.id)}" ${a.id === agentDefault ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>
+      </div>
+      <div class="form-field hidden" id="task-assignee-human-wrap"><label>Human assignee id</label><input id="task-new-assignee-human" placeholder="username"></div>
+      <div class="drawer-actions"><button id="task-new-save" class="btn btn-primary">Create task</button></div>
+    </div>
+  `);
+  const drawer = $('#drawer');
+  const typeEl = $('#task-new-assignee-type', drawer);
+  const paintAssignee = () => {
+    const type = typeEl?.value || 'agent';
+    $('#task-assignee-agent-wrap', drawer)?.classList.toggle('hidden', type !== 'agent');
+    $('#task-assignee-human-wrap', drawer)?.classList.toggle('hidden', type !== 'human');
+  };
+  typeEl?.addEventListener('change', paintAssignee);
+  paintAssignee();
+  $('#task-new-save', drawer)?.addEventListener('click', async () => {
+    const title = $('#task-new-title', drawer)?.value.trim();
+    const pid = $('#task-new-project', drawer)?.value;
+    if (!pid) return toast('PROJECT IS REQUIRED', true);
+    if (!title) return toast('TASK TITLE IS REQUIRED', true);
+    const type = $('#task-new-assignee-type', drawer)?.value || 'agent';
+    let assigneeId = null;
+    if (type === 'agent') assigneeId = $('#task-new-assignee-agent', drawer)?.value || defaults.assignee_id || 'danny';
+    if (type === 'human') assigneeId = $('#task-new-assignee-human', drawer)?.value.trim() || '';
+    try {
+      const task = await boardApi('/api/tasks', {
+        method: 'POST',
+        body: {
+          project_id: pid,
+          title,
+          description: $('#task-new-desc', drawer)?.value.trim() || '',
+          workflow_id: $('#task-new-workflow', drawer)?.value || null,
+          status: $('#task-new-status', drawer)?.value || 'todo',
+          priority: $('#task-new-priority', drawer)?.value || 'medium',
+          assignee_type: type,
+          assignee_id: type === 'unassigned' ? null : assigneeId,
+        },
+      });
+      closeDrawer();
+      toast('TASK CREATED');
+      applyTaskToState(task);
+      refreshProjectsView();
+    } catch (e) { toast((e.message || 'CREATE FAILED').toUpperCase(), true); }
+  });
+}
+
+async function runTaskExecution(task, action) {
+  try {
+    const payload = { version: task.version };
+    if (action === 'run' || action === 'retry') {
+      payload.idempotency_key = `ui_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    }
+    const updated = await boardApi(`/api/tasks/${encodeURIComponent(task.id)}/execution/${action}`, {
+      method: 'POST',
+      body: payload,
+    });
+    applyTaskToState(updated);
+    openTaskDrawer(task.id);
+  } catch (e) {
+    toast((e.message || `${action} failed`).toUpperCase(), true);
+  }
+}
+
+async function moveTaskToStatus(task, status) {
+  if (!task || task.status === status) return;
+  const prevStatus = task.status;
+  const prevVersion = task.version;
+  task.status = status;
+  paintProjects();
+  try {
+    const updated = await boardApi(`/api/tasks/${encodeURIComponent(task.id)}`, {
+      method: 'PATCH',
+      body: { version: prevVersion, ops: [{ op: 'set_status', value: status }] },
+    });
+    applyTaskToState(updated);
+  } catch (e) {
+    task.status = prevStatus;
+    paintProjects();
+    if (e.status === 409 || e.status === 422) {
+      toast('CONFLICT/INVALID UPDATE - REVERTED', true);
+      refreshProjectsView();
+    } else {
+      toast((e.message || 'UPDATE FAILED').toUpperCase(), true);
+    }
+  }
+}
+
+function openTaskDrawer(taskId) {
+  const task = projectState.tasks.find((t) => t.id === taskId);
+  if (!task) return;
+  const project = projectState.projects.find((p) => p.id === task.project_id);
+  const canReview = task.review?.required && task.review?.state === 'needs_review';
+  const artifactEntries = extractAttemptArtifactEntries(task);
+  openDrawer(`
+    <div class="drawer-head">
+      <button class="drawer-close">✕</button>
+      <div class="drawer-dept">TASK</div>
+      <div class="drawer-name">${esc(task.title)}</div>
+      <div class="drawer-role">${esc(project?.name || task.project_id)}</div>
+    </div>
+    <div class="drawer-body">
+      <div class="drawer-section">
+        <span class="badge badge-gray">${esc(statusLabel(task.status))}</span>
+        <span class="badge badge-gray">${esc(statusLabel(task.priority))}</span>
+        ${execStateBadge(task.execution?.state || 'none')}
+      </div>
+      <div class="drawer-section"><div class="section-title">Assignee</div><div>${esc(assigneeLabel(task))}</div></div>
+      <div class="drawer-section"><div class="section-title">Description</div><div style="white-space:pre-wrap">${esc(task.description || '—')}</div></div>
+      <div class="drawer-section"><div class="section-title">Workflow</div><div>${esc(task.workflow_id || '—')}</div></div>
+      <div class="drawer-section">
+        <div class="section-title">Execution</div>
+        <div class="tag-row">
+          <button class="btn btn-small" data-task-run>Run</button>
+          <button class="btn btn-ghost btn-small" data-task-cancel>Cancel</button>
+          <button class="btn btn-ghost btn-small" data-task-retry>Retry</button>
+        </div>
+        ${artifactEntries.length ? `<div style="margin-top:10px;display:flex;flex-direction:column;gap:6px">
+          ${artifactEntries.slice(0, 12).map((entry) => `<a class="chip" data-task-artifact="${esc(entry.key)}" style="text-decoration:none;display:inline-flex;justify-content:space-between;gap:8px" href="${esc(boardArtifactHref(task.id, entry.attemptId, entry.relPath))}" target="_blank" rel="noopener noreferrer"><span>${esc(entry.name)}</span><span class="mono-label">${esc(entry.attemptId.slice(0, 8))}</span></a>`).join('')}
+          ${artifactEntries.length > 12 ? `<span class="stat-note">+${artifactEntries.length - 12} more artifacts on older attempts.</span>` : ''}
+        </div>` : '<div class="stat-note" style="margin-top:10px">No linked artifacts yet.</div>'}
+      </div>
+      ${canReview ? `<div class="drawer-section"><div class="section-title">Review</div><div class="tag-row"><button class="btn btn-small" data-review-approve>Approve</button><button class="btn btn-ghost btn-small" data-review-changes>Request changes</button></div></div>` : ''}
+    </div>
+  `);
+  const drawer = $('#drawer');
+  $('[data-task-run]', drawer)?.addEventListener('click', () => runTaskExecution(task, 'run'));
+  $('[data-task-cancel]', drawer)?.addEventListener('click', () => runTaskExecution(task, 'cancel'));
+  $('[data-task-retry]', drawer)?.addEventListener('click', () => runTaskExecution(task, 'retry'));
+  $('[data-review-approve]', drawer)?.addEventListener('click', async () => {
+    try {
+      const updated = await boardApi(`/api/tasks/${encodeURIComponent(task.id)}/review/decision`, { method: 'POST', body: { version: task.version, decision: 'approve' } });
+      applyTaskToState(updated);
+      openTaskDrawer(task.id);
+    } catch (e) { toast((e.message || 'REVIEW FAILED').toUpperCase(), true); }
+  });
+  $('[data-review-changes]', drawer)?.addEventListener('click', async () => {
+    const reason = window.prompt('Reason for requested changes (optional):', '') || '';
+    try {
+      const updated = await boardApi(`/api/tasks/${encodeURIComponent(task.id)}/review/decision`, { method: 'POST', body: { version: task.version, decision: 'request_changes', reason } });
+      applyTaskToState(updated);
+      openTaskDrawer(task.id);
+    } catch (e) { toast((e.message || 'REVIEW FAILED').toUpperCase(), true); }
+  });
+}
+
+function handleChatAddTaskHandoff(payload) {
+  const conversationId = String(payload?.conversationId || '').trim();
+  if (!conversationId) return;
+  if (state.view !== 'projects') setView('projects');
+  openTaskCreateDrawer(projectState.selectedProjectId, { prefill: makeTaskPrefill(payload) });
+}
+
+function paintProjects() {
+  const el = projectState.el;
+  if (!el || state.view !== 'projects') return;
+
+  if (projectState.loading && !projectState.projects.length && !projectState.error) {
+    el.innerHTML = '<div class="view-pad"><div class="card">Loading projects…</div></div>';
+    return;
+  }
+  if (projectState.denied) {
+    el.innerHTML = `<div class="view-pad"><div class="card" style="border-color:var(--apricot)">
+      <div class="section-title">Access denied</div>
+      <div class="stat-note" style="white-space:normal">${esc(projectState.error?.message || 'You are not allowed to access project board data.')}</div>
+      <div style="margin-top:10px"><button class="btn btn-small" data-projects-retry>Retry</button></div>
+    </div></div>`;
+    $('[data-projects-retry]', el)?.addEventListener('click', () => refreshProjectsView());
+    return;
+  }
+  if (projectState.error) {
+    el.innerHTML = `<div class="view-pad"><div class="card" style="border-color:var(--apricot)">
+      <div class="section-title">Projects unavailable</div>
+      <div class="stat-note" style="white-space:normal">${esc(projectState.error.message || 'Could not load project board.')}</div>
+      <div style="margin-top:10px"><button class="btn btn-small" data-projects-retry>Retry</button></div>
+    </div></div>`;
+    $('[data-projects-retry]', el)?.addEventListener('click', () => refreshProjectsView());
+    return;
+  }
+
+  const qProject = projectState.projectQuery.toLowerCase();
+  const qTask = projectState.taskQuery.toLowerCase();
+  const projectsVisible = projectState.projects.filter((p) => !qProject || `${p.name} ${p.description || ''}`.toLowerCase().includes(qProject));
+  const proj = selectedProject();
+  const allTasks = projectState.tasks.filter((t) => t.project_id === proj?.id);
+  const tasksVisible = allTasks.filter((t) => !qTask || `${t.title} ${t.description || ''}`.toLowerCase().includes(qTask));
+  const counts = proj ? projectTaskCounts(proj.id) : { total: 0, by: {} };
+
+  const getAssigneeAvatar = (t) => (assigneeLabel(t)[0] || 'U').toUpperCase();
+  const boardCols = TASK_STATUS_OPTIONS.map((status) => {
+    const items = tasksVisible.filter((t) => t.status === status);
+    return `<div class="pj-col" data-status="${esc(status)}">
+      <div class="pj-col-head">${esc(statusLabel(status))} <span>${items.length}</span></div>
+      <div class="pj-col-body">
+        ${items.length ? items.map((t) => `<div class="pj-task-card" draggable="true" data-task-id="${esc(t.id)}" data-open-task="${esc(t.id)}">
+          <div class="pj-task-title">${esc(t.title)}</div>
+          <div class="pj-task-meta">${execStateBadge(t.execution?.state || 'none')} <span class="badge badge-gray">${esc(statusLabel(t.priority))}</span></div>
+          <div class="pj-task-foot">
+            <span class="pj-task-assignee"><span class="pj-task-avatar">${esc(getAssigneeAvatar(t))}</span>${esc(assigneeLabel(t))}</span>
+            <span style="display:flex;align-items:center;gap:4px"><button class="task-move-btn" data-move-task="${esc(t.id)}" title="Move to..." onclick="event.stopPropagation()">⋮</button></span>
+          </div>
+        </div>`).join('') : '<div class="pj-empty">Drop tasks here</div>'}
+      </div>
+    </div>`;
+  }).join('');
+
+  const listRows = tasksVisible.length ? tasksVisible.map((t) => `<button class="list-row" data-open-task="${esc(t.id)}">
+      <span class="badge badge-gray">${esc(statusLabel(t.status))}</span>
+      <span class="list-title">${esc(t.title)}</span>
+      <span class="list-meta">${esc(statusLabel(t.priority))}</span>
+      <span class="list-meta">${esc(assigneeLabel(t))}</span>
+      <span class="list-meta">${esc(t.execution?.state || 'none')}</span>
+      <span class="list-meta">${t.due_at ? timeAgo(Date.parse(t.due_at)) : 'no due'}</span>
+    </button>`).join('') : '<div class="pj-empty">No tasks in this project.</div>';
+
+  const streamRows = (rows) => rows.length
+    ? rows.slice(0, 8).map((r) => `<div class="pj-stream-row"><span>${esc(r.action || r.entity_type || 'event')}</span><span>${esc(r.actor_id || 'unknown')} · ${timeAgo(Date.parse(r.timestamp || Date.now()))}</span></div>`).join('')
+    : '<div class="pj-empty" style="padding:8px 0">No entries yet.</div>';
+
+  el.innerHTML = `<div class="view-pad" style="display:flex;flex-direction:column;height:100%">
+    <div class="card pj-toolbar" style="flex-shrink:0">
+      <input id="pj-project-q" class="filter-input" type="text" placeholder="Search projects…" value="${esc(projectState.projectQuery)}">
+      <input id="pj-task-q" class="filter-input" type="text" placeholder="Search tasks…" value="${esc(projectState.taskQuery)}">
+      <span class="filter-tabs">
+        <button class="filter-tab ${projectState.taskLayout === 'board' ? 'active' : ''}" data-pj-layout="board">Board</button>
+        <button class="filter-tab ${projectState.taskLayout === 'list' ? 'active' : ''}" data-pj-layout="list">List</button>
+      </span>
+      <button class="btn btn-ghost btn-small" data-pj-toggle-sidebar>${projectState.showSidebar ? 'Hide Projects' : 'Show Projects'}</button>
+      <button class="btn btn-ghost btn-small" data-pj-toggle-detail>${projectState.showDetail ? 'Hide Details' : 'Show Details'}</button>
+      <button class="btn btn-primary btn-small" data-pj-new-project>New Project</button>
+      <button class="btn btn-small" data-pj-new-task ${proj ? '' : 'disabled'}>New Task</button>
+      <button class="btn btn-ghost btn-small" data-pj-refresh>${projectState.loading ? 'Refreshing…' : 'Refresh'}</button>
+    </div>
+    <div class="projects-layout ${!projectState.showSidebar ? 'no-sidebar' : ''}">
+      ${projectState.showSidebar ? `<div class="card pj-projects-col"><div class="section-title">Projects</div>${projectsVisible.length ? projectsVisible.map((p) => {
+        const c = projectTaskCounts(p.id);
+        const icon = p.visibility === 'private' ? '🔒 ' : (p.visibility === 'team' ? '👥 ' : '');
+        return `<button class="pj-project-row ${projectState.selectedProjectId === p.id ? 'active' : ''}" data-pj-project="${esc(p.id)}"><span class="pj-project-name">${icon}${esc(p.name)}</span><span class="pj-project-meta">${esc(p.status)} · ${c.total} tasks</span></button>`;
+      }).join('') : '<div class="pj-empty">No projects found.</div>'}</div>` : ''}
+      <div class="pj-main-col">
+        ${proj ? `${projectState.showDetail ? `<div class="card" style="flex-shrink:0"><div class="pj-detail-head"><div><div class="section-title" style="margin-bottom:6px">Project Detail</div><div class="pj-project-title">${proj.visibility === 'private' ? '🔒 ' : (proj.visibility === 'team' ? '👥 ' : '')}${esc(proj.name)}</div><div class="stat-note" style="margin-top:4px;white-space:normal">${esc(proj.description || 'No description.')}</div></div><div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><span class="badge badge-gray">${esc(statusLabel(proj.status))}</span><button class="chip" data-pj-edit-project>Edit</button></div></div><div class="pj-kpis">${TASK_STATUS_OPTIONS.map((s) => `<span>${esc(statusLabel(s))}: <strong>${counts.by[s] || 0}</strong></span>`).join('')}</div><div class="pj-stream-grid"><div><div class="section-title">Activity</div>${projectState.streamLoading ? '<div class="pj-empty">Loading activity…</div>' : streamRows(projectState.activity)}</div><div><div class="section-title">Audit</div>${projectState.streamLoading ? '<div class="pj-empty">Loading audit…</div>' : streamRows(projectState.audit)}</div></div>${projectState.streamError ? `<div class="stat-note" style="margin-top:8px;color:var(--apricot-deep)">${esc(projectState.streamError.message || 'Could not load activity/audit.')}</div>` : ''}</div>` : ''}<div class="card pj-board-card"><div class="pj-task-head" style="flex-shrink:0"><div class="section-title" style="margin:0">Tasks (${tasksVisible.length})</div></div>${projectState.taskLayout === 'board' ? `<div class="pj-board">${boardCols}</div>` : `<div style="flex:1;overflow-y:auto">${listRows}</div>`}</div>` : '<div class="card">Select a project to view tasks.</div>'}
+      </div>
+    </div>
+  </div>`;
+
+  $('#pj-project-q', el)?.addEventListener('input', (e) => { projectState.projectQuery = e.target.value; paintProjects(); });
+  $('#pj-task-q', el)?.addEventListener('input', (e) => { projectState.taskQuery = e.target.value; paintProjects(); });
+  $('[data-pj-toggle-sidebar]', el)?.addEventListener('click', () => { projectState.showSidebar = !projectState.showSidebar; savePjPrefs(); paintProjects(); });
+  $('[data-pj-toggle-detail]', el)?.addEventListener('click', () => { projectState.showDetail = !projectState.showDetail; savePjPrefs(); paintProjects(); });
+  $$('[data-pj-layout]', el).forEach((b) => b.addEventListener('click', () => { projectState.taskLayout = b.dataset.pjLayout; savePjPrefs(); paintProjects(); }));
+  $$('[data-pj-project]', el).forEach((b) => b.addEventListener('click', () => {
+    projectState.selectedProjectId = b.dataset.pjProject;
+    paintProjects();
+    loadProjectTasks(projectState.selectedProjectId);
+    loadProjectStreams(projectState.selectedProjectId);
+  }));
+  $$('[data-open-task]', el).forEach((b) => b.addEventListener('click', () => openTaskDrawer(b.dataset.openTask)));
+  $('[data-pj-new-project]', el)?.addEventListener('click', openProjectCreateDrawer);
+  $('[data-pj-edit-project]', el)?.addEventListener('click', () => { const p = selectedProject(); if (p) openProjectEditDrawer(p); });
+  $('[data-pj-new-task]', el)?.addEventListener('click', () => openTaskCreateDrawer(projectState.selectedProjectId));
+  $('[data-pj-refresh]', el)?.addEventListener('click', () => refreshProjectsView());
+
+  if (projectState.taskLayout === 'board') {
+    let draggedTaskId = null;
+    $$('.pj-task-card', el).forEach((card) => {
+      card.addEventListener('dragstart', (e) => {
+        draggedTaskId = card.dataset.taskId;
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', draggedTaskId);
+        setTimeout(() => {
+          card.classList.add('dragging');
+          const task = projectState.tasks.find((t) => t.id === draggedTaskId);
+          if (task && projectState.metadata?.transitions) {
+            const valid = projectState.metadata.transitions[task.status] || [];
+            $$('.pj-col', el).forEach((c) => { if (!valid.includes(c.dataset.status)) c.classList.add('drop-disabled'); });
+          }
+        }, 0);
+      });
+      card.addEventListener('dragend', () => {
+        card.classList.remove('dragging');
+        $$('.pj-col', el).forEach((col) => { col.classList.remove('drag-over', 'drop-disabled'); });
+      });
+    });
+    $$('.pj-col', el).forEach((col) => {
+      col.addEventListener('dragover', (e) => {
+        if (col.classList.contains('drop-disabled')) return;
+        e.preventDefault();
+        col.classList.add('drag-over');
+      });
+      col.addEventListener('dragleave', () => col.classList.remove('drag-over'));
+      col.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        col.classList.remove('drag-over');
+        if (!draggedTaskId) return;
+        const task = projectState.tasks.find((t) => t.id === draggedTaskId);
+        if (!task) return;
+        await moveTaskToStatus(task, col.dataset.status);
+      });
+    });
+  }
+
+  $$('[data-move-task]', el).forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const task = projectState.tasks.find((t) => t.id === btn.dataset.moveTask);
+      if (!task) return;
+      let statuses = TASK_STATUS_OPTIONS.filter((s) => s !== task.status);
+      if (projectState.metadata?.transitions?.[task.status]) statuses = projectState.metadata.transitions[task.status];
+      const menuHtml = statuses.length ? statuses.map((s) => `<button class="list-row" data-move-to="${esc(s)}">Move to ${esc(statusLabel(s))}</button>`).join('') : '<div class="stat-note">No valid transitions available.</div>';
+      openDrawer(`
+        <div class="drawer-head"><button class="drawer-close">✕</button><div class="drawer-dept">MOVE TASK</div><div class="drawer-name">${esc(task.title)}</div></div>
+        <div class="drawer-body"><div class="card">${menuHtml}</div></div>
+      `);
+      $$('[data-move-to]', $('#drawer')).forEach((mBtn) => mBtn.addEventListener('click', async () => {
+        closeDrawer();
+        await moveTaskToStatus(task, mBtn.dataset.moveTo);
+      }));
+    });
+  });
+}
+
 // ---------------------------------------------------------------- Chat integration
 
 const chatFrameState = { frame: null, ready: false, pendingRuntimeConfig: null, pendingPreset: null };
@@ -3957,10 +4682,15 @@ function chatSlug(agentId) {
 }
 
 window.addEventListener('message', (e) => {
-  if (e.origin !== CHAT_URL || e.data?.type !== 'steadymade-chat-ready') return;
+  if (e.origin !== CHAT_URL) return;
   if (e.source !== chatFrameState.frame?.contentWindow) return;
-  chatFrameState.ready = true;
-  flushPendingChatMessages();
+  const data = e.data || {};
+  if (data.type === 'steadymade-chat-ready') {
+    chatFrameState.ready = true;
+    flushPendingChatMessages();
+    return;
+  }
+  if (data.type === 'steadymade-chat-add-task') handleChatAddTaskHandoff(data);
 });
 
 function chatRuntimeConfigPayload() {

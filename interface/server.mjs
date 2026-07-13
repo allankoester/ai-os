@@ -16,9 +16,11 @@ import { createGraphKnowledgeStorage } from './storage/graph-storage.mjs';
 import { createScheduler, resolveClaudeBin } from './scheduler.mjs';
 import {
   buildAppSettingsStatus,
+  defaultPrivateBoardRoot,
   normalizeConfiguredPath,
   readAppSettings,
   validateAppSettingsPayload,
+  validateBoardRootConfig,
   writeAppSettings,
 } from './app-settings.mjs';
 import {
@@ -30,6 +32,10 @@ import { createSkillHub } from './skills.mjs';
 import { createPluginManager } from './plugins.mjs';
 import { createGuardrails } from './guardrails.mjs';
 import { spawn } from 'node:child_process';
+import { timingSafeEqual } from 'node:crypto';
+import { createBoardStorage } from './board/storage.mjs';
+import { createBoardService } from './board/service.mjs';
+import { asBoardEnvelopeError } from './board/errors.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..'); // project root: steadymade-ai-os
@@ -42,8 +48,8 @@ const LEGACY_CHAT_USAGE_LOG = path.join(ROOT, 'runs', 'chat-usage.jsonl');
 const PORT = process.env.PORT || 4011;
 const HOST = process.env.HOST || '127.0.0.1';
 const API_TOKEN = process.env.STEADYMADE_INTERFACE_TOKEN || '';
+const BOARD_INTERNAL_TOKEN = process.env.BOARD_INTERNAL_TOKEN || '';
 
-const scheduler = createScheduler({ rootDir: ROOT });
 const pluginManager = createPluginManager({ rootDir: ROOT });
 const skillHub = createSkillHub({
   rootDir: ROOT,
@@ -58,11 +64,43 @@ const activeSharedKnowledgeRoot = envSharedKnowledgeRoot
   || path.join(ROOT, 'knowledge');
 const activePersonalKnowledgeRoot = normalizeConfiguredPath(ROOT, appSettingsRaw.personalKnowledgeRoot)
   || path.join(ROOT, 'knowledge', 'personal');
+const activePrivateBoardRoot = normalizeConfiguredPath(ROOT, appSettingsRaw.privateBoardRoot)
+  || defaultPrivateBoardRoot();
+const activeTeamBoardRoot = normalizeConfiguredPath(ROOT, appSettingsRaw.teamBoardRoot) || null;
+try { fs.mkdirSync(activePrivateBoardRoot, { recursive: true }); } catch {}
+
+const boardStorage = createBoardStorage({
+  rootDir: ROOT,
+  resolveRoots: () => ({
+    privateRoot: activePrivateBoardRoot,
+    teamRoot: activeTeamBoardRoot,
+    sharedKnowledgeRoot: activeSharedKnowledgeRoot,
+    personalKnowledgeRoot: activePersonalKnowledgeRoot,
+  }),
+});
 
 const knowledgeConfig = createKnowledgeConfig({ rootDir: ROOT, fsRootOverride: activeSharedKnowledgeRoot });
 const knowledgeStorage = knowledgeConfig.backend === 'graph'
   ? createGraphKnowledgeStorage({ config: knowledgeConfig.graph })
   : createFsKnowledgeStorage({ root: knowledgeConfig.fsRoot });
+
+let boardService;
+const scheduler = createScheduler({
+  rootDir: ROOT,
+  resolveRuntimeContext: async () => readProviderSettingsRaw(),
+  onRunEvent: async (event) => {
+    if (boardService) await boardService.applySchedulerEvent(event);
+  },
+});
+boardService = createBoardService({
+  rootDir: ROOT,
+  guardrails,
+  scheduler,
+  storage: boardStorage,
+  getRuntimeSettingsRaw: () => readProviderSettingsRaw(),
+  listCanonicalAgentIds: async () => readCanonicalAgentIds(),
+  listCanonicalWorkflowIds: async () => readCanonicalWorkflowIds(),
+});
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -130,12 +168,20 @@ function normalizeProjectRelPath(relPath) {
 
 function isAllowedArtifactPath(relPath) {
   const normalized = normalizeProjectRelPath(relPath);
+  if (normalized.startsWith('artifacts/project-board/')) return false;
   if (normalized.startsWith('artifacts/')) return true;
   return normalized.startsWith('knowledge/company/') && normalized.includes('/_artifacts/');
 }
 
 function hasJsonContentType(req) {
   return String(req.headers['content-type'] || '').toLowerCase().includes('application/json');
+}
+
+function safeTokenEquals(a, b) {
+  const left = Buffer.from(String(a || ''), 'utf8');
+  const right = Buffer.from(String(b || ''), 'utf8');
+  if (left.length !== right.length) return false;
+  return timingSafeEqual(left, right);
 }
 
 function isTrustedLocalWebRequest(req, expectedPort) {
@@ -173,7 +219,9 @@ function isPathWithin(parentAbs, targetAbs) {
 
 async function isAllowedArtifactRealPath(realAbs) {
   const artifactsRootReal = await fsp.realpath(path.join(ROOT, 'artifacts')).catch(() => null);
+  const boardArtifactsRootReal = await fsp.realpath(path.join(ROOT, 'artifacts', 'project-board')).catch(() => null);
   const companyRootReal = await fsp.realpath(path.join(ROOT, 'knowledge', 'company')).catch(() => null);
+  if (boardArtifactsRootReal && isPathWithin(boardArtifactsRootReal, realAbs)) return false;
   if (artifactsRootReal && isPathWithin(artifactsRootReal, realAbs)) return true;
   if (companyRootReal && isPathWithin(companyRootReal, realAbs) && realAbs.includes(`${path.sep}_artifacts${path.sep}`)) {
     return true;
@@ -542,6 +590,8 @@ async function getAppSettingsResponse() {
     activeRuntimeRoots: {
       sharedKnowledgeRoot: activeSharedKnowledgeRoot,
       personalKnowledgeRoot: activePersonalKnowledgeRoot,
+      privateBoardRoot: activePrivateBoardRoot,
+      teamBoardRoot: activeTeamBoardRoot,
     },
   });
 }
@@ -613,6 +663,41 @@ function readFlowsConfig() {
   } catch {
     return { overrides: {}, custom: [], deleted: [] };
   }
+}
+
+function readDataJsText() {
+  try {
+    return fs.readFileSync(path.join(PUBLIC, 'data.js'), 'utf8');
+  } catch {
+    return '';
+  }
+}
+
+function extractIdsFromSection(text, sectionName) {
+  const m = text.match(new RegExp(`const\\s+${sectionName}\\s*=\\s*\\[([\\s\\S]*?)\\]\\s*;`));
+  if (!m) return [];
+  const ids = [];
+  const re = /id:\s*'([a-z0-9_-]+)'/g;
+  let hit;
+  while ((hit = re.exec(m[1])) !== null) ids.push(hit[1]);
+  return ids;
+}
+
+function readCanonicalAgentIds() {
+  const text = readDataJsText();
+  return new Set(extractIdsFromSection(text, 'AGENTS'));
+}
+
+function readCanonicalWorkflowIds() {
+  const text = readDataJsText();
+  const base = extractIdsFromSection(text, 'WORKFLOWS');
+  const cfg = readFlowsConfig();
+  const set = new Set(base.filter((id) => !cfg.deleted.includes(id)));
+  for (const id of Object.keys(cfg.overrides || {})) set.add(id);
+  for (const flow of (cfg.custom || [])) {
+    if (/^[a-z0-9][a-z0-9_-]*$/.test(flow?.id || '')) set.add(flow.id);
+  }
+  return set;
 }
 
 function validateFlowsConfig(body) {
@@ -802,6 +887,9 @@ async function getSystem() {
   if (appStatus.activeRuntimeRoots?.personal?.exists === false) {
     system.warnings.push('personal knowledge root is not available — configure a valid path in Settings → Knowledge Spaces');
   }
+  if (Array.isArray(appStatus.boardSafetyErrors) && appStatus.boardSafetyErrors.length) {
+    system.warnings.push(...appStatus.boardSafetyErrors.map((msg) => `board roots configuration issue: ${msg}`));
+  }
   if (appStatus.restartRequired) {
     system.warnings.push('knowledge root settings were changed — restart app to apply active runtime roots');
   }
@@ -815,7 +903,10 @@ async function getSystem() {
   // Artifacts (any file type, read-only listing — recursive, newest first)
   const artifacts = [];
   const aDir = path.join(ROOT, 'artifacts');
-  if (fs.existsSync(aDir)) artifacts.push(...await scanArtifacts(aDir));
+  if (fs.existsSync(aDir)) {
+    const scanned = await scanArtifacts(aDir);
+    artifacts.push(...scanned.filter((item) => !String(item.path || '').startsWith('artifacts/project-board/')));
+  }
   if (typeof knowledgeStorage.listArtifacts === 'function') {
     try {
       artifacts.push(...await knowledgeStorage.listArtifacts());
@@ -833,20 +924,149 @@ async function handleApi(req, res, url) {
     res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify(obj));
   };
+  const sendBoard = (code, data) => send(code, { ok: true, data });
+
+  const isBoardPath = /^\/api\/(board\/metadata|board\/artifacts\/[^/]+\/[^/]+\/.+|projects(?:\/[^/]+(?:\/(activity|audit|visibility-migration))?)?|tasks(?:\/[^/]+(?:\/(execution\/(run|cancel|retry)|review\/decision))?)?|internal\/tasks\/execution-callback)$/.test(url.pathname);
+  const isInternalExecutionCallbackPath = url.pathname === '/api/internal/tasks/execution-callback';
 
   const mutating = req.method !== 'GET';
+  const trustedLocal = isTrustedLocalWebRequest(req, PORT);
+  let tokenValid = false;
+  if (API_TOKEN) {
+    const auth = req.headers['x-steadymade-token'] || req.headers.authorization || '';
+    const bearer = String(auth).replace(/^Bearer\s+/i, '');
+    tokenValid = safeTokenEquals(bearer, API_TOKEN);
+  }
+  let internalBoardTokenValid = false;
+  if (isBoardPath && !isInternalExecutionCallbackPath) {
+    if (API_TOKEN) {
+      if (!tokenValid) {
+        return send(401, { ok: false, error: { code: 'unauthorized', message: 'unauthorized' } });
+      }
+    } else if (!trustedLocal) {
+      return send(401, { ok: false, error: { code: 'unauthorized', message: 'unauthorized' } });
+    }
+  }
   if (mutating) {
     if (endpointExpectsJsonBody(req, url) && !hasJsonContentType(req)) {
+      if (isBoardPath) return send(403, { ok: false, error: { code: 'forbidden', message: 'Content-Type must include application/json' } });
       return send(403, { error: 'forbidden: Content-Type must include application/json' });
     }
-    const trustedLocal = isTrustedLocalWebRequest(req, PORT);
-    let tokenValid = false;
-    if (API_TOKEN) {
-      const auth = req.headers['x-steadymade-token'] || req.headers.authorization || '';
-      const bearer = String(auth).replace(/^Bearer\s+/i, '');
-      tokenValid = bearer === API_TOKEN;
+    if (isInternalExecutionCallbackPath) {
+      const internalHeader = String(req.headers['x-internal-board-token'] || '').trim();
+      if (!internalHeader) {
+        return send(401, { ok: false, error: { code: 'unauthorized', message: 'missing internal callback token' } });
+      }
+      if (!BOARD_INTERNAL_TOKEN || !safeTokenEquals(internalHeader, BOARD_INTERNAL_TOKEN)) {
+        return send(403, { ok: false, error: { code: 'forbidden', message: 'invalid internal callback token' } });
+      }
+      internalBoardTokenValid = true;
+    } else if (!trustedLocal && !tokenValid) {
+      if (isBoardPath) return send(401, { ok: false, error: { code: 'unauthorized', message: 'unauthorized' } });
+      return send(401, { error: 'unauthorized' });
     }
-    if (!trustedLocal && !tokenValid) return send(401, { error: 'unauthorized' });
+  }
+
+  const actor = {
+    ...getActiveUser(),
+    isHuman: true,
+    isInternal: false,
+    trustedLocal,
+    tokenValid,
+  };
+
+  try {
+    if (url.pathname === '/api/board/metadata' && req.method === 'GET') {
+      return sendBoard(200, await boardService.getMetadata());
+    }
+    if (url.pathname === '/api/projects' && req.method === 'GET') {
+      return sendBoard(200, await boardService.listProjects(Object.fromEntries(url.searchParams.entries()), actor));
+    }
+    if (url.pathname === '/api/projects' && req.method === 'POST') {
+      const body = await readBody(req, { maxBytes: 256 * 1024 });
+      return sendBoard(201, await boardService.createProject(body, actor));
+    }
+    const projectMatch = url.pathname.match(/^\/api\/projects\/([^/]+)$/);
+    if (projectMatch && req.method === 'GET') {
+      return sendBoard(200, await boardService.getProject(projectMatch[1], actor));
+    }
+    if (projectMatch && req.method === 'PATCH') {
+      const body = await readBody(req, { maxBytes: 256 * 1024 });
+      return sendBoard(200, await boardService.patchProject(projectMatch[1], body, actor));
+    }
+    const projectStreamMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/(activity|audit)$/);
+    if (projectStreamMatch && req.method === 'GET') {
+      const [, id, kind] = projectStreamMatch;
+      if (kind === 'activity') return sendBoard(200, await boardService.getProjectActivity(id, actor));
+      return sendBoard(200, await boardService.getProjectAudit(id, actor));
+    }
+    const projectMigrationMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/visibility-migration$/);
+    if (projectMigrationMatch && req.method === 'POST') {
+      const [, id] = projectMigrationMatch;
+      const body = await readBody(req, { maxBytes: 256 * 1024 });
+      return sendBoard(200, await boardService.migrateProjectVisibility(id, body, actor));
+    }
+
+    if (url.pathname === '/api/tasks' && req.method === 'GET') {
+      return sendBoard(200, await boardService.listTasks(Object.fromEntries(url.searchParams.entries()), actor));
+    }
+    if (url.pathname === '/api/tasks' && req.method === 'POST') {
+      const body = await readBody(req, { maxBytes: 256 * 1024 });
+      return sendBoard(201, await boardService.createTask(body, actor));
+    }
+    const taskMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)$/);
+    if (taskMatch && req.method === 'GET') {
+      return sendBoard(200, await boardService.getTask(taskMatch[1], actor));
+    }
+    if (taskMatch && req.method === 'PATCH') {
+      const body = await readBody(req, { maxBytes: 256 * 1024 });
+      return sendBoard(200, await boardService.patchTask(taskMatch[1], body, actor));
+    }
+    const taskReviewDecisionMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/review\/decision$/);
+    if (taskReviewDecisionMatch && req.method === 'POST') {
+      const [, id] = taskReviewDecisionMatch;
+      const body = await readBody(req, { maxBytes: 256 * 1024 });
+      return sendBoard(200, await boardService.decideTaskReview(id, body, actor));
+    }
+    const execMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/execution\/(run|cancel|retry)$/);
+    if (execMatch && req.method === 'POST') {
+      const [, id, action] = execMatch;
+      const body = await readBody(req, { maxBytes: 256 * 1024 });
+      if (action === 'run') {
+        const result = await boardService.runTask(id, body, actor);
+        return sendBoard(result.statusCode || 202, result.task);
+      }
+      if (action === 'cancel') {
+        return sendBoard(200, await boardService.cancelTask(id, body, actor));
+      }
+      const result = await boardService.retryTask(id, body, actor);
+      return sendBoard(result.statusCode || 202, result.task);
+    }
+    if (url.pathname === '/api/internal/tasks/execution-callback' && req.method === 'POST') {
+      const body = await readBody(req, { maxBytes: 256 * 1024 });
+      const internalActor = {
+        ...actor,
+        id: 'internal_callback',
+        isHuman: false,
+        isInternal: internalBoardTokenValid,
+      };
+      return sendBoard(200, await boardService.executionCallback(body, internalActor));
+    }
+    const boardArtifactMatch = url.pathname.match(/^\/api\/board\/artifacts\/([^/]+)\/([^/]+)\/(.+)$/);
+    if (boardArtifactMatch && req.method === 'GET') {
+      const [, taskId, attemptId, artifactPath] = boardArtifactMatch;
+      const artifact = await boardService.readTaskArtifact({ taskId, attemptId, artifactPath, actor });
+      const ext = path.extname(artifact.abs).toLowerCase();
+      const type = { '.md': 'text/plain; charset=utf-8', '.txt': 'text/plain; charset=utf-8', '.pdf': 'application/pdf', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' }[ext] || MIME[ext] || 'application/octet-stream';
+      res.writeHead(200, { 'Content-Type': type, 'Content-Disposition': 'inline' });
+      return fs.createReadStream(artifact.abs).pipe(res);
+    }
+  } catch (err) {
+    if (isBoardPath) {
+      const envelope = asBoardEnvelopeError(err);
+      return send(envelope.status, envelope.body);
+    }
+    throw err;
   }
 
   if (url.pathname === '/api/system' && req.method === 'GET') {
@@ -860,6 +1080,8 @@ async function handleApi(req, res, url) {
   if (url.pathname === '/api/app-settings' && req.method === 'PUT') {
     const body = await readBody(req);
     const errors = validateAppSettingsPayload(body);
+    const boardErrors = validateBoardRootConfig({ rootDir: ROOT, settings: body || {} });
+    errors.push(...boardErrors);
     if (errors.length) return send(400, { errors });
     const saved = await writeAppSettings(ROOT, body);
     return send(200, {
@@ -870,9 +1092,11 @@ async function handleApi(req, res, url) {
         activeRuntimeRoots: {
           sharedKnowledgeRoot: activeSharedKnowledgeRoot,
           personalKnowledgeRoot: activePersonalKnowledgeRoot,
+          privateBoardRoot: activePrivateBoardRoot,
+          teamBoardRoot: activeTeamBoardRoot,
         },
       }),
-      message: 'saved — restart app to apply updated knowledge roots',
+      message: 'saved — restart app to apply updated knowledge/board roots',
     });
   }
 
@@ -991,7 +1215,7 @@ async function handleApi(req, res, url) {
   if (url.pathname === '/api/artifact' && req.method === 'GET') {
     const rel = normalizeProjectRelPath(url.searchParams.get('path') || '');
     if (!isAllowedArtifactPath(rel)) {
-      return send(400, { error: 'only files under artifacts/ or knowledge/company/**/_artifacts/** can be opened here' });
+      return send(400, { error: 'only non-board files under artifacts/ or knowledge/company/**/_artifacts/** can be opened here' });
     }
     const gate = guardrails.check(rel, 'read');
     if (!gate.allowed) return send(403, { error: gate.reason });
@@ -1290,10 +1514,20 @@ async function handleApi(req, res, url) {
   return send(404, { error: 'unknown endpoint' });
 }
 
-function readBody(req) {
+function readBody(req, options = {}) {
+  const maxBytes = Number(options.maxBytes || 0);
   return new Promise((resolve, reject) => {
     let data = '';
-    req.on('data', (c) => (data += c));
+    req.on('data', (c) => {
+      data += c;
+      if (maxBytes > 0 && Buffer.byteLength(data, 'utf8') > maxBytes) {
+        const err = new Error('payload too large');
+        err.status = 413;
+        err.code = 'payload_too_large';
+        reject(err);
+        req.destroy();
+      }
+    });
     req.on('end', () => {
       try { resolve(JSON.parse(data || '{}')); } catch (e) { reject(e); }
     });
