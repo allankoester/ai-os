@@ -1370,6 +1370,16 @@ button.wf-step:hover { border-color: var(--green-light); }
 .kv-row > span:first-child { color: var(--muted); }
 .kv-row > span:last-child { font-family: var(--font-mono); font-size: 11px; color: var(--headline); text-align: right; word-break: break-all; }
 
+.ks-path-edit-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.ks-path-edit-row .filter-input {
+  flex: 1;
+}
+
 .provider-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));

@@ -16,6 +16,7 @@ import { createGraphKnowledgeStorage } from './storage/graph-storage.mjs';
 import { createScheduler, resolveClaudeBin } from './scheduler.mjs';
 import {
   buildAppSettingsStatus,
+  deriveUserTypePolicy,
   defaultPrivateBoardRoot,
   normalizeConfiguredPath,
   readAppSettings,
@@ -119,6 +120,7 @@ const PROVIDER_ENV_MAX_ENTRIES = 64;
 const PROVIDER_ENV_MAX_KEY_LENGTH = 64;
 const PROVIDER_ENV_MAX_VALUE_LENGTH = 8192;
 const MCP_TEST_TIMEOUT_MS = 9000;
+const FOLDER_BROWSER_MAX_PATH_LENGTH = 2048;
 const MCP_TEST_ENV_ALLOWLIST = [
   'PATH',
   'HOME',
@@ -201,6 +203,16 @@ function isTrustedLocalWebRequest(req, expectedPort) {
   return false;
 }
 
+function isLoopbackHost(hostValue) {
+  const host = String(hostValue || '').trim().toLowerCase();
+  return host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]';
+}
+
+function isLoopbackRemoteAddress(addressValue) {
+  const address = String(addressValue || '').trim().toLowerCase();
+  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+}
+
 function endpointExpectsJsonBody(req, url) {
   if (req.method === 'PUT') return true;
   if (req.method === 'POST') {
@@ -213,6 +225,104 @@ function endpointExpectsJsonBody(req, url) {
     return false;
   }
   return false;
+}
+
+function validateAbsoluteDirectoryPathInput(rawPath) {
+  if (typeof rawPath !== 'string') {
+    return { ok: false, code: 'invalid_path', message: 'path must be a string' };
+  }
+  if (!rawPath.length) {
+    return { ok: false, code: 'invalid_path', message: 'path is required' };
+  }
+  if (rawPath.length > FOLDER_BROWSER_MAX_PATH_LENGTH) {
+    return {
+      ok: false,
+      code: 'invalid_path',
+      message: `path exceeds ${FOLDER_BROWSER_MAX_PATH_LENGTH} characters`,
+    };
+  }
+  if (rawPath.includes('\0')) {
+    return { ok: false, code: 'invalid_path', message: 'path must not contain null bytes' };
+  }
+  if (!path.isAbsolute(rawPath)) {
+    return { ok: false, code: 'invalid_path', message: 'path must be absolute' };
+  }
+  return { ok: true, path: path.normalize(rawPath) };
+}
+
+async function listFolderBrowserDirectories(targetAbsPath) {
+  const names = await fsp.readdir(targetAbsPath);
+  const directories = [];
+  for (const name of names) {
+    const childAbs = path.join(targetAbsPath, name);
+    const lst = await fsp.lstat(childAbs).catch(() => null);
+    if (!lst) continue;
+
+    if (lst.isDirectory()) {
+      directories.push({ name, path: childAbs, isSymlink: false, traversable: true });
+      continue;
+    }
+
+    if (!lst.isSymbolicLink()) continue;
+    const st = await fsp.stat(childAbs).catch(() => null);
+    if (!st || !st.isDirectory()) continue;
+    directories.push({ name, path: childAbs, isSymlink: true, traversable: false });
+  }
+
+  directories.sort((a, b) => a.name.localeCompare(b.name));
+  return directories;
+}
+
+async function detectOneDriveAiOsRoot() {
+  const home = os.homedir();
+  const candidates = [path.join(home, 'OneDrive', 'AI_OS')];
+  const cloudStorage = path.join(home, 'Library', 'CloudStorage');
+  const cloudEntries = await fsp.readdir(cloudStorage, { withFileTypes: true }).catch(() => []);
+  for (const entry of cloudEntries) {
+    if (!entry.isDirectory()) continue;
+    if (!entry.name.startsWith('OneDrive')) continue;
+    candidates.push(path.join(cloudStorage, entry.name, 'AI_OS'));
+  }
+  for (const candidate of candidates) {
+    const st = await fsp.lstat(candidate).catch(() => null);
+    if (st?.isDirectory()) return candidate;
+  }
+  return null;
+}
+
+async function listFolderBrowserRoots() {
+  const roots = [];
+  const seen = new Set();
+  const add = async (id, label, candidatePath) => {
+    if (!candidatePath || seen.has(candidatePath)) return;
+    const st = await fsp.lstat(candidatePath).catch(() => null);
+    if (!st || !st.isDirectory()) return;
+    seen.add(candidatePath);
+    roots.push({ id, label, path: candidatePath });
+  };
+
+  await add('workspace', 'Workspace root', ROOT);
+
+  const oneDriveAiOs = await detectOneDriveAiOsRoot();
+  if (oneDriveAiOs) await add('onedrive-ai-os', 'OneDrive AI_OS', oneDriveAiOs);
+
+  const configured = await readAppSettings(ROOT);
+  await add('configured-shared', 'Configured shared knowledge root', normalizeConfiguredPath(ROOT, configured.sharedKnowledgeRoot));
+  await add('configured-personal', 'Configured personal knowledge root', normalizeConfiguredPath(ROOT, configured.personalKnowledgeRoot));
+  await add('configured-board-private', 'Configured private board root', normalizeConfiguredPath(ROOT, configured.privateBoardRoot));
+  await add('configured-board-team', 'Configured team board root', normalizeConfiguredPath(ROOT, configured.teamBoardRoot));
+
+  return roots;
+}
+
+async function resolveCanonicalDirectory(absPath) {
+  const lst = await fsp.lstat(absPath).catch(() => null);
+  if (!lst) return { ok: false, status: 404, code: 'path_not_found', message: 'target path does not exist' };
+  if (lst.isSymbolicLink()) return { ok: false, status: 422, code: 'symlink_not_allowed', message: 'target path must not be a symlink' };
+  if (!lst.isDirectory()) return { ok: false, status: 422, code: 'not_directory', message: 'target path must be a directory' };
+  const real = await fsp.realpath(absPath).catch(() => null);
+  if (!real) return { ok: false, status: 422, code: 'path_unresolvable', message: 'target path could not be resolved' };
+  return { ok: true, path: real };
 }
 
 function isPathWithin(parentAbs, targetAbs) {
@@ -346,6 +456,145 @@ function sanitizeProviderSettings(body) {
     cliBridgeEnabled: typeof cliBridgeEnabled === 'boolean' ? cliBridgeEnabled : DEFAULT_PROVIDER_SETTINGS.cliBridgeEnabled,
     envVault,
   };
+}
+
+function resolveRuntimeMode(rawMode) {
+  const mode = String(rawMode || '').trim().toLowerCase();
+  return PROVIDER_RUNTIME_MODES.has(mode) ? mode : DEFAULT_PROVIDER_SETTINGS.runtimeMode;
+}
+
+function expandHome(rawPath) {
+  const value = String(rawPath || '').trim();
+  if (!value) return '';
+  if (value === '~') return os.homedir();
+  if (value.startsWith('~/')) return path.join(os.homedir(), value.slice(2));
+  return value;
+}
+
+function resolveBinary(command, fallbackName) {
+  const configured = String(command || '').trim() || fallbackName;
+  const expanded = expandHome(configured);
+  const hasPath = expanded.includes(path.sep);
+  const candidates = hasPath
+    ? [path.resolve(expanded), path.resolve(ROOT, expanded)]
+    : String(process.env.PATH || '').split(path.delimiter).filter(Boolean).map((dir) => path.join(dir, expanded));
+  for (const candidate of [...new Set(candidates)]) {
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return { resolvedPath: candidate, reason: null };
+    } catch {
+      // continue
+    }
+  }
+  return {
+    resolvedPath: null,
+    reason: hasPath ? `configured path is not executable: ${configured}` : `${configured} binary not found in PATH`,
+  };
+}
+
+function providerLocalDiagnostics(rawSettings) {
+  const mode = resolveRuntimeMode(rawSettings.runtimeMode);
+  const checks = [];
+  const add = (id, ok, category, message) => checks.push({ id, status: ok ? 'pass' : 'fail', category: ok ? 'success' : category, message });
+
+  const claude = resolveBinary(process.env.CLAUDE_BIN || 'claude', 'claude');
+  const opencode = resolveBinary(rawSettings.opencodeBin || process.env.OPENCODE_BIN || 'opencode', 'opencode');
+  if (mode === 'opencode') {
+    add('opencode-binary', Boolean(opencode.resolvedPath), 'missing_binary', opencode.resolvedPath ? `OpenCode binary found at ${opencode.resolvedPath}` : opencode.reason);
+  } else {
+    add('claude-binary', Boolean(claude.resolvedPath), 'missing_binary', claude.resolvedPath ? `Claude binary found at ${claude.resolvedPath}` : claude.reason);
+  }
+  if (mode === 'anthropic-api') {
+    const apiKey = String(rawSettings?.envVault?.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY || '').trim();
+    add('anthropic-api-key', Boolean(apiKey), 'missing_config', apiKey ? 'ANTHROPIC_API_KEY is configured' : 'ANTHROPIC_API_KEY is missing');
+  }
+  return {
+    runtimeMode: mode,
+    ready: checks.every((c) => c.status === 'pass'),
+    checks,
+    blockingFailures: checks.filter((c) => c.status === 'fail'),
+  };
+}
+
+function classifyDeepProviderError(text) {
+  const lower = String(text || '').toLowerCase();
+  if (!lower) return 'runtime_error';
+  if (lower.includes('permission denied') || lower.includes('access denied') || lower.includes('eacces')) return 'access_denied';
+  if (lower.includes('unauthorized') || lower.includes('not logged in') || lower.includes('authentication') || lower.includes('api key') || lower.includes('login')) {
+    return 'auth_failed';
+  }
+  return 'runtime_error';
+}
+
+async function runProviderDeepTest(rawSettings) {
+  const diagnostics = providerLocalDiagnostics(rawSettings);
+  const mode = diagnostics.runtimeMode;
+  const started = Date.now();
+  if (!diagnostics.ready) {
+    const first = diagnostics.blockingFailures[0];
+    return {
+      ok: false,
+      runtimeMode: mode,
+      category: first?.category || 'runtime_error',
+      detail: first?.message || 'Local provider checks failed.',
+      durationMs: Date.now() - started,
+    };
+  }
+
+  const timeoutMs = 7000;
+  const command = mode === 'opencode'
+    ? resolveBinary(rawSettings.opencodeBin || process.env.OPENCODE_BIN || 'opencode', 'opencode').resolvedPath
+    : resolveBinary(process.env.CLAUDE_BIN || 'claude', 'claude').resolvedPath;
+  const args = mode === 'opencode'
+    ? ['run', 'Return exactly OK.', '--format', 'json']
+    : ['-p', 'Return exactly OK.', '--output-format', 'stream-json', '--permission-mode', 'default'];
+  const secrets = Object.values(rawSettings.envVault || {}).filter((v) => typeof v === 'string' && v);
+
+  return await new Promise((resolve) => {
+    const child = spawn(command, args, {
+      cwd: ROOT,
+      env: { ...process.env, ...(rawSettings.envVault || {}) },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      try { child.kill('SIGTERM'); } catch {}
+      setTimeout(() => {
+        try { child.kill('SIGKILL'); } catch {}
+      }, 500).unref();
+    }, timeoutMs);
+
+    child.stdout.on('data', (chunk) => { stdout += String(chunk || ''); });
+    child.stderr.on('data', (chunk) => { stderr += String(chunk || ''); });
+    child.on('error', (err) => {
+      clearTimeout(timeout);
+      const detail = maskSecretsInText(String(err?.message || err), secrets);
+      resolve({ ok: false, runtimeMode: mode, category: classifyDeepProviderError(detail), detail: truncateOutput(detail, 240), durationMs: Date.now() - started });
+    });
+    child.on('close', (code) => {
+      clearTimeout(timeout);
+      if (timedOut) {
+        return resolve({ ok: false, runtimeMode: mode, category: 'timeout', detail: 'Provider deep test timed out.', durationMs: Date.now() - started });
+      }
+      const combined = maskSecretsInText(`${stdout}\n${stderr}`.trim(), secrets);
+      if (code !== 0) {
+        return resolve({ ok: false, runtimeMode: mode, category: classifyDeepProviderError(combined), detail: truncateOutput(combined || `provider command exited with code ${code}`, 240), durationMs: Date.now() - started });
+      }
+      const hasResult = mode === 'opencode'
+        ? /"type"\s*:\s*"step_finish"/i.test(combined)
+        : /"type"\s*:\s*"result"/i.test(combined);
+      return resolve({
+        ok: hasResult,
+        runtimeMode: mode,
+        category: hasResult ? 'success' : 'runtime_error',
+        detail: hasResult ? 'Provider request completed.' : 'Provider completed without expected result event.',
+        durationMs: Date.now() - started,
+      });
+    });
+  });
 }
 
 function parseEnvVaultMarkerKeys(raw) {
@@ -1091,10 +1340,12 @@ async function handleApi(req, res, url) {
   if (url.pathname === '/api/app-settings' && req.method === 'PUT') {
     const body = await readBody(req);
     const errors = validateAppSettingsPayload(body);
-    const boardErrors = validateBoardRootConfig({ rootDir: ROOT, settings: body || {} });
+    const previous = await readAppSettings(ROOT);
+    const merged = { ...previous, ...(body || {}) };
+    const boardErrors = validateBoardRootConfig({ rootDir: ROOT, settings: merged });
     errors.push(...boardErrors);
     if (errors.length) return send(400, { errors });
-    const saved = await writeAppSettings(ROOT, body);
+    const saved = await writeAppSettings(ROOT, body, { merge: true });
     return send(200, {
       ok: true,
       ...buildAppSettingsStatus({
@@ -1108,6 +1359,99 @@ async function handleApi(req, res, url) {
         },
       }),
       message: 'saved — restart app to apply updated knowledge/board roots',
+    });
+  }
+
+  if (url.pathname === '/api/folder-browser' && req.method === 'GET') {
+    if (API_TOKEN) {
+      if (!tokenValid) return send(401, { ok: false, error: { code: 'unauthorized', message: 'unauthorized' } });
+    } else if (!isLoopbackHost(HOST) || !isLoopbackRemoteAddress(req.socket?.remoteAddress) || !trustedLocal) {
+      return send(401, { ok: false, error: { code: 'unauthorized', message: 'unauthorized' } });
+    }
+
+    const mode = String(url.searchParams.get('mode') || '').trim().toLowerCase();
+    const includeRoots = mode === 'roots' || url.searchParams.get('includeRoots') === '1';
+    if (mode && mode !== 'roots') {
+      return send(400, {
+        ok: false,
+        error: { code: 'invalid_mode', message: 'mode must be "roots" when provided' },
+      });
+    }
+
+    if (mode === 'roots') {
+      return send(200, { ok: true, roots: await listFolderBrowserRoots() });
+    }
+
+    const roots = await listFolderBrowserRoots();
+    const canonicalRoots = [];
+    for (const root of roots) {
+      const resolved = await resolveCanonicalDirectory(root.path);
+      if (!resolved.ok) continue;
+      canonicalRoots.push({ ...root, path: resolved.path });
+    }
+    if (!canonicalRoots.length) {
+      return send(503, {
+        ok: false,
+        error: { code: 'roots_unavailable', message: 'no browse roots are currently available' },
+      });
+    }
+
+    const pathRaw = url.searchParams.get('path');
+    const validated = validateAbsoluteDirectoryPathInput(pathRaw);
+    if (!validated.ok) {
+      return send(400, { ok: false, error: { code: validated.code, message: validated.message } });
+    }
+
+    const rootRaw = url.searchParams.get('root');
+    let canonicalRoot = null;
+    if (rootRaw) {
+      const validatedRoot = validateAbsoluteDirectoryPathInput(rootRaw);
+      if (!validatedRoot.ok) {
+        return send(400, { ok: false, error: { code: validatedRoot.code, message: validatedRoot.message } });
+      }
+      const resolvedRoot = await resolveCanonicalDirectory(validatedRoot.path);
+      if (!resolvedRoot.ok) {
+        return send(resolvedRoot.status, { ok: false, error: { code: resolvedRoot.code, message: resolvedRoot.message } });
+      }
+      canonicalRoot = canonicalRoots.find((root) => root.path === resolvedRoot.path) || null;
+      if (!canonicalRoot) {
+        return send(403, { ok: false, error: { code: 'root_not_allowed', message: 'requested browse root is not allowed' } });
+      }
+    }
+
+    const resolvedTarget = await resolveCanonicalDirectory(validated.path);
+    if (!resolvedTarget.ok) {
+      return send(resolvedTarget.status, { ok: false, error: { code: resolvedTarget.code, message: resolvedTarget.message } });
+    }
+
+    const targetPath = resolvedTarget.path;
+    if (!canonicalRoot) {
+      const matches = canonicalRoots.filter((root) => isPathWithin(root.path, targetPath));
+      if (!matches.length) {
+        return send(403, { ok: false, error: { code: 'path_outside_roots', message: 'target path must be within an allowed browse root' } });
+      }
+      matches.sort((a, b) => b.path.length - a.path.length);
+      canonicalRoot = matches[0];
+    }
+
+    if (!isPathWithin(canonicalRoot.path, targetPath)) {
+      return send(403, { ok: false, error: { code: 'path_outside_root', message: 'target path is outside the selected browse root' } });
+    }
+
+    const parentCandidate = path.dirname(targetPath);
+    let parentPath = null;
+    if (parentCandidate !== targetPath) {
+      const resolvedParent = await fsp.realpath(parentCandidate).catch(() => null);
+      if (resolvedParent && isPathWithin(canonicalRoot.path, resolvedParent)) parentPath = resolvedParent;
+    }
+
+    return send(200, {
+      ok: true,
+      currentPath: targetPath,
+      parentPath,
+      rootPath: canonicalRoot.path,
+      directories: await listFolderBrowserDirectories(targetPath),
+      ...(includeRoots ? { roots } : {}),
     });
   }
 
@@ -1188,8 +1532,11 @@ async function handleApi(req, res, url) {
 
   if (url.pathname === '/api/provider-settings' && req.method === 'GET') {
     const settings = await readProviderSettings();
+    const raw = await readProviderSettingsRaw();
+    const diagnostics = providerLocalDiagnostics(raw);
     return send(200, {
       settings,
+      diagnostics,
       path: 'interface/provider-settings.json',
       note: 'Machine-local settings only. Environment vault values are masked in responses and apply after restart.',
     });
@@ -1218,6 +1565,24 @@ async function handleApi(req, res, url) {
       settings: responseSettings,
       path: 'interface/provider-settings.json',
       message: 'saved — restart app/chat to apply runtime env defaults',
+    });
+  }
+
+  if (url.pathname === '/api/provider-settings/diagnostics' && req.method === 'GET') {
+    const raw = await readProviderSettingsRaw();
+    return send(200, { diagnostics: providerLocalDiagnostics(raw) });
+  }
+
+  if (url.pathname === '/api/provider-settings/deep-test' && req.method === 'POST') {
+    const raw = await readProviderSettingsRaw();
+    const result = await runProviderDeepTest(raw);
+    return send(result.ok ? 200 : 422, {
+      ok: result.ok,
+      runtimeMode: result.runtimeMode,
+      category: result.category,
+      detail: result.detail,
+      error: result.ok ? null : result.detail,
+      durationMs: result.durationMs,
     });
   }
 
@@ -1477,6 +1842,8 @@ async function handleApi(req, res, url) {
 
   if (url.pathname === '/api/workspace' && req.method === 'GET') {
     const appSettings = await getAppSettingsResponse();
+    const userType = String(appSettings?.settings?.userType || '');
+    const userPolicy = deriveUserTypePolicy(userType);
     const knowledgeSpaces = {
       personalReady: Boolean(appSettings.activeRuntimeRoots?.personal?.exists),
       sharedReady: knowledgeStorage.kind === 'fs'
@@ -1506,14 +1873,15 @@ async function handleApi(req, res, url) {
       });
     const byId = (id) => checks.find((c) => c.id === id) || {};
     const onboarding = {
+      userTypeDone: Boolean(userPolicy.configured),
       personalDone: Boolean(byId('user-profile').exists && byId('claude-local').exists),
       companyDone: Boolean(byId('operating-profile').exists && byId('operating-profile').todos === 0),
       memoryDone: Boolean(byId('memory-file').exists && byId('memory-daily').exists),
       companyTodos: byId('operating-profile').todos || 0,
       knowledgeSpacesDone: Boolean(knowledgeSpaces.personalReady && knowledgeSpaces.sharedReady),
     };
-    onboarding.complete = onboarding.personalDone && onboarding.companyDone && onboarding.memoryDone;
-    return send(200, { checks, onboarding, knowledgeSpaces, appSettings });
+    onboarding.complete = onboarding.userTypeDone && onboarding.personalDone && onboarding.companyDone && onboarding.memoryDone;
+    return send(200, { checks, onboarding, knowledgeSpaces, appSettings, userType, userPolicy });
   }
 
   if (url.pathname === '/api/meta' && req.method === 'PUT') {

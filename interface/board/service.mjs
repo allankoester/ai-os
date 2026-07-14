@@ -64,6 +64,10 @@ function isPathWithin(parentAbs, targetAbs) {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
+function slashPath(value) {
+  return String(value || '').split(path.sep).join('/');
+}
+
 function asItemList(items, { limit = 50, offset = 0 } = {}) {
   return items.slice(offset, offset + limit);
 }
@@ -333,11 +337,49 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
     }
   }
 
-  async function registerAttemptArtifacts(visibility, taskId, attemptId) {
-    const relRoot = path.posix.join('artifacts/project-board', visibility, taskId, attemptId);
-    const absRoot = path.join(rootDir, relRoot);
+  function resolveAttemptRoot(scope, visibility, taskId, attemptId) {
+    const rootRef = path.posix.join('artifacts/project-board', visibility, taskId, attemptId);
+    const scopeRootAbs = scope === 'team' ? storage.resolveScopeRoot('team') : storage.resolveScopeRoot('private');
+    const absRoot = path.join(scopeRootAbs, rootRef);
+    return { scope, visibility, rootRef, absRoot, scopeRootAbs };
+  }
+
+  async function assertNoSymlinkSegments(scopeRootAbs, absRoot) {
+    const relSegments = path.relative(scopeRootAbs, absRoot).split(path.sep).filter(Boolean);
+    let probe = scopeRootAbs;
+    for (const segment of relSegments) {
+      probe = path.join(probe, segment);
+      const lst = await fsp.lstat(probe).catch(() => null);
+      if (!lst) break;
+      if (lst.isSymbolicLink()) {
+        throw boardError(422, 'output_root_invalid', 'attempt output root contains a symlinked segment');
+      }
+    }
+  }
+
+  async function canonicalizeRootBoundary(scopeRootAbs, absRoot, visibility) {
+    await assertNoSymlinkSegments(scopeRootAbs, absRoot);
+    const realScopeRoot = await fsp.realpath(scopeRootAbs).catch(() => path.resolve(scopeRootAbs));
+    const attemptBaseAbs = path.join(scopeRootAbs, 'artifacts', 'project-board', visibility);
+    const attemptBaseRel = path.relative(scopeRootAbs, attemptBaseAbs);
+    const realScopeAttemptBase = await fsp.realpath(attemptBaseAbs).catch(() => path.resolve(realScopeRoot, attemptBaseRel));
+    if (!isPathWithin(realScopeRoot, realScopeAttemptBase)) {
+      throw boardError(422, 'output_root_invalid', 'artifact base escaped scope root');
+    }
+    const attemptRel = path.relative(scopeRootAbs, absRoot);
+    const realAttemptRoot = await fsp.realpath(absRoot).catch(() => path.resolve(realScopeRoot, attemptRel));
+    if (!isPathWithin(realScopeAttemptBase, realAttemptRoot)) {
+      throw boardError(422, 'output_root_invalid', 'attempt output root escaped confinement');
+    }
+    return { realScopeRoot, realScopeAttemptBase, realAttemptRoot };
+  }
+
+  async function registerAttemptArtifacts({ scope, visibility, taskId, attemptId }) {
+    const attemptRoot = resolveAttemptRoot(scope, visibility, taskId, attemptId);
+    const { rootRef, absRoot, scopeRootAbs } = attemptRoot;
+    const { realAttemptRoot } = await canonicalizeRootBoundary(scopeRootAbs, absRoot, visibility);
     const out = [];
-    const stack = [absRoot];
+    const stack = [realAttemptRoot];
     while (stack.length) {
       const current = stack.pop();
       const entries = await fsp.readdir(current, { withFileTypes: true }).catch(() => []);
@@ -352,21 +394,16 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
         }
         if (!entry.isFile()) continue;
         const real = await fsp.realpath(abs).catch(() => null);
-        if (!real || !isPathWithin(absRoot, real)) continue;
-        const rel = path.relative(rootDir, real).split(path.sep).join('/');
-        out.push({ path: rel, kind: 'file' });
+        if (!real || !isPathWithin(realAttemptRoot, real)) continue;
+        const relFromAttempt = slashPath(path.relative(realAttemptRoot, real));
+        if (!relFromAttempt || relFromAttempt.startsWith('..')) continue;
+        out.push({ path: `${rootRef}/${relFromAttempt}`, kind: 'file' });
       }
     }
     return out;
   }
 
-  function outputRootForAttempt(visibility, taskId, attemptId) {
-    const rel = path.posix.join('artifacts/project-board', visibility, taskId, attemptId);
-    const abs = path.join(rootDir, rel);
-    return { rel, abs };
-  }
-
-  async function createExecutionAttempt(task, actorId, idempotencyKey, trigger = 'manual') {
+  async function createExecutionAttempt(task, actorId, idempotencyKey, trigger = 'manual', scope = 'private') {
     normalizeTaskShape(task);
     const runtime = await getRuntimeSettingsRaw();
     if (!runtime?.runtimeMode) throw boardError(503, 'runtime_unavailable', 'runtime mode unavailable');
@@ -382,16 +419,16 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
     }
     const attemptId = randomUUID().replace(/-/g, '').slice(0, 16);
     const visibility = task.visibility || 'private';
-    const { rel: outputRootRel, abs: outputRootAbs } = outputRootForAttempt(visibility, task.id, attemptId);
-    const writeGate = guardrails.check(outputRootRel, 'write');
+    const guardrailPath = path.posix.join('artifacts/project-board', visibility, task.id, attemptId);
+    const attemptRoot = resolveAttemptRoot(scope, visibility, task.id, attemptId);
+    const { rootRef: outputRoot, absRoot: outputRootAbs, scopeRootAbs } = attemptRoot;
+    const writeGate = guardrails.check(guardrailPath, 'write');
     if (!writeGate.allowed || writeGate.confirmRequired) {
-      throw boardError(403, 'guardrail_denied', writeGate.reason || 'guardrail denied', { path: outputRootRel });
+      throw boardError(403, 'guardrail_denied', writeGate.reason || 'guardrail denied', { path: guardrailPath });
     }
+    await assertNoSymlinkSegments(scopeRootAbs, outputRootAbs);
     await fsp.mkdir(outputRootAbs, { recursive: true });
-    const real = await fsp.realpath(outputRootAbs).catch(() => null);
-    if (!real || !isPathWithin(path.join(rootDir, 'artifacts', 'project-board', visibility), real)) {
-      throw boardError(422, 'output_root_invalid', 'attempt output root escaped confinement');
-    }
+    await canonicalizeRootBoundary(scopeRootAbs, outputRootAbs, visibility);
 
     const attempt = {
       attempt_id: attemptId,
@@ -405,7 +442,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       workflow_id: task.workflow_id,
       scheduler_job_id: null,
       scheduler_run_id: null,
-      output_root: outputRootRel,
+      output_root: outputRoot,
       instruction_snapshot: ensureLength(task.description || '', 'instruction_snapshot', 0, LIMITS.descriptionMax),
       started_at: null,
       completed_at: null,
@@ -893,7 +930,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
         if (task.assignee_type !== 'agent') throw boardError(422, 'validation_error', 'task assignee_type must be agent to run');
         if (task.status === 'done') throw boardError(422, 'validation_error', 'done task cannot be run');
         await assertCanonicalTaskRouting(task);
-        const prepared = await createExecutionAttempt(task, actorId, idempotencyKey, 'manual');
+        const prepared = await createExecutionAttempt(task, actorId, idempotencyKey, 'manual', located.scope);
         if (prepared.sameAttempt) return { task, statusCode: 202 };
 
         appendExecutionUpdate(task, {
@@ -1002,7 +1039,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
         const retries = attempts.filter((a) => a.state === 'failed' || a.state === 'timed_out' || a.state === 'cancelled').length;
         if (retries >= LIMITS.retriesMax) throw boardError(409, 'retry_limit', `retry limit reached (${LIMITS.retriesMax})`);
         await assertCanonicalTaskRouting(task);
-        const prepared = await createExecutionAttempt(task, actorId, idempotencyKey, 'retry');
+        const prepared = await createExecutionAttempt(task, actorId, idempotencyKey, 'retry', located.scope);
         if (prepared.sameAttempt) return { task, statusCode: 202 };
 
         appendExecutionUpdate(task, {
@@ -1157,7 +1194,12 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
           appendExecutionUpdate(task, { state: 'running', summary: 'scheduler started callback received' });
         } else if (state === 'succeeded') {
           const runId = body?.scheduler_run_id || task.execution?.scheduler_run_id;
-          const artifacts = await registerAttemptArtifacts(task.visibility || 'private', task.id, attemptId);
+          const artifacts = await registerAttemptArtifacts({
+            scope: located.scope,
+            visibility: task.visibility || 'private',
+            taskId: task.id,
+            attemptId,
+          });
           task.linked_runs = appendNewestBounded(
             task.linked_runs || [],
             runId ? [{ source: 'scheduler', id: String(runId) }] : [],
@@ -1189,7 +1231,12 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
         } else {
           const failedState = state === 'failed' ? 'failed' : state === 'timed_out' ? 'timed_out' : 'cancelled';
           const runId = callbackRunId || task.execution?.scheduler_run_id || null;
-          const artifacts = await registerAttemptArtifacts(task.visibility || 'private', task.id, attemptId);
+          const artifacts = await registerAttemptArtifacts({
+            scope: located.scope,
+            visibility: task.visibility || 'private',
+            taskId: task.id,
+            attemptId,
+          });
           task.linked_paths = appendNewestBounded(
             task.linked_paths || [],
             artifacts,
@@ -1471,29 +1518,39 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       const task = located.task;
       const allowedAttempts = (task.execution?.attempts || []).filter((a) => a.attempt_id === attemptId);
       if (!allowedAttempts.length) throw boardError(404, 'not_found', 'artifact attempt not found');
-      const attempt = allowedAttempts[0];
       const normalized = path.posix.normalize('/' + String(artifactPath || '').replace(/\\/g, '/')).slice(1);
       if (!normalized || normalized.includes('..')) throw boardError(422, 'validation_error', 'invalid artifact path');
-      const fallbackRoot = path.posix.join('artifacts/project-board', task.visibility || 'private', task.id, attemptId);
-      const scopedAttemptRoot = String(attempt.output_root || '').trim();
+      const attempt = allowedAttempts[0];
+      const roots = [resolveAttemptRoot(located.scope, task.visibility || 'private', task.id, attemptId)];
       const strictAttemptRootRe = new RegExp(`^artifacts/project-board/(private|team)/${task.id}/${attemptId}$`);
-      const rootCandidates = [fallbackRoot];
-      if (strictAttemptRootRe.test(scopedAttemptRoot)) rootCandidates.push(scopedAttemptRoot);
-      const uniqueRoots = [...new Set(rootCandidates)];
-      const candidateRels = uniqueRoots.map((root) => path.posix.join(root, normalized));
-      const linkedRef = (task.execution?.artifact_paths || []).some((p) => candidateRels.includes(p) || candidateRels.some((rel) => String(p || '').endsWith('/' + normalized)))
-        || (task.linked_paths || []).some((p) => candidateRels.includes(p.path) || candidateRels.some((rel) => String(p.path || '').endsWith('/' + normalized)));
+      const attemptOutputRoot = String(attempt.output_root || '').trim();
+      const match = strictAttemptRootRe.exec(attemptOutputRoot);
+      if (match) {
+        const oldVisibility = match[1];
+        const oldScope = oldVisibility === 'team' ? 'team' : 'private';
+        const oldRoot = resolveAttemptRoot(oldScope, oldVisibility, task.id, attemptId);
+        if (!roots.some((r) => r.scope === oldRoot.scope && r.rootRef === oldRoot.rootRef)) roots.push(oldRoot);
+      }
+      const candidatePaths = roots.map((root) => `${slashPath(root.rootRef)}/${normalized}`);
+      const linkedRef = (attempt.artifact_paths || []).some((p) => {
+        const value = slashPath(p);
+        return candidatePaths.includes(value);
+      }) || (task.linked_paths || []).some((p) => {
+        const value = slashPath(p?.path);
+        return candidatePaths.includes(value);
+      });
       if (!linkedRef) {
         throw boardError(404, 'not_found', 'artifact not linked to attempt');
       }
-      for (const rel of candidateRels) {
-        const abs = path.join(rootDir, rel);
+      for (const root of roots) {
+        const { realAttemptRoot } = await canonicalizeRootBoundary(root.scopeRootAbs, root.absRoot, root.visibility);
+        const abs = path.join(root.absRoot, ...normalized.split('/'));
         const lst = await fsp.lstat(abs).catch(() => null);
         if (!lst || !lst.isFile() || lst.isSymbolicLink()) continue;
         const real = await fsp.realpath(abs).catch(() => null);
-        const confined = real && uniqueRoots.some((root) => isPathWithin(path.join(rootDir, root), real));
+        const confined = real && isPathWithin(realAttemptRoot, real);
         if (!confined) throw boardError(403, 'forbidden', 'artifact escaped confinement');
-        return { abs: real, rel };
+        return { abs: real, rel: `${slashPath(root.rootRef)}/${normalized}` };
       }
       throw boardError(404, 'not_found', 'artifact not found');
     },

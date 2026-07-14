@@ -21,7 +21,7 @@ const state = {
     doc: null,           // active doc path
     content: '',
     savedContent: '',
-    mode: 'edit',        // edit | preview
+    mode: 'preview',     // edit | preview
     colWidths: null,     // persisted folder/docs column widths
     resizeObserver: null,
   },
@@ -39,6 +39,23 @@ const uiState = {
   chatMode: 'chat',
   providerSettings: { ...DEFAULT_PROVIDER_SETTINGS },
 };
+
+const viewRefreshSeq = {
+  knowledge: 0,
+  artifacts: 0,
+  flows: 0,
+  projects: 0,
+};
+
+function nextViewRefreshSeq(view) {
+  const next = (viewRefreshSeq[view] || 0) + 1;
+  viewRefreshSeq[view] = next;
+  return next;
+}
+
+function isCurrentViewRefreshSeq(view, seq) {
+  return viewRefreshSeq[view] === seq;
+}
 
 const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
@@ -1375,6 +1392,27 @@ function renderKnowledge(el) {
   paintKnFolders();
   paintKnDocs();
   paintKnEditor();
+  refreshKnowledgeView();
+}
+
+async function refreshKnowledgeView() {
+  const seq = nextViewRefreshSeq('knowledge');
+  try {
+    const sys = await apiJson('/api/system');
+    if (!isCurrentViewRefreshSeq('knowledge', seq)) return;
+    state.system = sys;
+    if (state.view !== 'knowledge') return;
+    if (state.kn.folder && !knFolderList().some((f) => f.key === state.kn.folder)) {
+      const first = knChildren('')[0];
+      state.kn.folder = first ? first.key : null;
+      state.kn.level = '';
+    }
+    paintKnFolders();
+    paintKnDocs();
+    paintKnEditor();
+  } catch {
+    if (!isCurrentViewRefreshSeq('knowledge', seq)) return;
+  }
 }
 
 // select a folder by key from anywhere (map drawer, agent drawer, editor):
@@ -1404,7 +1442,10 @@ function paintKnFolders() {
   const children = knChildren(level);
 
   el.innerHTML = `
-    <div class="section-title" style="padding:0 12px;display:flex;align-items:center;gap:8px"><span style="flex:1">Folders</span></div>
+    <div class="section-title" style="padding:0 12px;display:flex;align-items:center;gap:8px">
+      <span style="flex:1">Folders</span>
+      <button class="btn btn-ghost btn-small" data-kn-refresh>Refresh</button>
+    </div>
     ${showDocControls ? `<div class="kn-controls" style="padding:0 12px 10px">
       <span class="filter-tabs compact" title="Docs or artifacts view">
         <button class="filter-tab ${state.kn.docsMode === 'docs' ? 'active' : ''}" data-kn-mode="docs">Docs</button>
@@ -1447,6 +1488,7 @@ function paintKnFolders() {
     state.kn.doc = null;
     paintKnFolders(); paintKnDocs(); paintKnEditor();
   }));
+  $('[data-kn-refresh]', el)?.addEventListener('click', refreshKnowledgeView);
   $$('[data-kn-filter]', el).forEach((b) => b.addEventListener('click', () => {
     state.kn.filter = b.dataset.knFilter;
     if (state.kn.doc && state.kn.filter === 'review-needed' && !isReviewStatus(docMeta(state.kn.doc).status)) {
@@ -1523,7 +1565,7 @@ async function loadDoc(path, mode) {
   const res = await (await fetch('/api/file?path=' + encodeURIComponent(path))).json();
   state.kn.doc = path;
   state.kn.content = state.kn.savedContent = res.content;
-  if (mode) state.kn.mode = mode;
+  state.kn.mode = mode || 'preview';
   paintKnDocs();
   paintKnEditor();
 }
@@ -1854,11 +1896,16 @@ function renderFlows(el) {
 }
 
 async function refreshFlows() {
+  const seq = nextViewRefreshSeq('flows');
   try {
-    flowsState.data = await apiJson('/api/scheduler');
+    const data = await apiJson('/api/scheduler');
+    if (!isCurrentViewRefreshSeq('flows', seq)) return;
+    flowsState.data = data;
   } catch (e) {
+    if (!isCurrentViewRefreshSeq('flows', seq)) return;
     flowsState.data = { jobs: [], runs: [], error: e.message };
   }
+  if (!isCurrentViewRefreshSeq('flows', seq)) return;
   paintFlows();
 }
 
@@ -2884,9 +2931,146 @@ async function openFileEditorDrawer(path, { title = 'Edit File', hint = '', temp
   });
 }
 
+async function openKnowledgeSpaceBrowser({ settingsEl, inputId, label }) {
+  const input = $('#' + inputId, settingsEl);
+  if (!input) return;
+
+  let roots = [];
+  let currentPath = String(input.value || '').trim();
+  let rootPath = '';
+  let parentPath = null;
+  let directories = [];
+  let loading = false;
+  let error = '';
+  let seq = 0;
+
+  const setUnsaved = () => {
+    const status = $('#ks-save-status', settingsEl);
+    if (status) status.textContent = 'Unsaved changes.';
+  };
+
+  const fetchRoots = async () => {
+    try {
+      const result = await apiJson('/api/folder-browser?mode=roots');
+      roots = Array.isArray(result?.roots) ? result.roots : [];
+    } catch {
+      roots = [];
+    }
+  };
+
+  const loadPath = async (nextPath, nextRootPath = null) => {
+    const pathValue = String(nextPath || '').trim();
+    if (!pathValue) {
+      error = 'Select a root first.';
+      render();
+      return;
+    }
+    if (nextRootPath !== null) rootPath = String(nextRootPath || '').trim();
+    const reqId = ++seq;
+    loading = true;
+    error = '';
+    render();
+    try {
+      let requestUrl = '/api/folder-browser?path=' + encodeURIComponent(pathValue) + '&includeRoots=1';
+      if (rootPath) requestUrl += '&root=' + encodeURIComponent(rootPath);
+      const data = await apiJson(requestUrl);
+      if (reqId !== seq) return;
+      currentPath = String(data.currentPath || pathValue);
+      parentPath = data.parentPath || null;
+      rootPath = String(data.rootPath || rootPath || '').trim();
+      directories = Array.isArray(data.directories) ? data.directories : [];
+      if (Array.isArray(data.roots)) roots = data.roots;
+      error = '';
+    } catch (e) {
+      if (reqId !== seq) return;
+      error = e?.message || 'Failed to load folder';
+      directories = [];
+    } finally {
+      if (reqId !== seq) return;
+      loading = false;
+      render();
+    }
+  };
+
+  const render = () => {
+    openDrawer(`
+      <div class="drawer-head">
+        <button class="drawer-close">✕</button>
+        <div class="drawer-dept">SETTINGS · KNOWLEDGE SPACES</div>
+        <div class="drawer-name">${esc(label || 'Select folder')}</div>
+        <div class="drawer-role">Choose a folder and apply it to this setting.</div>
+      </div>
+      <div class="drawer-body">
+        <div class="drawer-section">
+          <div class="section-title">Current folder</div>
+          <div class="path-line">${esc(currentPath || '(not selected)')}</div>
+          ${rootPath ? `<div class="list-meta" style="margin-top:4px">Browse root: <code>${esc(rootPath)}</code></div>` : ''}
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+            <button class="chip" type="button" data-ks-browse-refresh ${loading ? 'disabled' : ''}>Refresh</button>
+            <button class="chip" type="button" data-ks-browse-up ${(!parentPath || loading) ? 'disabled' : ''}>Up</button>
+            <button class="btn btn-primary btn-small" type="button" data-ks-browse-use ${(!currentPath || loading) ? 'disabled' : ''}>Use this folder</button>
+          </div>
+        </div>
+        <div class="drawer-section">
+          <div class="section-title">Quick roots</div>
+          <div class="tag-row">
+            ${roots.map((r) => `<button class="chip" type="button" data-ks-root="${esc(r.path)}" title="${esc(r.path)}">${esc(r.label || r.id || r.path)}</button>`).join('') || '<span class="stat-note">No roots available.</span>'}
+          </div>
+        </div>
+        <div class="drawer-section">
+          <div class="section-title">Directories</div>
+          ${loading ? '<div class="stat-note">Loading…</div>' : ''}
+          ${error ? `<div class="stat-note" style="color:var(--apricot-deep)">${esc(error)}</div>` : ''}
+          ${!loading && !error && !directories.length ? '<div class="stat-note">No child directories.</div>' : ''}
+          ${!loading && !error ? `<div class="simple-list">${directories.map((d) => `
+            <button class="list-row" type="button" data-ks-dir="${esc(d.path)}" ${d.traversable === false ? 'disabled' : ''}>
+              <span class="badge ${d.traversable === false ? 'badge-gray' : 'badge-green'}">${d.traversable === false ? 'LOCKED' : 'DIR'}</span>
+              <span>
+                <span class="list-title">${esc(d.name)}</span>
+                <span class="list-meta">${d.isSymlink ? 'symlink' : 'directory'}</span>
+              </span>
+            </button>`).join('')}</div>` : ''}
+        </div>
+      </div>`);
+
+    const drawer = $('#drawer');
+    $('[data-ks-browse-refresh]', drawer)?.addEventListener('click', () => {
+      if (!currentPath) return;
+      loadPath(currentPath);
+    });
+    $('[data-ks-browse-up]', drawer)?.addEventListener('click', () => {
+      if (!parentPath) return;
+      loadPath(parentPath);
+    });
+    $('[data-ks-browse-use]', drawer)?.addEventListener('click', () => {
+      if (!currentPath) return;
+      input.value = currentPath;
+      setUnsaved();
+      closeDrawer();
+      toast('PATH UPDATED');
+    });
+    $$('[data-ks-root]', drawer).forEach((btn) => btn.addEventListener('click', () => {
+      const selectedRoot = String(btn.dataset.ksRoot || '').trim();
+      if (!selectedRoot) return;
+      loadPath(selectedRoot, selectedRoot);
+    }));
+    $$('[data-ks-dir]', drawer).forEach((btn) => btn.addEventListener('click', () => {
+      loadPath(btn.dataset.ksDir || '');
+    }));
+  };
+
+  await fetchRoots();
+  if (!currentPath) {
+    currentPath = roots[0]?.path || '';
+    rootPath = currentPath;
+  }
+  render();
+  if (currentPath) loadPath(currentPath);
+}
+
 // ---------------------------------------------------------------- Artifacts / Settings
 
-const artState = { q: '', range: 'all', type: 'all', layout: 'list' };
+const artState = { q: '', range: 'all', type: 'all', layout: 'list', el: null, refreshing: false };
 
 const ART_RANGES = [
   ['24h', 24 * 3600e3, 'Last 24h'],
@@ -2941,12 +3125,26 @@ function artTileHtml(a) {
 }
 
 function renderArtifacts(el) {
+  artState.el = el;
   paintArtifacts(el);
-  // refresh the listing from disk so newly generated artifacts show up
-  apiJson('/api/system').then((sys) => {
+  refreshArtifactsView();
+}
+
+async function refreshArtifactsView() {
+  const seq = nextViewRefreshSeq('artifacts');
+  artState.refreshing = true;
+  if (state.view === 'artifacts' && artState.el) paintArtifacts(artState.el);
+  try {
+    const sys = await apiJson('/api/system');
+    if (!isCurrentViewRefreshSeq('artifacts', seq)) return;
     state.system = sys;
-    if (state.view === 'artifacts') paintArtifacts(el);
-  }).catch(() => {});
+  } catch {
+    if (!isCurrentViewRefreshSeq('artifacts', seq)) return;
+  } finally {
+    if (!isCurrentViewRefreshSeq('artifacts', seq)) return;
+    artState.refreshing = false;
+    if (state.view === 'artifacts' && artState.el) paintArtifacts(artState.el);
+  }
 }
 
 function paintArtifacts(el) {
@@ -3007,6 +3205,7 @@ function paintArtifacts(el) {
           <button class="filter-tab ${artState.layout === 'grid' ? 'active' : ''}" data-layout="grid">Grid</button>
           <button class="filter-tab ${artState.layout === 'list' ? 'active' : ''}" data-layout="list">List</button>
         </span>
+        <button class="btn btn-ghost btn-small" data-art-refresh ${artState.refreshing ? 'disabled' : ''}>${artState.refreshing ? 'Refreshing…' : 'Refresh'}</button>
       </div>
       ${presentTypes.length ? `<div class="art-type-tabs">
         <span class="filter-tabs">
@@ -3035,6 +3234,7 @@ function paintArtifacts(el) {
   $$('[data-range]', el).forEach((b) => b.addEventListener('click', () => { artState.range = b.dataset.range; paintArtifacts(el); }));
   $$('[data-type]', el).forEach((b) => b.addEventListener('click', () => { artState.type = b.dataset.type; paintArtifacts(el); }));
   $$('[data-layout]', el).forEach((b) => b.addEventListener('click', () => { artState.layout = b.dataset.layout; paintArtifacts(el); }));
+  $('[data-art-refresh]', el)?.addEventListener('click', refreshArtifactsView);
   $$('[data-art-open]', el).forEach((b) => b.addEventListener('click', () => {
     window.open('/api/artifact?path=' + encodeURIComponent(b.dataset.artOpen), '_blank');
   }));
@@ -3220,6 +3420,12 @@ const PROVIDER_MODES = [
   { value: 'opencode', label: 'OpenCode multi-provider runtime' },
 ];
 
+const USER_TYPE_OPTIONS = [
+  { value: 'single-user', label: 'Single user' },
+  { value: 'team-user', label: 'Team user' },
+  { value: 'collaborator', label: 'Collaborator' },
+];
+
 function providerRestartStatusLabel(settings) {
   const mode = String(settings?.runtimeMode || DEFAULT_PROVIDER_SETTINGS.runtimeMode);
   const bridge = Boolean(settings?.cliBridgeEnabled);
@@ -3274,6 +3480,7 @@ function paintSettingsBody(el) {
   const providerSavedLabel = Number.isFinite(providerSavedAt)
     ? `Saved ${timeAgo(providerSavedAt)} · ${restartLabel}`
     : `Not saved yet on this machine. ${restartLabel}`;
+  const providerDiagnostics = providerSettings?.diagnostics || null;
   const providerEnvRows = Array.isArray(provider.envVault) ? provider.envVault.map((row) => ({
     key: String(row?.key || ''),
     hasValue: Boolean(row?.hasValue),
@@ -3282,14 +3489,23 @@ function paintSettingsBody(el) {
   })) : [];
   const appCfg = appSettings || {};
   const appCfgSettings = appCfg.settings || {};
+  const appUserType = String(appCfgSettings.userType || '');
   const appSaved = appCfg.savedEffectiveRoots || {};
   const appActive = appCfg.activeRuntimeRoots || {};
   const sharedSaved = appSaved.shared || {};
   const sharedActive = appActive.shared || {};
   const personalSaved = appSaved.personal || {};
   const personalActive = appActive.personal || {};
+  const boardSaved = appSaved.board || {};
+  const boardActive = appActive.board || {};
+  const privateBoardSaved = boardSaved.private || {};
+  const privateBoardActive = boardActive.private || {};
+  const teamBoardSaved = boardSaved.team || {};
+  const teamBoardActive = boardActive.team || {};
   const sharedFolders = sharedActive.detectedSubfolders || sharedSaved.detectedSubfolders || {};
+  const boardSafetyErrors = Array.isArray(appCfg.boardSafetyErrors) ? appCfg.boardSafetyErrors : [];
   const ksDone = Boolean(workspace.knowledgeSpaces?.personalReady && workspace.knowledgeSpaces?.sharedReady);
+  const userTypeDone = Boolean(onb?.userTypeDone);
 
   const editable = {
     'user-profile': { title: 'Personal Profile', hint: 'Your persona profile — private, never committed.' },
@@ -3304,6 +3520,16 @@ function paintSettingsBody(el) {
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
         <div class="section-title" style="flex:1;margin:0">Onboarding</div>
         <span class="badge ${onb.complete ? 'badge-green' : 'badge-apricot'}">${onb.complete ? 'COMPLETE' : 'INCOMPLETE'}</span>
+      </div>
+      <div class="kv-row">
+        <span>${userTypeDone ? '<span class="badge badge-green">DONE</span>' : '<span class="badge badge-apricot">OPEN</span>'} User type — required machine-local role setting</span>
+        <span>
+          <select id="onb-user-type" class="filter-input" style="min-width:180px">
+            <option value="">Select…</option>
+            ${USER_TYPE_OPTIONS.map((opt) => `<option value="${opt.value}" ${appUserType === opt.value ? 'selected' : ''}>${esc(opt.label)}</option>`).join('')}
+          </select>
+          <button class="chip" data-act="save-user-type" style="margin-left:6px">Save</button>
+        </span>
       </div>
       <div class="kv-row">
         <span>${onb.personalDone ? '<span class="badge badge-green">DONE</span>' : '<span class="badge badge-apricot">OPEN</span>'} Personal onboarding — persona profile + personal instructions</span>
@@ -3380,7 +3606,10 @@ function paintSettingsBody(el) {
       </div>
       <div class="form-field">
         <label for="ks-personal-root">Personal knowledge root (maps to <code>knowledge/personal/…</code>)</label>
-        <input id="ks-personal-root" class="filter-input" type="text" value="${esc(appCfgSettings.personalKnowledgeRoot || '')}" placeholder="knowledge/personal">
+        <div class="ks-path-edit-row">
+          <input id="ks-personal-root" class="filter-input" type="text" value="${esc(appCfgSettings.personalKnowledgeRoot || '')}" placeholder="knowledge/personal" readonly>
+          <button class="btn btn-ghost btn-small" type="button" data-ks-edit="ks-personal-root" data-ks-label="Personal knowledge root">Edit</button>
+        </div>
       </div>
       <div class="stat-note" style="white-space:normal;margin-bottom:8px">
         Saved root: <code>${esc(personalSaved.path || 'knowledge/personal')}</code> · ${personalSaved.exists ? 'exists' : 'missing'}${personalSaved.isSymlink ? ' · symlink' : ''}<br>
@@ -3388,13 +3617,39 @@ function paintSettingsBody(el) {
       </div>
       <div class="form-field">
         <label for="ks-shared-root">Shared company/team knowledge root (maps to <code>knowledge/company</code>, <code>knowledge/inbox</code>, <code>knowledge/team</code>)</label>
-        <input id="ks-shared-root" class="filter-input" type="text" value="${esc(appCfgSettings.sharedKnowledgeRoot || '')}" placeholder="knowledge">
+        <div class="ks-path-edit-row">
+          <input id="ks-shared-root" class="filter-input" type="text" value="${esc(appCfgSettings.sharedKnowledgeRoot || '')}" placeholder="knowledge" readonly>
+          <button class="btn btn-ghost btn-small" type="button" data-ks-edit="ks-shared-root" data-ks-label="Shared knowledge root">Edit</button>
+        </div>
       </div>
       <div class="stat-note" style="white-space:normal;margin-bottom:8px">
         Saved root: <code>${esc(sharedSaved.path || 'knowledge')}</code> · ${sharedSaved.exists ? 'exists' : 'missing'}${sharedSaved.isSymlink ? ' · symlink' : ''}<br>
         Active runtime root: <code>${esc(sharedActive.path || sharedSaved.path || 'knowledge')}</code> · ${sharedActive.exists ? 'exists' : 'missing'}${sharedActive.isSymlink ? ' · symlink' : ''}<br>
         Shared subfolders detected: company ${sharedFolders.company ? '✓' : '—'} · inbox ${sharedFolders.inbox ? '✓' : '—'} · team ${sharedFolders.team ? '✓' : '—'}
       </div>
+      <div class="form-field">
+        <label for="ks-private-board-root">Private board root (Project Board private scope storage)</label>
+        <div class="ks-path-edit-row">
+          <input id="ks-private-board-root" class="filter-input" type="text" value="${esc(appCfgSettings.privateBoardRoot || '')}" placeholder="(default local runtime private board root)" readonly>
+          <button class="btn btn-ghost btn-small" type="button" data-ks-edit="ks-private-board-root" data-ks-label="Private board root">Edit</button>
+        </div>
+      </div>
+      <div class="stat-note" style="white-space:normal;margin-bottom:8px">
+        Saved root: <code>${esc(privateBoardSaved.path || '(default local runtime private board root)')}</code> · ${privateBoardSaved.exists ? 'exists' : 'missing'}${privateBoardSaved.isSymlink ? ' · symlink' : ''}<br>
+        Active runtime root: <code>${esc(privateBoardActive.path || privateBoardSaved.path || '(default local runtime private board root)')}</code> · ${privateBoardActive.exists ? 'exists' : 'missing'}${privateBoardActive.isSymlink ? ' · symlink' : ''}
+      </div>
+      <div class="form-field">
+        <label for="ks-team-board-root">Team board root (Project Board team scope storage)</label>
+        <div class="ks-path-edit-row">
+          <input id="ks-team-board-root" class="filter-input" type="text" value="${esc(appCfgSettings.teamBoardRoot || '')}" placeholder="/absolute/path/to/team-board" readonly>
+          <button class="btn btn-ghost btn-small" type="button" data-ks-edit="ks-team-board-root" data-ks-label="Team board root">Edit</button>
+        </div>
+      </div>
+      <div class="stat-note" style="white-space:normal;margin-bottom:8px">
+        Saved root: <code>${esc(teamBoardSaved.path || 'not configured')}</code> · ${teamBoardSaved.path ? (teamBoardSaved.exists ? 'exists' : 'missing') : 'not configured'}${teamBoardSaved.isSymlink ? ' · symlink' : ''}<br>
+        Active runtime root: <code>${esc(teamBoardActive.path || teamBoardSaved.path || 'not configured')}</code> · ${teamBoardActive.path ? (teamBoardActive.exists ? 'exists' : 'missing') : 'not configured'}${teamBoardActive.isSymlink ? ' · symlink' : ''}
+      </div>
+      ${boardSafetyErrors.length ? `<div class="stat-note" style="color:var(--apricot-deep);white-space:normal;margin-bottom:8px">Board root checks: ${boardSafetyErrors.map((msg) => esc(msg)).join(' · ')}</div>` : ''}
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <button class="btn btn-primary btn-small" data-act="save-knowledge-spaces">Save knowledge spaces</button>
         <span class="stat-note" id="ks-save-status">${appCfg.restartRequired ? 'Saved. Restart required to apply active runtime roots.' : 'Saved values shown above. Changes require restart to take effect.'}</span>
@@ -3445,8 +3700,15 @@ function paintSettingsBody(el) {
       </div>
       <div class="provider-actions">
         <button class="btn btn-primary btn-small" data-act="save-provider-settings">Save provider settings</button>
+        <button class="btn btn-ghost btn-small" data-act="run-provider-deep-test">Run deep provider test</button>
         <span class="stat-note" id="provider-save-status">${providerSavedLabel}</span>
       </div>
+      <div class="stat-note" style="margin-top:8px;white-space:normal">
+        Local provider diagnostics: ${(providerDiagnostics?.checks || []).length
+          ? providerDiagnostics.checks.map((c) => `[${String(c.status || '').toUpperCase()}] ${esc(c.message || c.id)}`).join(' · ')
+          : 'not available'}
+      </div>
+      <div class="stat-note" id="provider-deep-test-status" style="margin-top:4px;white-space:normal">Deep provider test runs on demand only.</div>
       <div class="stat-note" style="margin-top:8px;white-space:normal">Settings are machine-local (<code>interface/provider-settings.json</code>) and apply on restart. Use <strong>Runtime → Restart App + Chat</strong> after saving.</div>
     </div>` : ''}
 
@@ -3504,6 +3766,20 @@ function paintSettingsBody(el) {
   }));
 
   $('[data-act="onboarding-guide"]', el)?.addEventListener('click', () => showOnboardingModal(settingsState.data.workspace, { force: true }));
+  $('[data-act="save-user-type"]', el)?.addEventListener('click', async () => {
+    const select = $('#onb-user-type', el);
+    if (!select) return;
+    try {
+      await apiJson('/api/app-settings', {
+        method: 'PUT',
+        body: JSON.stringify({ userType: String(select.value || '').trim() }),
+      });
+      toast('USER TYPE SAVED');
+      paintSettings(el);
+    } catch (e) {
+      toast(e.message.toUpperCase(), true);
+    }
+  });
   bindMemoryActions(el);
 
   $$('[data-edit-file]', el).forEach((b) => b.addEventListener('click', () => {
@@ -3634,6 +3910,18 @@ function paintSettingsBody(el) {
     }
   });
 
+  $('[data-act="run-provider-deep-test"]', el)?.addEventListener('click', async () => {
+    const status = $('#provider-deep-test-status', el);
+    if (!status) return;
+    status.textContent = 'Running deep provider test…';
+    try {
+      const result = await apiJson('/api/provider-settings/deep-test', { method: 'POST', body: JSON.stringify({}) });
+      status.textContent = `[${String(result.category || 'success').toUpperCase()}] ${result.detail || 'Provider deep test passed.'} (${result.durationMs || 0} ms)`;
+    } catch (e) {
+      status.textContent = `Deep test failed: ${e.message}`;
+    }
+  });
+
   const modeEl = $('#provider-runtime-mode', el);
   const bridgeEl = $('#provider-cli-bridge-enabled', el);
   const statusEl = $('#provider-save-status', el);
@@ -3674,11 +3962,23 @@ function paintSettingsBody(el) {
     else grCard.innerHTML = '<div class="section-title">Guardrails</div><div class="stat-note">Guardrails unavailable.</div>';
   }
 
+  $$('[data-ks-edit]', el).forEach((btn) => btn.addEventListener('click', () => {
+    const inputId = String(btn.dataset.ksEdit || '').trim();
+    if (!inputId) return;
+    openKnowledgeSpaceBrowser({
+      settingsEl: el,
+      inputId,
+      label: btn.dataset.ksLabel || 'Select folder',
+    });
+  }));
+
   $('[data-act="save-knowledge-spaces"]', el)?.addEventListener('click', async () => {
     const personalEl = $('#ks-personal-root', el);
     const sharedEl = $('#ks-shared-root', el);
+    const privateBoardEl = $('#ks-private-board-root', el);
+    const teamBoardEl = $('#ks-team-board-root', el);
     const status = $('#ks-save-status', el);
-    if (!personalEl || !sharedEl || !status) return;
+    if (!personalEl || !sharedEl || !privateBoardEl || !teamBoardEl || !status) return;
     try {
       status.textContent = 'Saving…';
       const result = await apiJson('/api/app-settings', {
@@ -3686,6 +3986,8 @@ function paintSettingsBody(el) {
         body: JSON.stringify({
           personalKnowledgeRoot: personalEl.value.trim(),
           sharedKnowledgeRoot: sharedEl.value.trim(),
+          privateBoardRoot: privateBoardEl.value.trim(),
+          teamBoardRoot: teamBoardEl.value.trim(),
         }),
       });
       settingsState.data.appSettings = result;
@@ -3707,6 +4009,7 @@ function paintSettingsBody(el) {
 function showOnboardingModal(workspace, { force = false } = {}) {
   const onb = workspace && workspace.onboarding;
   const ks = workspace && workspace.knowledgeSpaces;
+  const currentUserType = String(workspace?.appSettings?.settings?.userType || '');
   if (!onb) return;
   if (!force && (onb.complete || sessionStorage.getItem('onboarding-dismissed'))) return;
   $('#onboarding-modal')?.remove();
@@ -3732,10 +4035,21 @@ function showOnboardingModal(workspace, { force = false } = {}) {
         The onboarding interviews give Danny and all agents the context they need. Without them,
         agents guess. Both run as guided interviews <strong>in Claude Code</strong>, not here.
       </p>
+      ${step(onb.userTypeDone, '0 · User type', 'Set your machine-local role before onboarding can be marked complete.', '')}
       ${step(onb.personalDone, '1 · Personal onboarding', 'Creates your private persona profile (knowledge/personal/user-profile.md) and your personal instructions (CLAUDE.local.md).', '/personal-onboarding')}
       ${step(onb.companyDone, '2 · Company onboarding', `Fills the company operating profile — the shared custom instruction for the whole team.${onb.companyTodos ? ' Currently ' + onb.companyTodos + ' TODO placeholders open.' : ''}`, '/company-onboarding')}
       ${step(onb.memoryDone, '3 · Memory setup', 'Required local memory paths exist: memory/MEMORY.md and memory/daily/. Edit memory/MEMORY.md in Settings -> Profile & Instructions.', '')}
       ${step(Boolean(ks?.personalReady && ks?.sharedReady), '4 · Knowledge spaces', 'Confirm personal and shared knowledge roots in Settings -> Knowledge Spaces. Missing shared roots are allowed, but should be configured for company docs visibility.', '')}
+      <div class="onb-step" style="border-top:none;padding-top:6px">
+        <span style="width:56px"></span>
+        <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;flex:1">
+          <select id="modal-user-type" class="filter-input" style="min-width:220px">
+            <option value="">Select user type…</option>
+            ${USER_TYPE_OPTIONS.map((opt) => `<option value="${opt.value}" ${currentUserType === opt.value ? 'selected' : ''}>${esc(opt.label)}</option>`).join('')}
+          </select>
+          <button class="btn btn-ghost btn-small" data-onb="save-user-type">Save user type</button>
+        </span>
+      </div>
       <div class="onb-actions">
         <button class="btn btn-primary btn-small" data-onb="settings">Open Settings</button>
         <button class="btn btn-ghost btn-small" data-onb="later">${onb.complete ? 'Close' : 'Remind me later'}</button>
@@ -3750,6 +4064,19 @@ function showOnboardingModal(workspace, { force = false } = {}) {
     close();
   });
   $('[data-onb="settings"]', overlay).addEventListener('click', () => { close(); setView('settings'); });
+  $('[data-onb="save-user-type"]', overlay)?.addEventListener('click', async () => {
+    const select = $('#modal-user-type', overlay);
+    const value = String(select?.value || '').trim();
+    if (!value) return toast('SELECT USER TYPE FIRST', true);
+    try {
+      await apiJson('/api/app-settings', { method: 'PUT', body: JSON.stringify({ userType: value }) });
+      toast('USER TYPE SAVED');
+      close();
+      checkOnboarding();
+    } catch (e) {
+      toast(e.message.toUpperCase(), true);
+    }
+  });
 }
 
 async function checkOnboarding() {
@@ -4303,25 +4630,35 @@ async function loadProjectTasks(projectId) {
 }
 
 async function refreshProjectsView() {
+  const seq = nextViewRefreshSeq('projects');
   projectState.loading = true;
   projectState.error = null;
   projectState.denied = false;
   paintProjects();
   try {
-    if (!projectState.metadata) projectState.metadata = normalizeMetadata(await boardApi('/api/board/metadata'));
+    if (!projectState.metadata) {
+      const metadata = await boardApi('/api/board/metadata');
+      if (!isCurrentViewRefreshSeq('projects', seq)) return;
+      projectState.metadata = normalizeMetadata(metadata);
+    }
     const projects = await fetchBoardListAll('/api/projects', { limit: 200 });
+    if (!isCurrentViewRefreshSeq('projects', seq)) return;
     projectState.projects = projects;
     ensureProjectSelection();
     const selectedId = projectState.selectedProjectId;
-    projectState.tasks = selectedId
+    const tasks = selectedId
       ? await fetchBoardListAll('/api/tasks', { limit: 200, query: { project_id: selectedId } })
       : [];
+    if (!isCurrentViewRefreshSeq('projects', seq)) return;
+    projectState.tasks = tasks;
     ensureProjectSelection();
     if (projectState.selectedProjectId) loadProjectStreams(projectState.selectedProjectId);
   } catch (e) {
+    if (!isCurrentViewRefreshSeq('projects', seq)) return;
     projectState.error = e;
     projectState.denied = e.status === 401 || e.status === 403;
   } finally {
+    if (!isCurrentViewRefreshSeq('projects', seq)) return;
     projectState.loading = false;
     paintProjects();
   }

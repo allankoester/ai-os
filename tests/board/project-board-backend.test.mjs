@@ -100,11 +100,39 @@ async function createHarness({ schedulerOptions, runtimeMode = 'claude-subscript
     return { project, task };
   }
 
-  return { rootDir, scheduler, service, storage, createProjectAndTask };
+  return {
+    rootDir,
+    scheduler,
+    service,
+    storage,
+    boardRoots: {
+      privateRoot: boardRoots?.privateRoot || path.join(rootDir, 'project-board'),
+      teamRoot: boardRoots?.teamRoot || null,
+    },
+    createProjectAndTask,
+  };
 }
 
 async function cleanupRoot(rootDir) {
   await fsp.rm(rootDir, { recursive: true, force: true });
+}
+
+function resolveAttemptOutputRootAbs(rootDir, outputRoot, boardRoots = {}) {
+  const value = String(outputRoot || '');
+  if (path.isAbsolute(value)) return value;
+  const normalized = value.split(path.sep).join('/');
+  if (normalized.startsWith('artifacts/project-board/team/')) {
+    return path.join(boardRoots.teamRoot || rootDir, value);
+  }
+  if (normalized.startsWith('artifacts/project-board/private/')) {
+    return path.join(boardRoots.privateRoot || rootDir, value);
+  }
+  return path.join(rootDir, value);
+}
+
+function isPathWithin(parentAbs, targetAbs) {
+  const rel = path.relative(parentAbs, targetAbs);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
 async function expectBoardErrorStatus(promise, status) {
@@ -311,7 +339,7 @@ test('lifecycle callback success transitions task to needs_review and writes lin
       idempotency_key: 'idem_success',
     }, HUMAN_ACTOR);
 
-    const outputRoot = path.join(h.rootDir, runResult.task.execution.output_root);
+    const outputRoot = resolveAttemptOutputRootAbs(h.rootDir, runResult.task.execution.output_root, h.boardRoots);
     const artifactPath = path.join(outputRoot, 'result.txt');
     await fsp.mkdir(outputRoot, { recursive: true });
     await fsp.writeFile(artifactPath, 'ok', 'utf8');
@@ -427,7 +455,7 @@ test('execution-linked references keep newest entries when bounded', async () =>
       scheduler_job_id: 'job_1',
       scheduler_run_id: 'run_1',
     }, INTERNAL_ACTOR);
-    await fsp.writeFile(path.join(h.rootDir, run.task.execution.output_root, 'result.txt'), 'bounded output', 'utf8');
+    await fsp.writeFile(path.join(resolveAttemptOutputRootAbs(h.rootDir, run.task.execution.output_root, h.boardRoots), 'result.txt'), 'bounded output', 'utf8');
     const updated = await h.service.executionCallback({
       task_id: task.id,
       attempt_id: run.task.execution.attempt_id,
@@ -1000,6 +1028,118 @@ test('team scope create fails when team root is not configured', async () => {
   }
 });
 
+test('team task artifacts are written under configured team board root', async () => {
+  const privateRoot = path.join(os.tmpdir(), `board-private-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const teamRoot = path.join(os.tmpdir(), `board-team-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const h = await createHarness({ boardRoots: { privateRoot, teamRoot } });
+  try {
+    const teamProject = await h.service.createProject({
+      id: 'proj_team_artifacts',
+      name: 'Team Artifacts',
+      visibility: 'team',
+    }, HUMAN_ACTOR);
+    const teamTask = await h.service.createTask({
+      id: 'task_team_artifacts',
+      project_id: teamProject.id,
+      title: 'Team Artifact Task',
+      assignee_type: 'agent',
+      assignee_id: 'agent_alpha',
+      workflow_id: 'workflow_alpha',
+    }, HUMAN_ACTOR);
+
+    const run = await h.service.runTask(teamTask.id, {
+      version: teamTask.version,
+      idempotency_key: 'idem_team_artifacts',
+    }, HUMAN_ACTOR);
+
+    const outputAbs = resolveAttemptOutputRootAbs(h.rootDir, run.task.execution.output_root, h.boardRoots);
+    assert.equal(isPathWithin(teamRoot, outputAbs), true);
+    assert.equal(isPathWithin(path.join(h.rootDir, 'artifacts'), outputAbs), false);
+  } finally {
+    await cleanupRoot(h.rootDir);
+    await fsp.rm(privateRoot, { recursive: true, force: true });
+    await fsp.rm(teamRoot, { recursive: true, force: true });
+  }
+});
+
+test('private task artifacts remain under local repo artifacts root', async () => {
+  const privateRoot = path.join(os.tmpdir(), `board-private-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const teamRoot = path.join(os.tmpdir(), `board-team-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const h = await createHarness({ boardRoots: { privateRoot, teamRoot } });
+  try {
+    const { task } = await h.createProjectAndTask();
+    const run = await h.service.runTask(task.id, {
+      version: task.version,
+      idempotency_key: 'idem_private_artifacts',
+    }, HUMAN_ACTOR);
+
+    const outputAbs = resolveAttemptOutputRootAbs(h.rootDir, run.task.execution.output_root, h.boardRoots);
+    assert.equal(isPathWithin(privateRoot, outputAbs), true);
+  } finally {
+    await cleanupRoot(h.rootDir);
+    await fsp.rm(privateRoot, { recursive: true, force: true });
+    await fsp.rm(teamRoot, { recursive: true, force: true });
+  }
+});
+
+test('team artifact reads resolve through board artifact service path semantics', async () => {
+  const privateRoot = path.join(os.tmpdir(), `board-private-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const teamRoot = path.join(os.tmpdir(), `board-team-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const h = await createHarness({ boardRoots: { privateRoot, teamRoot } });
+  try {
+    const teamProject = await h.service.createProject({
+      id: 'proj_team_read_artifacts',
+      name: 'Team Read Artifacts',
+      visibility: 'team',
+    }, HUMAN_ACTOR);
+    const teamTask = await h.service.createTask({
+      id: 'task_team_read_artifacts',
+      project_id: teamProject.id,
+      title: 'Team Read Artifact Task',
+      assignee_type: 'agent',
+      assignee_id: 'agent_alpha',
+      workflow_id: 'workflow_alpha',
+    }, HUMAN_ACTOR);
+
+    const run = await h.service.runTask(teamTask.id, {
+      version: teamTask.version,
+      idempotency_key: 'idem_team_read_artifacts',
+    }, HUMAN_ACTOR);
+    const outputRoot = resolveAttemptOutputRootAbs(h.rootDir, run.task.execution.output_root, h.boardRoots);
+    await fsp.mkdir(outputRoot, { recursive: true });
+    const artifactAbs = path.join(outputRoot, 'result.txt');
+    await fsp.writeFile(artifactAbs, 'team ok', 'utf8');
+
+    await h.service.executionCallback({
+      task_id: teamTask.id,
+      attempt_id: run.task.execution.attempt_id,
+      state: 'started',
+      scheduler_job_id: 'job_1',
+      scheduler_run_id: 'run_1',
+    }, INTERNAL_ACTOR);
+    await h.service.executionCallback({
+      task_id: teamTask.id,
+      attempt_id: run.task.execution.attempt_id,
+      state: 'succeeded',
+      scheduler_job_id: 'job_1',
+      scheduler_run_id: 'run_1',
+      result_summary: 'team success',
+    }, INTERNAL_ACTOR);
+
+    const artifact = await h.service.readTaskArtifact({
+      taskId: teamTask.id,
+      attemptId: run.task.execution.attempt_id,
+      artifactPath: 'result.txt',
+      actor: HUMAN_ACTOR,
+    });
+    assert.equal(await fsp.realpath(artifact.abs), await fsp.realpath(artifactAbs));
+  } finally {
+    await cleanupRoot(h.rootDir);
+    await fsp.rm(privateRoot, { recursive: true, force: true });
+    await fsp.rm(teamRoot, { recursive: true, force: true });
+  }
+});
+
 test('team divergence detection fails closed in read-only mode', async () => {
   const privateRoot = path.join(os.tmpdir(), `board-private-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const teamRoot = path.join(os.tmpdir(), `board-team-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -1094,7 +1234,7 @@ test('artifact authorization enforces private scope ownership', async () => {
       version: task.version,
       idempotency_key: 'idem_artifact_auth',
     }, HUMAN_ACTOR);
-    const outputRoot = path.join(h.rootDir, runResult.task.execution.output_root);
+    const outputRoot = resolveAttemptOutputRootAbs(h.rootDir, runResult.task.execution.output_root, h.boardRoots);
     await fsp.mkdir(outputRoot, { recursive: true });
     await fsp.writeFile(path.join(outputRoot, 'result.txt'), 'ok', 'utf8');
     await h.service.executionCallback({
@@ -1448,7 +1588,7 @@ test('historical attempt artifacts remain readable after visibility migration', 
       version: task.version,
       idempotency_key: 'idem_hist_art',
     }, HUMAN_ACTOR);
-    const outputRoot = path.join(h.rootDir, run.task.execution.output_root);
+    const outputRoot = resolveAttemptOutputRootAbs(h.rootDir, run.task.execution.output_root, h.boardRoots);
     await fsp.mkdir(outputRoot, { recursive: true });
     await fsp.writeFile(path.join(outputRoot, 'result.txt'), 'ok', 'utf8');
 
@@ -1815,8 +1955,8 @@ test('execution callback stores lifecycle updates and does not auto-link server 
     assert.ok(!updated.linked_paths.some((p) => p.path.endsWith('/server-summary.txt')));
     assert.ok(!updated.linked_paths.some((p) => p.path.endsWith('/server-transcript.log')));
 
-    const summaryPath = path.join(h.rootDir, runResult.task.execution.output_root, 'server-summary.txt');
-    const transcriptPath = path.join(h.rootDir, runResult.task.execution.output_root, 'server-transcript.log');
+    const summaryPath = path.join(resolveAttemptOutputRootAbs(h.rootDir, runResult.task.execution.output_root, h.boardRoots), 'server-summary.txt');
+    const transcriptPath = path.join(resolveAttemptOutputRootAbs(h.rootDir, runResult.task.execution.output_root, h.boardRoots), 'server-transcript.log');
     const summaryExists = await fsp.stat(summaryPath).then(() => true).catch(() => false);
     const transcriptExists = await fsp.stat(transcriptPath).then(() => true).catch(() => false);
     assert.equal(summaryExists, false);

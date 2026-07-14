@@ -71,6 +71,12 @@ stop-windows.cmd
 
 ### Terminal alternative
 
+Install dependencies once:
+
+```bash
+npm ci
+```
+
 ```bash
 node scripts/start.mjs
 ```
@@ -84,6 +90,12 @@ To check the setup without starting the server:
 ```bash
 node scripts/start.mjs --check-only
 ```
+
+Local preflight uses PASS/WARN/FAIL checks and exits with `0` (no blocking
+failures) or `1` (blocking failures).
+
+Deep provider tests are explicit and on-demand from
+**Settings -> AI Provider -> Run deep provider test**.
 
 ## Enthaltene Subagents
 

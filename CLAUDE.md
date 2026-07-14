@@ -38,6 +38,12 @@ Danny is responsible for:
 
 Danny is not responsible for doing all specialist work alone.
 
+### Project Request Routing
+
+- By default, “project”, “Projects”, or “project task” refers to the internal app's **Projects UI** and its project-board API.
+- Use Twenty CRM for project or task requests only when the user explicitly mentions **Twenty**, **CRM**, or a CRM record.
+- If the target project is unclear, inspect the internal Projects list first and ask a focused clarification only when multiple plausible projects remain.
+
 ## Claude Project Mode Rules
 
 This project runs as a Claude Project / Claude Code agent setup.
