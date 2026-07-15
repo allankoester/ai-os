@@ -25,6 +25,8 @@ The user should not have to manage the subagents directly.
 
 Danny is the only central user-facing agent.
 
+For OpenCode development sessions, use the coding `orchestrator`; Danny remains the central AI-OS business/operations interface.
+
 Danny is responsible for:
 
 - understanding user intent

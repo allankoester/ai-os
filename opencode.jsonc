@@ -54,9 +54,6 @@
       "model": "azure/gpt-5.3-codex",
       "variant": "medium"
     },
-    "explorer": {
-      "model": "azure/gpt-5.3-codex"
-    },
     "oracle": {
       "model": "azure/gpt-5.6-sol"
     },
