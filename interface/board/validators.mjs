@@ -13,6 +13,7 @@ import {
 import { boardError } from './errors.mjs';
 
 const ID_RE = /^[a-z0-9_]{3,80}$/;
+const SUBTASK_ID_RE = /^[a-z0-9_-]{1,80}$/;
 
 function normString(value) {
   return String(value ?? '').trim();
@@ -215,6 +216,7 @@ export function validateProjectCreate(body) {
 export function validateTaskCreate(body) {
   const now = new Date().toISOString();
   const id = ensureId(body?.id || slugify(body?.title || ''), 'id');
+  const assigneeType = ensureEnum(body?.assignee_type || 'unassigned', ASSIGNEE_TYPES, 'assignee_type');
   return {
     id,
     project_id: ensureId(body?.project_id, 'project_id'),
@@ -222,9 +224,11 @@ export function validateTaskCreate(body) {
     description: ensureLength(body?.description || '', 'description', 0, LIMITS.descriptionMax),
     status: ensureEnum(body?.status || 'backlog', TASK_STATUSES, 'status'),
     priority: ensureEnum(body?.priority || 'medium', PRIORITIES, 'priority'),
-    assignee_type: ensureEnum(body?.assignee_type || 'unassigned', ASSIGNEE_TYPES, 'assignee_type'),
+    assignee_type: assigneeType,
     assignee_id: body?.assignee_id ? ensureId(body.assignee_id, 'assignee_id') : null,
+    human_assignee_label: sanitizeHumanAssigneeLabel(body?.human_assignee_label),
     workflow_id: body?.workflow_id ? ensureId(body.workflow_id, 'workflow_id') : null,
+    subtasks: sanitizeSubtasks(body?.subtasks),
     due_at: normalizeIsoDateOrNull(body?.due_at, 'due_at'),
     linked_paths: [],
     linked_runs: [],
@@ -248,12 +252,45 @@ export function validateTaskCreate(body) {
       result_summary: null,
       failure_summary: null,
       artifact_paths: [],
+      execution_updates: [],
       attempts: [],
     },
     version: 1,
     created_at: now,
     updated_at: now,
   };
+}
+
+export function sanitizeHumanAssigneeLabel(value) {
+  const raw = value === null || value === undefined ? '' : String(value);
+  const normalized = raw.trim();
+  if (!normalized) return null;
+  return ensureLength(normalized, 'human_assignee_label', 1, LIMITS.humanAssigneeLabelMax);
+}
+
+export function sanitizeSubtasks(value) {
+  if (value === null || value === undefined) return [];
+  if (!Array.isArray(value)) throw boardError(422, 'validation_error', 'subtasks must be an array');
+  if (value.length > LIMITS.subtasksMax) throw boardError(422, 'validation_error', `subtasks max ${LIMITS.subtasksMax}`);
+  return value.map((item, index) => {
+    const id = String(item?.id || '').trim().toLowerCase();
+    if (!SUBTASK_ID_RE.test(id)) {
+      throw boardError(422, 'validation_error', 'subtasks.id must match ^[a-z0-9_-]{1,80}$');
+    }
+    const text = ensureLength(item?.text || '', 'subtasks.text', 1, LIMITS.subtaskTextMax);
+    const rawOrder = item?.order;
+    const fallbackOrder = index;
+    const orderNum = rawOrder === null || rawOrder === undefined || rawOrder === '' ? fallbackOrder : Number(rawOrder);
+    if (!Number.isInteger(orderNum) || orderNum < 0 || orderNum > 10_000) {
+      throw boardError(422, 'validation_error', 'subtasks.order must be an integer in range 0..10000');
+    }
+    return {
+      id,
+      text,
+      completed: Boolean(item?.completed),
+      order: orderNum,
+    };
+  });
 }
 
 export function normalizeDueAt(value) {

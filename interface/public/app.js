@@ -21,7 +21,7 @@ const state = {
     doc: null,           // active doc path
     content: '',
     savedContent: '',
-    mode: 'edit',        // edit | preview
+    mode: 'preview',     // edit | preview
     colWidths: null,     // persisted folder/docs column widths
     resizeObserver: null,
   },
@@ -40,6 +40,23 @@ const uiState = {
   providerSettings: { ...DEFAULT_PROVIDER_SETTINGS },
 };
 
+const viewRefreshSeq = {
+  knowledge: 0,
+  artifacts: 0,
+  flows: 0,
+  projects: 0,
+};
+
+function nextViewRefreshSeq(view) {
+  const next = (viewRefreshSeq[view] || 0) + 1;
+  viewRefreshSeq[view] = next;
+  return next;
+}
+
+function isCurrentViewRefreshSeq(view, seq) {
+  return viewRefreshSeq[view] === seq;
+}
+
 const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -50,8 +67,9 @@ const VIEW_TITLES = {
   projects: 'Projects',
   map: 'Agent Map',
   knowledge: 'Knowledge Docs',
-  workflows: 'Workflows',
-  scheduler: 'Scheduler',
+  flows: 'Automations',
+  workflows: 'Automations',
+  scheduler: 'Automations',
   skills: 'Skill Hub',
   departments: 'Departments',
   artifacts: 'Artifacts',
@@ -284,6 +302,9 @@ function openChat(agentId, draftMessage) {
 }
 
 function setView(view) {
+  // Workflows and the Scheduler are fused into one "Automations" view; keep the
+  // old view keys working for existing links (search, command center, etc.).
+  if (view === 'workflows' || view === 'scheduler') view = 'flows';
   state.view = view;
   state.selectedAgent = state.selectedFolder = null;
   if (mapState.observer && view !== 'map') { mapState.observer.disconnect(); mapState.observer = null; }
@@ -308,7 +329,7 @@ function setView(view) {
   el.className = 'view view-enter';
   el.innerHTML = '';
   ({ command: renderCommand, projects: renderProjects, map: renderMap, knowledge: renderKnowledge,
-     workflows: renderWorkflows, scheduler: renderScheduler, skills: renderSkills,
+     flows: renderFlows, skills: renderSkills,
       departments: renderDepartments,
        artifacts: renderArtifacts, settings: renderSettings }[view])(el);
 }
@@ -383,6 +404,20 @@ function renderCommand(el) {
         <div class="stat-value" id="cc-usage-cost">…</div>
         <div class="stat-note" id="cc-usage-note">Loading usage summary…</div>
       </div>
+      <div class="card stat-card stat-link" data-goto="flows" title="Open Automations">
+        <div class="mono-label">AUTOMATIONS</div>
+        <div class="stat-value" id="cc-auto-value">…</div>
+        <div class="stat-note" id="cc-auto-note">Loading scheduler…</div>
+      </div>
+    </div>
+
+    <div id="cc-activity" class="card cc-activity">
+      <div class="section-title" style="display:flex;align-items:center;gap:8px">
+        <span class="cc-live-dot" id="cc-live-dot"></span>
+        <span style="flex:1">Live Activity &amp; Run History</span>
+        <button class="chip" data-goto="flows">MANAGE</button>
+      </div>
+      <div id="cc-activity-body"><div class="stat-note">Loading run history…</div></div>
     </div>
 
     <div class="cc-cols">
@@ -442,6 +477,106 @@ function renderCommand(el) {
   $$('[data-art-open]', el).forEach((b) => b.addEventListener('click', () =>
     window.open('/api/artifact?path=' + encodeURIComponent(b.dataset.artOpen), '_blank')));
   refreshCommandUsageCard(el);
+  refreshCommandActivity(el);
+}
+
+// ---- Command Center: n8n-style live activity + run history ----------------
+
+let ccActivityTimer = null;
+
+function runStatusMeta(status) {
+  switch (status) {
+    case 'ok': return { cls: 'ok', label: 'Success' };
+    case 'running': return { cls: 'running', label: 'Running' };
+    case 'timeout': return { cls: 'warn', label: 'Timeout' };
+    case 'stopped': return { cls: 'warn', label: 'Stopped' };
+    case 'error': return { cls: 'error', label: 'Error' };
+    default: return { cls: 'idle', label: String(status || 'unknown').replace(/^\w/, (c) => c.toUpperCase()) };
+  }
+}
+
+function runRowHtml(r) {
+  const m = runStatusMeta(r.status);
+  const dur = r.endedAt ? Math.max(1, Math.round((r.endedAt - r.startedAt) / 1000)) + 's' : '…';
+  return `<div class="run-row">
+      <span class="run-dot run-${m.cls}"></span>
+      <span class="run-name">${esc(r.jobName || 'Job')}</span>
+      <span class="run-trigger">${esc(r.trigger || '—')}</span>
+      <span class="run-when">${r.startedAt ? timeAgo(r.startedAt) : '—'}</span>
+      <span class="run-dur">${dur}</span>
+      <span class="run-pill run-${m.cls}">${m.label}</span>
+      <button class="chip" data-log="${esc(r.id)}">LOG</button>
+    </div>`;
+}
+
+async function refreshCommandActivity(el) {
+  clearTimeout(ccActivityTimer);
+  const body = $('#cc-activity-body', el);
+  const dot = $('#cc-live-dot', el);
+  const valueEl = $('#cc-auto-value', el);
+  const noteEl = $('#cc-auto-note', el);
+  if (!body) return;
+
+  let data;
+  try {
+    data = await apiJson('/api/scheduler');
+  } catch {
+    if (state.view !== 'command') return;
+    body.innerHTML = '<div class="stat-note">Scheduler unavailable. Start the interface server to see run history.</div>';
+    if (valueEl) valueEl.textContent = '—';
+    if (noteEl) noteEl.textContent = 'Scheduler offline';
+    return;
+  }
+  if (state.view !== 'command') return;
+
+  const jobs = data.jobs || [];
+  const runs = data.runs || [];
+  const running = runs.filter((r) => r.status === 'running');
+  const anyRunning = jobs.some((j) => j.running) || running.length > 0;
+  const enabled = jobs.filter((j) => j.enabled).length;
+
+  if (valueEl) valueEl.textContent = String(jobs.length);
+  if (noteEl) noteEl.textContent = `${enabled} on · ${running.length} running`;
+  if (dot) dot.classList.toggle('live', anyRunning);
+
+  const history = runs.filter((r) => r.status !== 'running').slice(0, 12);
+
+  body.innerHTML = `
+    ${running.length ? `<div class="run-live-strip">
+      <span class="mono-label" style="color:var(--apricot-deep)">RUNNING NOW</span>
+      ${running.map(runRowHtml).join('')}
+    </div>` : ''}
+    ${history.length ? `<div class="run-list">${history.map(runRowHtml).join('')}</div>`
+      : (running.length ? '' : '<div class="stat-note">No runs yet. Scheduled and manual job runs appear here.</div>')}
+  `;
+
+  $$('[data-log]', body).forEach((b) => b.addEventListener('click', () => openRunLog(b.dataset.log, runs)));
+
+  if (anyRunning && state.view === 'command') {
+    ccActivityTimer = setTimeout(() => refreshCommandActivity(el), 5000);
+  }
+}
+
+async function openRunLog(runId, runs) {
+  const run = (runs || []).find((r) => r.id === runId);
+  const res = await fetch(`/api/scheduler/runs/${runId}/log`);
+  let text = res.ok ? await res.text() : '';
+  if (!text.trim()) {
+    text = run
+      ? [`status: ${run.status}`, run.exitCode != null ? `exit code: ${run.exitCode}` : null, '', run.summary || (run.status === 'running' ? 'Run is still in progress — reopen this log when it finishes.' : '(no output captured)')].filter((l) => l !== null).join('\n')
+      : 'Log not found.';
+  }
+  const m = run ? runStatusMeta(run.status) : { label: '' };
+  openDrawer(`
+    <div class="drawer-head">
+      <button class="drawer-close">✕</button>
+      <div class="drawer-dept">RUN LOG</div>
+      <div class="drawer-name">${esc(run ? run.jobName : runId)}</div>
+      <div class="drawer-role">${run ? fmtWhen(run.startedAt) + ' · ' + m.label + (run.endedAt ? ' · ' + Math.max(1, Math.round((run.endedAt - run.startedAt) / 1000)) + 's' : '') : ''}</div>
+    </div>
+    <div class="drawer-body">
+      <pre class="run-log">${esc(text)}</pre>
+    </div>`);
 }
 
 async function refreshCommandUsageCard(el) {
@@ -1257,6 +1392,27 @@ function renderKnowledge(el) {
   paintKnFolders();
   paintKnDocs();
   paintKnEditor();
+  refreshKnowledgeView();
+}
+
+async function refreshKnowledgeView() {
+  const seq = nextViewRefreshSeq('knowledge');
+  try {
+    const sys = await apiJson('/api/system');
+    if (!isCurrentViewRefreshSeq('knowledge', seq)) return;
+    state.system = sys;
+    if (state.view !== 'knowledge') return;
+    if (state.kn.folder && !knFolderList().some((f) => f.key === state.kn.folder)) {
+      const first = knChildren('')[0];
+      state.kn.folder = first ? first.key : null;
+      state.kn.level = '';
+    }
+    paintKnFolders();
+    paintKnDocs();
+    paintKnEditor();
+  } catch {
+    if (!isCurrentViewRefreshSeq('knowledge', seq)) return;
+  }
 }
 
 // select a folder by key from anywhere (map drawer, agent drawer, editor):
@@ -1286,7 +1442,10 @@ function paintKnFolders() {
   const children = knChildren(level);
 
   el.innerHTML = `
-    <div class="section-title" style="padding:0 12px;display:flex;align-items:center;gap:8px"><span style="flex:1">Folders</span></div>
+    <div class="section-title" style="padding:0 12px;display:flex;align-items:center;gap:8px">
+      <span style="flex:1">Folders</span>
+      <button class="btn btn-ghost btn-small" data-kn-refresh>Refresh</button>
+    </div>
     ${showDocControls ? `<div class="kn-controls" style="padding:0 12px 10px">
       <span class="filter-tabs compact" title="Docs or artifacts view">
         <button class="filter-tab ${state.kn.docsMode === 'docs' ? 'active' : ''}" data-kn-mode="docs">Docs</button>
@@ -1329,6 +1488,7 @@ function paintKnFolders() {
     state.kn.doc = null;
     paintKnFolders(); paintKnDocs(); paintKnEditor();
   }));
+  $('[data-kn-refresh]', el)?.addEventListener('click', refreshKnowledgeView);
   $$('[data-kn-filter]', el).forEach((b) => b.addEventListener('click', () => {
     state.kn.filter = b.dataset.knFilter;
     if (state.kn.doc && state.kn.filter === 'review-needed' && !isReviewStatus(docMeta(state.kn.doc).status)) {
@@ -1405,7 +1565,7 @@ async function loadDoc(path, mode) {
   const res = await (await fetch('/api/file?path=' + encodeURIComponent(path))).json();
   state.kn.doc = path;
   state.kn.content = state.kn.savedContent = res.content;
-  if (mode) state.kn.mode = mode;
+  state.kn.mode = mode || 'preview';
   paintKnDocs();
   paintKnEditor();
 }
@@ -1598,71 +1758,83 @@ function openNewDocDrawer(defaultFolder) {
   });
 }
 
-// ---------------------------------------------------------------- Workflows
+// ------------------------------------------------------- Automations (fused)
+// Workflows (agent chains) and the Scheduler (cron jobs) share one view. The
+// left rail groups everything by department (like the Departments view); the
+// right column shows that group's workflows and scheduled jobs. Run history
+// lives in the Command Center.
 
-function renderWorkflows(el) {
-  const deletedBuiltins = WORKFLOWS.filter((w) => flowsCfg.deleted.includes(w.id));
-  el.innerHTML = `<div class="view-pad">
-    <div class="card" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px">
-      <div style="flex:1;min-width:220px">
-        <div class="section-title" style="margin:0 0 4px">Agent Workflows</div>
-        <div class="stat-note" style="white-space:normal">Edit the steps of any workflow, create new ones or delete them. Changes apply to the scheduler's workflow selection and Danny's routing view.</div>
+const flowsState = { group: 'all', data: null, el: null, timer: null };
+
+// Home department for grouping. Built-ins use an explicit map; custom workflows
+// fall back to the most-represented department in their agent chain.
+const WF_DEPT = {
+  strategy_review: 'strategy', proposal: 'sales', marketing_content: 'marketing',
+  calendar_planning: 'marketing', document: 'documents', creative_image: 'creative',
+  knowledge_retrieval: 'knowledge', knowledge_intake: 'knowledge', setup_profile: 'knowledge',
+  security_audit: 'it', dev_spec: 'it', multi_department: 'core',
+};
+function workflowDept(w) {
+  if (WF_DEPT[w.id]) return WF_DEPT[w.id];
+  const counts = {};
+  for (const step of w.chain) {
+    const a = agentById(step);
+    if (a && a.dept !== 'core') counts[a.dept] = (counts[a.dept] || 0) + 1;
+  }
+  let best = 'core';
+  let n = 0;
+  for (const d of DEPARTMENTS.map((x) => x.id)) if ((counts[d] || 0) > n) { best = d; n = counts[d]; }
+  return best;
+}
+function jobDept(j) {
+  if (j.workflow) { const w = FLOWS.find((x) => x.id === j.workflow); if (w) return workflowDept(w); }
+  if (j.agent) { const a = agentById(String(j.agent).split('-')[0]); if (a) return a.dept; }
+  return 'core';
+}
+
+function workflowCardHtml(w) {
+  return `<div class="card wf-card">
+      <div class="wf-head">
+        <div class="wf-name">${esc(w.name)}</div>
+        <span class="badge badge-dark">${esc(w.id.toUpperCase())}</span>
+        ${w.builtin ? '' : '<span class="badge badge-gray">CUSTOM</span>'}
+        ${w.overridden ? '<span class="badge badge-apricot">EDITED</span>' : ''}
+        <span style="margin-left:auto;display:flex;gap:6px">
+          <button class="chip" data-wf-edit="${esc(w.id)}">EDIT</button>
+          ${w.overridden ? `<button class="chip" data-wf-reset="${esc(w.id)}">RESET</button>` : ''}
+          <button class="chip" data-wf-del="${esc(w.id)}" style="color:var(--apricot-deep)">DELETE</button>
+        </span>
       </div>
-      <button class="btn btn-primary btn-small" data-wf-new>New Workflow</button>
-    </div>
-    ${FLOWS.map((w) => `
-      <div class="card wf-card">
-        <div class="wf-head">
-          <div class="wf-name">${esc(w.name)}</div>
-          <span class="badge badge-dark">${esc(w.id.toUpperCase())}</span>
-          ${w.builtin ? '' : '<span class="badge badge-gray">CUSTOM</span>'}
-          ${w.overridden ? '<span class="badge badge-apricot">EDITED</span>' : ''}
-          <span style="margin-left:auto;display:flex;gap:6px">
-            <button class="chip" data-wf-edit="${esc(w.id)}">EDIT</button>
-            ${w.overridden ? `<button class="chip" data-wf-reset="${esc(w.id)}">RESET</button>` : ''}
-            <button class="chip" data-wf-del="${esc(w.id)}" style="color:var(--apricot-deep)">DELETE</button>
-          </span>
-        </div>
-        <div class="wf-desc">${esc(w.desc)}</div>
-        <div class="wf-chain">
-          ${w.chain.map((stepId, i) => {
-            const a = agentById(stepId);
-            const arrow = i < w.chain.length - 1 ? '<span class="wf-arrow">→</span>' : '';
-            if (a) {
-              return `<button class="wf-step ${stepId === 'danny' ? 'dark' : ''}" data-agent="${a.id}">
-                <span class="wf-step-name">${esc(a.name)}</span>
-                <span class="wf-step-role">${esc(a.title)}</span>
-              </button>${arrow}`;
-            }
-            const t = TERMINALS[stepId] || { name: stepId, role: 'step' };
-            return `<span class="wf-step terminal">
-              <span class="wf-step-name">${esc(t.name)}</span>
-              <span class="wf-step-role">${esc(t.role)}</span>
-            </span>${arrow}`;
-          }).join('')}
-        </div>
-      </div>`).join('')}
-    ${deletedBuiltins.length ? `
-    <div class="card">
-      <div class="section-title">Deleted Built-in Workflows</div>
-      ${deletedBuiltins.map((w) => `
-        <div class="list-row" style="cursor:default">
-          <span class="badge badge-gray">DELETED</span>
-          <span class="list-title">${esc(w.name)}</span>
-          <button class="chip" data-wf-restore="${esc(w.id)}">RESTORE</button>
-        </div>`).join('')}
-    </div>` : ''}
-  </div>`;
+      <div class="wf-desc">${esc(w.desc)}</div>
+      <div class="wf-chain">
+        ${w.chain.map((stepId, i) => {
+          const a = agentById(stepId);
+          const arrow = i < w.chain.length - 1 ? '<span class="wf-arrow">→</span>' : '';
+          if (a) {
+            return `<button class="wf-step ${stepId === 'danny' ? 'dark' : ''}" data-agent="${a.id}">
+              <span class="wf-step-name">${esc(a.name)}</span>
+              <span class="wf-step-role">${esc(a.title)}</span>
+            </button>${arrow}`;
+          }
+          const t = TERMINALS[stepId] || { name: stepId, role: 'step' };
+          return `<span class="wf-step terminal">
+            <span class="wf-step-name">${esc(t.name)}</span>
+            <span class="wf-step-role">${esc(t.role)}</span>
+          </span>${arrow}`;
+        }).join('')}
+      </div>
+    </div>`;
+}
 
-  $$('[data-agent]', el).forEach((b) => b.addEventListener('click', () => { setView('map'); selectMapAgent(b.dataset.agent); }));
-  $('[data-wf-new]', el).addEventListener('click', () => openWorkflowDrawer(null));
-  $$('[data-wf-edit]', el).forEach((b) => b.addEventListener('click', () => openWorkflowDrawer(FLOWS.find((w) => w.id === b.dataset.wfEdit))));
-  $$('[data-wf-reset]', el).forEach((b) => b.addEventListener('click', async () => {
+function bindWorkflowCardHandlers(scope) {
+  $$('[data-agent]', scope).forEach((b) => b.addEventListener('click', () => { setView('map'); selectMapAgent(b.dataset.agent); }));
+  $$('[data-wf-edit]', scope).forEach((b) => b.addEventListener('click', () => openWorkflowDrawer(FLOWS.find((w) => w.id === b.dataset.wfEdit))));
+  $$('[data-wf-reset]', scope).forEach((b) => b.addEventListener('click', async () => {
     delete flowsCfg.overrides[b.dataset.wfReset];
-    try { await saveFlowsCfg(); toast('WORKFLOW RESET TO DEFAULT'); renderWorkflows(el); }
+    try { await saveFlowsCfg(); toast('WORKFLOW RESET TO DEFAULT'); paintFlows(); }
     catch (e) { toast(e.message.toUpperCase(), true); }
   }));
-  $$('[data-wf-del]', el).forEach((b) => b.addEventListener('click', async () => {
+  $$('[data-wf-del]', scope).forEach((b) => b.addEventListener('click', async () => {
     const w = FLOWS.find((x) => x.id === b.dataset.wfDel);
     if (!confirm(`Delete workflow "${w.name}"?${w.builtin ? '\n\nBuilt-in workflows can be restored later.' : ''}`)) return;
     if (w.builtin) {
@@ -1671,14 +1843,147 @@ function renderWorkflows(el) {
     } else {
       flowsCfg.custom = flowsCfg.custom.filter((x) => x.id !== w.id);
     }
-    try { await saveFlowsCfg(); toast('WORKFLOW DELETED'); renderWorkflows(el); }
+    try { await saveFlowsCfg(); toast('WORKFLOW DELETED'); paintFlows(); }
     catch (e) { toast(e.message.toUpperCase(), true); }
   }));
-  $$('[data-wf-restore]', el).forEach((b) => b.addEventListener('click', async () => {
+  $$('[data-wf-restore]', scope).forEach((b) => b.addEventListener('click', async () => {
     flowsCfg.deleted = flowsCfg.deleted.filter((id) => id !== b.dataset.wfRestore);
-    try { await saveFlowsCfg(); toast('WORKFLOW RESTORED'); renderWorkflows(el); }
+    try { await saveFlowsCfg(); toast('WORKFLOW RESTORED'); paintFlows(); }
     catch (e) { toast(e.message.toUpperCase(), true); }
   }));
+}
+
+function jobRowHtml(j) {
+  return `<div class="list-row" style="cursor:default">
+      <span class="badge ${j.enabled ? 'badge-green' : 'badge-gray'}">${j.enabled ? 'ON' : j.scheduleType === 'once' && j.lastRun ? 'DONE' : 'OFF'}</span>
+      <span class="list-title">${esc(j.name)}${j.running ? ' <span class="badge badge-apricot">RUNNING</span>' : ''}</span>
+      <span class="list-meta mono-label">${j.scheduleType === 'once' ? 'once · ' + fmtWhen(j.runAt) : esc(j.schedule)}</span>
+      <span class="list-meta">${esc(j.workflow || '')}${j.workflow ? ' · ' : ''}${esc(j.agent || 'danny (main)')}</span>
+      <span class="list-meta">next: ${j.nextRun ? fmtWhen(j.nextRun) : j.enabled ? '—' : 'paused'}</span>
+      <span class="list-meta">${j.lastRun ? 'last: ' + esc(j.lastRun.status) : 'never ran'}</span>
+      <span style="display:flex;gap:6px">
+        <button class="chip" data-run="${j.id}">RUN NOW</button>
+        <button class="chip" data-edit="${j.id}">EDIT</button>
+        <button class="chip" data-toggle="${j.id}">${j.enabled ? 'PAUSE' : 'ENABLE'}</button>
+        <button class="chip" data-del="${j.id}" style="color:var(--apricot-deep)">DELETE</button>
+      </span>
+    </div>`;
+}
+
+function bindJobHandlers(scope, jobs) {
+  $$('[data-edit]', scope).forEach((b) => b.addEventListener('click', () => openJobDrawer(jobs.find((j) => j.id === b.dataset.edit))));
+  $$('[data-run]', scope).forEach((b) => b.addEventListener('click', async () => {
+    try { await apiJson(`/api/scheduler/jobs/${b.dataset.run}/run`, { method: 'POST' }); toast('JOB STARTED'); setTimeout(refreshFlows, 800); }
+    catch (e) { toast(e.message.toUpperCase(), true); }
+  }));
+  $$('[data-toggle]', scope).forEach((b) => b.addEventListener('click', async () => {
+    const j = jobs.find((x) => x.id === b.dataset.toggle);
+    try { await apiJson(`/api/scheduler/jobs/${j.id}`, { method: 'PUT', body: JSON.stringify({ enabled: !j.enabled }) }); refreshFlows(); }
+    catch (e) { toast(e.message.toUpperCase(), true); }
+  }));
+  $$('[data-del]', scope).forEach((b) => b.addEventListener('click', async () => {
+    const j = jobs.find((x) => x.id === b.dataset.del);
+    if (!confirm(`Delete job "${j.name}"?`)) return;
+    try { await apiJson(`/api/scheduler/jobs/${j.id}`, { method: 'DELETE' }); toast('JOB DELETED'); refreshFlows(); }
+    catch (e) { toast(e.message.toUpperCase(), true); }
+  }));
+}
+
+function renderFlows(el) {
+  flowsState.el = el;
+  el.innerHTML = '<div class="view-pad"><div class="card">Loading automations…</div></div>';
+  refreshFlows();
+}
+
+async function refreshFlows() {
+  const seq = nextViewRefreshSeq('flows');
+  try {
+    const data = await apiJson('/api/scheduler');
+    if (!isCurrentViewRefreshSeq('flows', seq)) return;
+    flowsState.data = data;
+  } catch (e) {
+    if (!isCurrentViewRefreshSeq('flows', seq)) return;
+    flowsState.data = { jobs: [], runs: [], error: e.message };
+  }
+  if (!isCurrentViewRefreshSeq('flows', seq)) return;
+  paintFlows();
+}
+
+function paintFlows() {
+  const el = flowsState.el;
+  if (!el || state.view !== 'flows') return;
+  const jobs = (flowsState.data && flowsState.data.jobs) || [];
+  const schedErr = flowsState.data && flowsState.data.error;
+  const deletedBuiltins = WORKFLOWS.filter((w) => flowsCfg.deleted.includes(w.id));
+
+  const groups = DEPARTMENTS.map((d) => ({
+    id: d.id, name: d.name, note: d.note,
+    flows: FLOWS.filter((w) => workflowDept(w) === d.id),
+    jobs: jobs.filter((j) => jobDept(j) === d.id),
+  })).filter((g) => g.flows.length || g.jobs.length);
+
+  const active = flowsState.group;
+  const grp = groups.find((g) => g.id === active);
+  const shownFlows = active === 'all' ? FLOWS : (grp ? grp.flows : []);
+  const shownJobs = active === 'all' ? jobs : (grp ? grp.jobs : []);
+  const activeName = active === 'all' ? 'All Automations' : (deptById(active)?.name || 'Automations');
+
+  el.innerHTML = `<div class="flows-layout">
+    <aside class="flows-rail">
+      <button class="flows-group ${active === 'all' ? 'active' : ''}" data-group="all">
+        <span class="fg-name">All Automations</span>
+        <span class="fg-count">${FLOWS.length} flows · ${jobs.length} jobs</span>
+      </button>
+      ${groups.map((g) => `
+        <button class="flows-group ${active === g.id ? 'active' : ''}" data-group="${g.id}">
+          <span class="fg-name">${esc(g.name)}</span>
+          <span class="fg-sub">${esc(g.note)}</span>
+          <span class="fg-count">${g.flows.length} flow${g.flows.length === 1 ? '' : 's'} · ${g.jobs.length} job${g.jobs.length === 1 ? '' : 's'}</span>
+        </button>`).join('')}
+    </aside>
+
+    <div class="flows-main">
+      <div class="card flows-head">
+        <div style="flex:1;min-width:200px">
+          <div class="section-title" style="margin:0 0 2px">${esc(activeName)}</div>
+          <div class="stat-note" style="white-space:normal">${shownFlows.length} workflow${shownFlows.length === 1 ? '' : 's'} · ${shownJobs.length} scheduled job${shownJobs.length === 1 ? '' : 's'}. Jobs run <code>claude -p</code> headless while the server is up.</div>
+        </div>
+        <button class="btn btn-primary btn-small" data-act="new-wf">New Workflow</button>
+        <button class="btn btn-small" data-act="new-job">New Job</button>
+        <button class="btn btn-ghost btn-small" data-act="refresh">Refresh</button>
+      </div>
+
+      <div class="flows-section-label">Workflows</div>
+      ${shownFlows.length ? shownFlows.map(workflowCardHtml).join('') : '<div class="card stat-note">No workflows in this group.</div>'}
+
+      <div class="flows-section-label">Scheduled Jobs${schedErr ? ' · <span style="color:var(--apricot-deep)">scheduler offline</span>' : ''}</div>
+      <div class="card">
+        ${shownJobs.length ? shownJobs.map(jobRowHtml).join('') : '<div class="stat-note" style="white-space:normal">No scheduled jobs in this group. Create one, for example a Monday-morning LinkedIn draft by Clara, or a weekly knowledge-inbox review by Mara.</div>'}
+        <div class="stat-note" style="margin-top:10px;white-space:normal">Cron format: <code>min hour day month weekday</code> — e.g. <code>0 7 * * 1-5</code> = weekdays 07:00. Run history is in the Command Center.</div>
+      </div>
+
+      ${deletedBuiltins.length && active === 'all' ? `<div class="flows-section-label">Deleted Built-in Workflows</div>
+      <div class="card">
+        ${deletedBuiltins.map((w) => `<div class="list-row" style="cursor:default">
+          <span class="badge badge-gray">DELETED</span>
+          <span class="list-title">${esc(w.name)}</span>
+          <button class="chip" data-wf-restore="${esc(w.id)}">RESTORE</button>
+        </div>`).join('')}
+      </div>` : ''}
+    </div>
+  </div>`;
+
+  $$('[data-group]', el).forEach((b) => b.addEventListener('click', () => { flowsState.group = b.dataset.group; paintFlows(); }));
+  $('[data-act="new-wf"]', el)?.addEventListener('click', () => openWorkflowDrawer(null));
+  $('[data-act="new-job"]', el)?.addEventListener('click', () => openJobDrawer(null));
+  $('[data-act="refresh"]', el)?.addEventListener('click', refreshFlows);
+  bindWorkflowCardHandlers(el);
+  bindJobHandlers(el, jobs);
+
+  clearTimeout(flowsState.timer);
+  if (jobs.some((j) => j.running)) {
+    flowsState.timer = setTimeout(() => { if (state.view === 'flows') refreshFlows(); }, 5000);
+  }
 }
 
 // Workflow editor drawer: name, description, and a step-by-step chain editor
@@ -1759,7 +2064,7 @@ function openWorkflowDrawer(flow) {
       await saveFlowsCfg();
       closeDrawer();
       toast(isNew ? 'WORKFLOW CREATED' : 'WORKFLOW SAVED');
-      if (state.view === 'workflows') renderWorkflows($('#view'));
+      if (state.view === 'flows') paintFlows();
     } catch (e) { toast(e.message.toUpperCase(), true); }
   });
 }
@@ -1793,9 +2098,8 @@ function renderDepartments(el) {
   $$('[data-agent]', el).forEach((b) => b.addEventListener('click', () => openAgentDrawer(b.dataset.agent)));
 }
 
-// ---------------------------------------------------------------- Scheduler
-
-const schedState = { data: null, el: null, timer: null };
+// ------------------------------------------------ Scheduler helpers + job drawer
+// Shared by the Automations view and the Command Center run history.
 
 const AGENT_OPTIONS = AGENTS
   .filter((a) => a.promptPath.startsWith('.claude/agents/'))
@@ -1829,144 +2133,6 @@ function fmtWhen(ts) {
   return ts ? new Date(ts).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' }) : '—';
 }
 
-function renderScheduler(el) {
-  schedState.el = el;
-  el.innerHTML = '<div class="view-pad"><div class="card">Loading scheduler…</div></div>';
-  refreshScheduler();
-}
-
-async function refreshScheduler() {
-  try {
-    schedState.data = await apiJson('/api/scheduler');
-  } catch (e) {
-    schedState.el.innerHTML = `<div class="view-pad"><div class="card">Scheduler unavailable: ${esc(e.message)}</div></div>`;
-    return;
-  }
-  paintScheduler();
-}
-
-function paintScheduler() {
-  const el = schedState.el;
-  if (!el || state.view !== 'scheduler') return;
-  const { jobs, runs } = schedState.data;
-
-  el.innerHTML = `
-  <div class="view-pad simple-list" style="max-width:980px">
-    <div class="card">
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">
-        <div class="section-title" style="flex:1;margin:0">Scheduled Jobs (cron → headless Claude runs)</div>
-        <button class="btn btn-primary btn-small" data-act="new-job">New Job</button>
-        <button class="btn btn-ghost btn-small" data-act="refresh">Refresh</button>
-      </div>
-      ${jobs.length ? jobs.map((j) => `
-        <div class="list-row" style="cursor:default">
-          <span class="badge ${j.enabled ? 'badge-green' : 'badge-gray'}">${j.enabled ? 'ON' : j.scheduleType === 'once' && j.lastRun ? 'DONE' : 'OFF'}</span>
-          <span class="list-title">${esc(j.name)}${j.running ? ' <span class="badge badge-apricot">RUNNING</span>' : ''}</span>
-          <span class="list-meta mono-label">${j.scheduleType === 'once' ? 'once · ' + fmtWhen(j.runAt) : esc(j.schedule)}</span>
-          <span class="list-meta">${esc(j.workflow || '')}${j.workflow ? ' · ' : ''}${esc(j.agent || 'danny (main)')}</span>
-          <span class="list-meta">next: ${j.nextRun ? fmtWhen(j.nextRun) : j.enabled ? '—' : 'paused'}</span>
-          <span class="list-meta">${j.lastRun ? 'last: ' + esc(j.lastRun.status) : 'never ran'}</span>
-          <span style="display:flex;gap:6px">
-            <button class="chip" data-run="${j.id}">RUN NOW</button>
-            <button class="chip" data-edit="${j.id}">EDIT</button>
-            <button class="chip" data-toggle="${j.id}">${j.enabled ? 'PAUSE' : 'ENABLE'}</button>
-            <button class="chip" data-del="${j.id}" style="color:var(--apricot-deep)">DELETE</button>
-          </span>
-        </div>`).join('') : '<div class="stat-note">No jobs yet. Create one — e.g. a Monday-morning LinkedIn draft by Clara, or a weekly knowledge-inbox review by Mara.</div>'}
-      <div class="stat-note" style="margin-top:10px">
-        Jobs run <code>claude -p</code> headless in this project (CLAUDE.md + subagents loaded), while this server is running.
-        Cron format: <code>min hour day month weekday</code> — e.g. <code>0 7 * * 1-5</code> = weekdays 07:00.
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="section-title">Run History</div>
-      ${runs.length ? runs.map((r) => `
-        <div class="list-row" style="cursor:default;align-items:flex-start">
-          ${runBadge(r.status)}
-          <span style="flex:1;min-width:0">
-            <span class="list-title" style="display:block">${esc(r.jobName)}</span>
-            ${r.summary ? `<span class="stat-note" style="display:block;white-space:normal">${esc(r.summary.slice(0, 180))}</span>` : ''}
-          </span>
-          <span class="list-meta">${esc(r.trigger)} · ${fmtWhen(r.startedAt)}</span>
-          <span class="list-meta">${r.endedAt ? Math.max(1, Math.round((r.endedAt - r.startedAt) / 1000)) + 's' : '…'}</span>
-          <span style="display:flex;gap:6px">
-            <button class="chip" data-log="${r.id}">LOG</button>
-            <button class="chip" data-run-del="${r.id}" style="color:var(--apricot-deep)">DELETE</button>
-          </span>
-        </div>`).join('') : '<div class="stat-note">No runs yet.</div>'}
-      <div class="stat-note" style="margin-top:10px;white-space:normal">
-        History is persisted in <code>scheduler/runs.json</code> and per-run logs in <code>scheduler/logs/</code>.
-        Cron windows missed while the app is off are skipped. One-time jobs past due run after restart.
-      </div>
-    </div>
-  </div>`;
-
-  $('[data-act="new-job"]', el).addEventListener('click', () => openJobDrawer(null));
-  $('[data-act="refresh"]', el).addEventListener('click', refreshScheduler);
-  $$('[data-edit]', el).forEach((b) => b.addEventListener('click', () => openJobDrawer(jobs.find((j) => j.id === b.dataset.edit))));
-  $$('[data-run]', el).forEach((b) => b.addEventListener('click', async () => {
-    try { await apiJson(`/api/scheduler/jobs/${b.dataset.run}/run`, { method: 'POST' }); toast('JOB STARTED'); setTimeout(refreshScheduler, 800); }
-    catch (e) { toast(e.message.toUpperCase(), true); }
-  }));
-  $$('[data-toggle]', el).forEach((b) => b.addEventListener('click', async () => {
-    const j = jobs.find((x) => x.id === b.dataset.toggle);
-    try { await apiJson(`/api/scheduler/jobs/${j.id}`, { method: 'PUT', body: JSON.stringify({ enabled: !j.enabled }) }); refreshScheduler(); }
-    catch (e) { toast(e.message.toUpperCase(), true); }
-  }));
-  $$('[data-del]', el).forEach((b) => b.addEventListener('click', async () => {
-    const j = jobs.find((x) => x.id === b.dataset.del);
-    if (!confirm(`Delete job "${j.name}"?`)) return;
-    try { await apiJson(`/api/scheduler/jobs/${j.id}`, { method: 'DELETE' }); toast('JOB DELETED'); refreshScheduler(); }
-    catch (e) { toast(e.message.toUpperCase(), true); }
-  }));
-  $$('[data-log]', el).forEach((b) => b.addEventListener('click', async () => {
-    const res = await fetch(`/api/scheduler/runs/${b.dataset.log}/log`);
-    const run = runs.find((r) => r.id === b.dataset.log);
-    let text = res.ok ? await res.text() : '';
-    // spawn failures and very short runs leave an empty log file — the run
-    // summary (exit reason / error message) is then the real information
-    if (!text.trim()) {
-      text = run
-        ? [`status: ${run.status}`, run.exitCode !== null ? `exit code: ${run.exitCode}` : null, '', run.summary || (run.status === 'running' ? 'Run is still in progress — reopen this log when it finishes.' : '(no output captured)')].filter((l) => l !== null).join('\n')
-        : 'Log not found.';
-    }
-    openDrawer(`
-      <div class="drawer-head">
-        <button class="drawer-close">✕</button>
-        <div class="drawer-dept">RUN LOG</div>
-        <div class="drawer-name">${esc(run ? run.jobName : b.dataset.log)}</div>
-        <div class="drawer-role">${run ? fmtWhen(run.startedAt) + ' · ' + esc(run.status) + (run.endedAt ? ' · ' + Math.max(1, Math.round((run.endedAt - run.startedAt) / 1000)) + 's' : '') : ''}</div>
-      </div>
-      <div class="drawer-body">
-        <pre class="run-log">${esc(text)}</pre>
-      </div>`);
-  }));
-  $$('[data-run-del]', el).forEach((b) => b.addEventListener('click', async () => {
-    const run = runs.find((x) => x.id === b.dataset.runDel);
-    if (!run) return;
-    if (!confirm(`Delete run history entry "${run.jobName}"?`)) return;
-    try {
-      const res = await fetch(`/api/scheduler/runs/${run.id}`, { method: 'DELETE' });
-      const data = await res.json().catch(() => ({}));
-      if (res.status === 409) {
-        toast('RUN IS STILL ACTIVE — WAIT FOR IT TO FINISH BEFORE DELETING HISTORY', true);
-        return;
-      }
-      if (!res.ok) throw new Error((data.errors && data.errors.join('; ')) || data.error || `HTTP ${res.status}`);
-      toast('RUN HISTORY ENTRY DELETED');
-      refreshScheduler();
-    } catch (e) {
-      toast(e.message.toUpperCase(), true);
-    }
-  }));
-
-  // live view: refresh automatically while something is running
-  clearTimeout(schedState.timer);
-  if (jobs.some((j) => j.running) || runs.some((r) => r.status === 'running')) {
-    schedState.timer = setTimeout(() => { if (state.view === 'scheduler') refreshScheduler(); }, 5000);
-  }
-}
 
 const CRON_PRESETS = [
   { label: 'Weekdays 07:00', value: '0 7 * * 1-5' },
@@ -2165,7 +2331,7 @@ function openJobDrawer(job) {
       else await apiJson('/api/scheduler/jobs', { method: 'POST', body });
       closeDrawer();
       toast(job ? 'JOB UPDATED' : 'JOB CREATED');
-      refreshScheduler();
+      refreshFlows();
     } catch (e) { toast(e.message.toUpperCase(), true); }
   });
 }
@@ -2765,9 +2931,146 @@ async function openFileEditorDrawer(path, { title = 'Edit File', hint = '', temp
   });
 }
 
+async function openKnowledgeSpaceBrowser({ settingsEl, inputId, label }) {
+  const input = $('#' + inputId, settingsEl);
+  if (!input) return;
+
+  let roots = [];
+  let currentPath = String(input.value || '').trim();
+  let rootPath = '';
+  let parentPath = null;
+  let directories = [];
+  let loading = false;
+  let error = '';
+  let seq = 0;
+
+  const setUnsaved = () => {
+    const status = $('#ks-save-status', settingsEl);
+    if (status) status.textContent = 'Unsaved changes.';
+  };
+
+  const fetchRoots = async () => {
+    try {
+      const result = await apiJson('/api/folder-browser?mode=roots');
+      roots = Array.isArray(result?.roots) ? result.roots : [];
+    } catch {
+      roots = [];
+    }
+  };
+
+  const loadPath = async (nextPath, nextRootPath = null) => {
+    const pathValue = String(nextPath || '').trim();
+    if (!pathValue) {
+      error = 'Select a root first.';
+      render();
+      return;
+    }
+    if (nextRootPath !== null) rootPath = String(nextRootPath || '').trim();
+    const reqId = ++seq;
+    loading = true;
+    error = '';
+    render();
+    try {
+      let requestUrl = '/api/folder-browser?path=' + encodeURIComponent(pathValue) + '&includeRoots=1';
+      if (rootPath) requestUrl += '&root=' + encodeURIComponent(rootPath);
+      const data = await apiJson(requestUrl);
+      if (reqId !== seq) return;
+      currentPath = String(data.currentPath || pathValue);
+      parentPath = data.parentPath || null;
+      rootPath = String(data.rootPath || rootPath || '').trim();
+      directories = Array.isArray(data.directories) ? data.directories : [];
+      if (Array.isArray(data.roots)) roots = data.roots;
+      error = '';
+    } catch (e) {
+      if (reqId !== seq) return;
+      error = e?.message || 'Failed to load folder';
+      directories = [];
+    } finally {
+      if (reqId !== seq) return;
+      loading = false;
+      render();
+    }
+  };
+
+  const render = () => {
+    openDrawer(`
+      <div class="drawer-head">
+        <button class="drawer-close">✕</button>
+        <div class="drawer-dept">SETTINGS · KNOWLEDGE SPACES</div>
+        <div class="drawer-name">${esc(label || 'Select folder')}</div>
+        <div class="drawer-role">Choose a folder and apply it to this setting.</div>
+      </div>
+      <div class="drawer-body">
+        <div class="drawer-section">
+          <div class="section-title">Current folder</div>
+          <div class="path-line">${esc(currentPath || '(not selected)')}</div>
+          ${rootPath ? `<div class="list-meta" style="margin-top:4px">Browse root: <code>${esc(rootPath)}</code></div>` : ''}
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+            <button class="chip" type="button" data-ks-browse-refresh ${loading ? 'disabled' : ''}>Refresh</button>
+            <button class="chip" type="button" data-ks-browse-up ${(!parentPath || loading) ? 'disabled' : ''}>Up</button>
+            <button class="btn btn-primary btn-small" type="button" data-ks-browse-use ${(!currentPath || loading) ? 'disabled' : ''}>Use this folder</button>
+          </div>
+        </div>
+        <div class="drawer-section">
+          <div class="section-title">Quick roots</div>
+          <div class="tag-row">
+            ${roots.map((r) => `<button class="chip" type="button" data-ks-root="${esc(r.path)}" title="${esc(r.path)}">${esc(r.label || r.id || r.path)}</button>`).join('') || '<span class="stat-note">No roots available.</span>'}
+          </div>
+        </div>
+        <div class="drawer-section">
+          <div class="section-title">Directories</div>
+          ${loading ? '<div class="stat-note">Loading…</div>' : ''}
+          ${error ? `<div class="stat-note" style="color:var(--apricot-deep)">${esc(error)}</div>` : ''}
+          ${!loading && !error && !directories.length ? '<div class="stat-note">No child directories.</div>' : ''}
+          ${!loading && !error ? `<div class="simple-list">${directories.map((d) => `
+            <button class="list-row" type="button" data-ks-dir="${esc(d.path)}" ${d.traversable === false ? 'disabled' : ''}>
+              <span class="badge ${d.traversable === false ? 'badge-gray' : 'badge-green'}">${d.traversable === false ? 'LOCKED' : 'DIR'}</span>
+              <span>
+                <span class="list-title">${esc(d.name)}</span>
+                <span class="list-meta">${d.isSymlink ? 'symlink' : 'directory'}</span>
+              </span>
+            </button>`).join('')}</div>` : ''}
+        </div>
+      </div>`);
+
+    const drawer = $('#drawer');
+    $('[data-ks-browse-refresh]', drawer)?.addEventListener('click', () => {
+      if (!currentPath) return;
+      loadPath(currentPath);
+    });
+    $('[data-ks-browse-up]', drawer)?.addEventListener('click', () => {
+      if (!parentPath) return;
+      loadPath(parentPath);
+    });
+    $('[data-ks-browse-use]', drawer)?.addEventListener('click', () => {
+      if (!currentPath) return;
+      input.value = currentPath;
+      setUnsaved();
+      closeDrawer();
+      toast('PATH UPDATED');
+    });
+    $$('[data-ks-root]', drawer).forEach((btn) => btn.addEventListener('click', () => {
+      const selectedRoot = String(btn.dataset.ksRoot || '').trim();
+      if (!selectedRoot) return;
+      loadPath(selectedRoot, selectedRoot);
+    }));
+    $$('[data-ks-dir]', drawer).forEach((btn) => btn.addEventListener('click', () => {
+      loadPath(btn.dataset.ksDir || '');
+    }));
+  };
+
+  await fetchRoots();
+  if (!currentPath) {
+    currentPath = roots[0]?.path || '';
+    rootPath = currentPath;
+  }
+  render();
+  if (currentPath) loadPath(currentPath);
+}
+
 // ---------------------------------------------------------------- Artifacts / Settings
 
-const artState = { q: '', range: 'all', type: 'all', layout: 'list' };
+const artState = { q: '', range: 'all', type: 'all', layout: 'list', el: null, refreshing: false };
 
 const ART_RANGES = [
   ['24h', 24 * 3600e3, 'Last 24h'],
@@ -2822,12 +3125,26 @@ function artTileHtml(a) {
 }
 
 function renderArtifacts(el) {
+  artState.el = el;
   paintArtifacts(el);
-  // refresh the listing from disk so newly generated artifacts show up
-  apiJson('/api/system').then((sys) => {
+  refreshArtifactsView();
+}
+
+async function refreshArtifactsView() {
+  const seq = nextViewRefreshSeq('artifacts');
+  artState.refreshing = true;
+  if (state.view === 'artifacts' && artState.el) paintArtifacts(artState.el);
+  try {
+    const sys = await apiJson('/api/system');
+    if (!isCurrentViewRefreshSeq('artifacts', seq)) return;
     state.system = sys;
-    if (state.view === 'artifacts') paintArtifacts(el);
-  }).catch(() => {});
+  } catch {
+    if (!isCurrentViewRefreshSeq('artifacts', seq)) return;
+  } finally {
+    if (!isCurrentViewRefreshSeq('artifacts', seq)) return;
+    artState.refreshing = false;
+    if (state.view === 'artifacts' && artState.el) paintArtifacts(artState.el);
+  }
 }
 
 function paintArtifacts(el) {
@@ -2888,6 +3205,7 @@ function paintArtifacts(el) {
           <button class="filter-tab ${artState.layout === 'grid' ? 'active' : ''}" data-layout="grid">Grid</button>
           <button class="filter-tab ${artState.layout === 'list' ? 'active' : ''}" data-layout="list">List</button>
         </span>
+        <button class="btn btn-ghost btn-small" data-art-refresh ${artState.refreshing ? 'disabled' : ''}>${artState.refreshing ? 'Refreshing…' : 'Refresh'}</button>
       </div>
       ${presentTypes.length ? `<div class="art-type-tabs">
         <span class="filter-tabs">
@@ -2916,6 +3234,7 @@ function paintArtifacts(el) {
   $$('[data-range]', el).forEach((b) => b.addEventListener('click', () => { artState.range = b.dataset.range; paintArtifacts(el); }));
   $$('[data-type]', el).forEach((b) => b.addEventListener('click', () => { artState.type = b.dataset.type; paintArtifacts(el); }));
   $$('[data-layout]', el).forEach((b) => b.addEventListener('click', () => { artState.layout = b.dataset.layout; paintArtifacts(el); }));
+  $('[data-art-refresh]', el)?.addEventListener('click', refreshArtifactsView);
   $$('[data-art-open]', el).forEach((b) => b.addEventListener('click', () => {
     window.open('/api/artifact?path=' + encodeURIComponent(b.dataset.artOpen), '_blank');
   }));
@@ -3101,6 +3420,12 @@ const PROVIDER_MODES = [
   { value: 'opencode', label: 'OpenCode multi-provider runtime' },
 ];
 
+const USER_TYPE_OPTIONS = [
+  { value: 'single-user', label: 'Single user' },
+  { value: 'team-user', label: 'Team user' },
+  { value: 'collaborator', label: 'Collaborator' },
+];
+
 function providerRestartStatusLabel(settings) {
   const mode = String(settings?.runtimeMode || DEFAULT_PROVIDER_SETTINGS.runtimeMode);
   const bridge = Boolean(settings?.cliBridgeEnabled);
@@ -3155,6 +3480,7 @@ function paintSettingsBody(el) {
   const providerSavedLabel = Number.isFinite(providerSavedAt)
     ? `Saved ${timeAgo(providerSavedAt)} · ${restartLabel}`
     : `Not saved yet on this machine. ${restartLabel}`;
+  const providerDiagnostics = providerSettings?.diagnostics || null;
   const providerEnvRows = Array.isArray(provider.envVault) ? provider.envVault.map((row) => ({
     key: String(row?.key || ''),
     hasValue: Boolean(row?.hasValue),
@@ -3163,14 +3489,23 @@ function paintSettingsBody(el) {
   })) : [];
   const appCfg = appSettings || {};
   const appCfgSettings = appCfg.settings || {};
+  const appUserType = String(appCfgSettings.userType || '');
   const appSaved = appCfg.savedEffectiveRoots || {};
   const appActive = appCfg.activeRuntimeRoots || {};
   const sharedSaved = appSaved.shared || {};
   const sharedActive = appActive.shared || {};
   const personalSaved = appSaved.personal || {};
   const personalActive = appActive.personal || {};
+  const boardSaved = appSaved.board || {};
+  const boardActive = appActive.board || {};
+  const privateBoardSaved = boardSaved.private || {};
+  const privateBoardActive = boardActive.private || {};
+  const teamBoardSaved = boardSaved.team || {};
+  const teamBoardActive = boardActive.team || {};
   const sharedFolders = sharedActive.detectedSubfolders || sharedSaved.detectedSubfolders || {};
+  const boardSafetyErrors = Array.isArray(appCfg.boardSafetyErrors) ? appCfg.boardSafetyErrors : [];
   const ksDone = Boolean(workspace.knowledgeSpaces?.personalReady && workspace.knowledgeSpaces?.sharedReady);
+  const userTypeDone = Boolean(onb?.userTypeDone);
 
   const editable = {
     'user-profile': { title: 'Personal Profile', hint: 'Your persona profile — private, never committed.' },
@@ -3185,6 +3520,16 @@ function paintSettingsBody(el) {
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
         <div class="section-title" style="flex:1;margin:0">Onboarding</div>
         <span class="badge ${onb.complete ? 'badge-green' : 'badge-apricot'}">${onb.complete ? 'COMPLETE' : 'INCOMPLETE'}</span>
+      </div>
+      <div class="kv-row">
+        <span>${userTypeDone ? '<span class="badge badge-green">DONE</span>' : '<span class="badge badge-apricot">OPEN</span>'} User type — required machine-local role setting</span>
+        <span>
+          <select id="onb-user-type" class="filter-input" style="min-width:180px">
+            <option value="">Select…</option>
+            ${USER_TYPE_OPTIONS.map((opt) => `<option value="${opt.value}" ${appUserType === opt.value ? 'selected' : ''}>${esc(opt.label)}</option>`).join('')}
+          </select>
+          <button class="chip" data-act="save-user-type" style="margin-left:6px">Save</button>
+        </span>
       </div>
       <div class="kv-row">
         <span>${onb.personalDone ? '<span class="badge badge-green">DONE</span>' : '<span class="badge badge-apricot">OPEN</span>'} Personal onboarding — persona profile + personal instructions</span>
@@ -3261,7 +3606,10 @@ function paintSettingsBody(el) {
       </div>
       <div class="form-field">
         <label for="ks-personal-root">Personal knowledge root (maps to <code>knowledge/personal/…</code>)</label>
-        <input id="ks-personal-root" class="filter-input" type="text" value="${esc(appCfgSettings.personalKnowledgeRoot || '')}" placeholder="knowledge/personal">
+        <div class="ks-path-edit-row">
+          <input id="ks-personal-root" class="filter-input" type="text" value="${esc(appCfgSettings.personalKnowledgeRoot || '')}" placeholder="knowledge/personal" readonly>
+          <button class="btn btn-ghost btn-small" type="button" data-ks-edit="ks-personal-root" data-ks-label="Personal knowledge root">Edit</button>
+        </div>
       </div>
       <div class="stat-note" style="white-space:normal;margin-bottom:8px">
         Saved root: <code>${esc(personalSaved.path || 'knowledge/personal')}</code> · ${personalSaved.exists ? 'exists' : 'missing'}${personalSaved.isSymlink ? ' · symlink' : ''}<br>
@@ -3269,13 +3617,39 @@ function paintSettingsBody(el) {
       </div>
       <div class="form-field">
         <label for="ks-shared-root">Shared company/team knowledge root (maps to <code>knowledge/company</code>, <code>knowledge/inbox</code>, <code>knowledge/team</code>)</label>
-        <input id="ks-shared-root" class="filter-input" type="text" value="${esc(appCfgSettings.sharedKnowledgeRoot || '')}" placeholder="knowledge">
+        <div class="ks-path-edit-row">
+          <input id="ks-shared-root" class="filter-input" type="text" value="${esc(appCfgSettings.sharedKnowledgeRoot || '')}" placeholder="knowledge" readonly>
+          <button class="btn btn-ghost btn-small" type="button" data-ks-edit="ks-shared-root" data-ks-label="Shared knowledge root">Edit</button>
+        </div>
       </div>
       <div class="stat-note" style="white-space:normal;margin-bottom:8px">
         Saved root: <code>${esc(sharedSaved.path || 'knowledge')}</code> · ${sharedSaved.exists ? 'exists' : 'missing'}${sharedSaved.isSymlink ? ' · symlink' : ''}<br>
         Active runtime root: <code>${esc(sharedActive.path || sharedSaved.path || 'knowledge')}</code> · ${sharedActive.exists ? 'exists' : 'missing'}${sharedActive.isSymlink ? ' · symlink' : ''}<br>
         Shared subfolders detected: company ${sharedFolders.company ? '✓' : '—'} · inbox ${sharedFolders.inbox ? '✓' : '—'} · team ${sharedFolders.team ? '✓' : '—'}
       </div>
+      <div class="form-field">
+        <label for="ks-private-board-root">Private board root (Project Board private scope storage)</label>
+        <div class="ks-path-edit-row">
+          <input id="ks-private-board-root" class="filter-input" type="text" value="${esc(appCfgSettings.privateBoardRoot || '')}" placeholder="(default local runtime private board root)" readonly>
+          <button class="btn btn-ghost btn-small" type="button" data-ks-edit="ks-private-board-root" data-ks-label="Private board root">Edit</button>
+        </div>
+      </div>
+      <div class="stat-note" style="white-space:normal;margin-bottom:8px">
+        Saved root: <code>${esc(privateBoardSaved.path || '(default local runtime private board root)')}</code> · ${privateBoardSaved.exists ? 'exists' : 'missing'}${privateBoardSaved.isSymlink ? ' · symlink' : ''}<br>
+        Active runtime root: <code>${esc(privateBoardActive.path || privateBoardSaved.path || '(default local runtime private board root)')}</code> · ${privateBoardActive.exists ? 'exists' : 'missing'}${privateBoardActive.isSymlink ? ' · symlink' : ''}
+      </div>
+      <div class="form-field">
+        <label for="ks-team-board-root">Team board root (Project Board team scope storage)</label>
+        <div class="ks-path-edit-row">
+          <input id="ks-team-board-root" class="filter-input" type="text" value="${esc(appCfgSettings.teamBoardRoot || '')}" placeholder="/absolute/path/to/team-board" readonly>
+          <button class="btn btn-ghost btn-small" type="button" data-ks-edit="ks-team-board-root" data-ks-label="Team board root">Edit</button>
+        </div>
+      </div>
+      <div class="stat-note" style="white-space:normal;margin-bottom:8px">
+        Saved root: <code>${esc(teamBoardSaved.path || 'not configured')}</code> · ${teamBoardSaved.path ? (teamBoardSaved.exists ? 'exists' : 'missing') : 'not configured'}${teamBoardSaved.isSymlink ? ' · symlink' : ''}<br>
+        Active runtime root: <code>${esc(teamBoardActive.path || teamBoardSaved.path || 'not configured')}</code> · ${teamBoardActive.path ? (teamBoardActive.exists ? 'exists' : 'missing') : 'not configured'}${teamBoardActive.isSymlink ? ' · symlink' : ''}
+      </div>
+      ${boardSafetyErrors.length ? `<div class="stat-note" style="color:var(--apricot-deep);white-space:normal;margin-bottom:8px">Board root checks: ${boardSafetyErrors.map((msg) => esc(msg)).join(' · ')}</div>` : ''}
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <button class="btn btn-primary btn-small" data-act="save-knowledge-spaces">Save knowledge spaces</button>
         <span class="stat-note" id="ks-save-status">${appCfg.restartRequired ? 'Saved. Restart required to apply active runtime roots.' : 'Saved values shown above. Changes require restart to take effect.'}</span>
@@ -3326,8 +3700,15 @@ function paintSettingsBody(el) {
       </div>
       <div class="provider-actions">
         <button class="btn btn-primary btn-small" data-act="save-provider-settings">Save provider settings</button>
+        <button class="btn btn-ghost btn-small" data-act="run-provider-deep-test">Run deep provider test</button>
         <span class="stat-note" id="provider-save-status">${providerSavedLabel}</span>
       </div>
+      <div class="stat-note" style="margin-top:8px;white-space:normal">
+        Local provider diagnostics: ${(providerDiagnostics?.checks || []).length
+          ? providerDiagnostics.checks.map((c) => `[${String(c.status || '').toUpperCase()}] ${esc(c.message || c.id)}`).join(' · ')
+          : 'not available'}
+      </div>
+      <div class="stat-note" id="provider-deep-test-status" style="margin-top:4px;white-space:normal">Deep provider test runs on demand only.</div>
       <div class="stat-note" style="margin-top:8px;white-space:normal">Settings are machine-local (<code>interface/provider-settings.json</code>) and apply on restart. Use <strong>Runtime → Restart App + Chat</strong> after saving.</div>
     </div>` : ''}
 
@@ -3385,6 +3766,20 @@ function paintSettingsBody(el) {
   }));
 
   $('[data-act="onboarding-guide"]', el)?.addEventListener('click', () => showOnboardingModal(settingsState.data.workspace, { force: true }));
+  $('[data-act="save-user-type"]', el)?.addEventListener('click', async () => {
+    const select = $('#onb-user-type', el);
+    if (!select) return;
+    try {
+      await apiJson('/api/app-settings', {
+        method: 'PUT',
+        body: JSON.stringify({ userType: String(select.value || '').trim() }),
+      });
+      toast('USER TYPE SAVED');
+      paintSettings(el);
+    } catch (e) {
+      toast(e.message.toUpperCase(), true);
+    }
+  });
   bindMemoryActions(el);
 
   $$('[data-edit-file]', el).forEach((b) => b.addEventListener('click', () => {
@@ -3515,6 +3910,18 @@ function paintSettingsBody(el) {
     }
   });
 
+  $('[data-act="run-provider-deep-test"]', el)?.addEventListener('click', async () => {
+    const status = $('#provider-deep-test-status', el);
+    if (!status) return;
+    status.textContent = 'Running deep provider test…';
+    try {
+      const result = await apiJson('/api/provider-settings/deep-test', { method: 'POST', body: JSON.stringify({}) });
+      status.textContent = `[${String(result.category || 'success').toUpperCase()}] ${result.detail || 'Provider deep test passed.'} (${result.durationMs || 0} ms)`;
+    } catch (e) {
+      status.textContent = `Deep test failed: ${e.message}`;
+    }
+  });
+
   const modeEl = $('#provider-runtime-mode', el);
   const bridgeEl = $('#provider-cli-bridge-enabled', el);
   const statusEl = $('#provider-save-status', el);
@@ -3555,11 +3962,23 @@ function paintSettingsBody(el) {
     else grCard.innerHTML = '<div class="section-title">Guardrails</div><div class="stat-note">Guardrails unavailable.</div>';
   }
 
+  $$('[data-ks-edit]', el).forEach((btn) => btn.addEventListener('click', () => {
+    const inputId = String(btn.dataset.ksEdit || '').trim();
+    if (!inputId) return;
+    openKnowledgeSpaceBrowser({
+      settingsEl: el,
+      inputId,
+      label: btn.dataset.ksLabel || 'Select folder',
+    });
+  }));
+
   $('[data-act="save-knowledge-spaces"]', el)?.addEventListener('click', async () => {
     const personalEl = $('#ks-personal-root', el);
     const sharedEl = $('#ks-shared-root', el);
+    const privateBoardEl = $('#ks-private-board-root', el);
+    const teamBoardEl = $('#ks-team-board-root', el);
     const status = $('#ks-save-status', el);
-    if (!personalEl || !sharedEl || !status) return;
+    if (!personalEl || !sharedEl || !privateBoardEl || !teamBoardEl || !status) return;
     try {
       status.textContent = 'Saving…';
       const result = await apiJson('/api/app-settings', {
@@ -3567,6 +3986,8 @@ function paintSettingsBody(el) {
         body: JSON.stringify({
           personalKnowledgeRoot: personalEl.value.trim(),
           sharedKnowledgeRoot: sharedEl.value.trim(),
+          privateBoardRoot: privateBoardEl.value.trim(),
+          teamBoardRoot: teamBoardEl.value.trim(),
         }),
       });
       settingsState.data.appSettings = result;
@@ -3588,6 +4009,7 @@ function paintSettingsBody(el) {
 function showOnboardingModal(workspace, { force = false } = {}) {
   const onb = workspace && workspace.onboarding;
   const ks = workspace && workspace.knowledgeSpaces;
+  const currentUserType = String(workspace?.appSettings?.settings?.userType || '');
   if (!onb) return;
   if (!force && (onb.complete || sessionStorage.getItem('onboarding-dismissed'))) return;
   $('#onboarding-modal')?.remove();
@@ -3613,10 +4035,21 @@ function showOnboardingModal(workspace, { force = false } = {}) {
         The onboarding interviews give Danny and all agents the context they need. Without them,
         agents guess. Both run as guided interviews <strong>in Claude Code</strong>, not here.
       </p>
+      ${step(onb.userTypeDone, '0 · User type', 'Set your machine-local role before onboarding can be marked complete.', '')}
       ${step(onb.personalDone, '1 · Personal onboarding', 'Creates your private persona profile (knowledge/personal/user-profile.md) and your personal instructions (CLAUDE.local.md).', '/personal-onboarding')}
       ${step(onb.companyDone, '2 · Company onboarding', `Fills the company operating profile — the shared custom instruction for the whole team.${onb.companyTodos ? ' Currently ' + onb.companyTodos + ' TODO placeholders open.' : ''}`, '/company-onboarding')}
       ${step(onb.memoryDone, '3 · Memory setup', 'Required local memory paths exist: memory/MEMORY.md and memory/daily/. Edit memory/MEMORY.md in Settings -> Profile & Instructions.', '')}
       ${step(Boolean(ks?.personalReady && ks?.sharedReady), '4 · Knowledge spaces', 'Confirm personal and shared knowledge roots in Settings -> Knowledge Spaces. Missing shared roots are allowed, but should be configured for company docs visibility.', '')}
+      <div class="onb-step" style="border-top:none;padding-top:6px">
+        <span style="width:56px"></span>
+        <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;flex:1">
+          <select id="modal-user-type" class="filter-input" style="min-width:220px">
+            <option value="">Select user type…</option>
+            ${USER_TYPE_OPTIONS.map((opt) => `<option value="${opt.value}" ${currentUserType === opt.value ? 'selected' : ''}>${esc(opt.label)}</option>`).join('')}
+          </select>
+          <button class="btn btn-ghost btn-small" data-onb="save-user-type">Save user type</button>
+        </span>
+      </div>
       <div class="onb-actions">
         <button class="btn btn-primary btn-small" data-onb="settings">Open Settings</button>
         <button class="btn btn-ghost btn-small" data-onb="later">${onb.complete ? 'Close' : 'Remind me later'}</button>
@@ -3631,6 +4064,19 @@ function showOnboardingModal(workspace, { force = false } = {}) {
     close();
   });
   $('[data-onb="settings"]', overlay).addEventListener('click', () => { close(); setView('settings'); });
+  $('[data-onb="save-user-type"]', overlay)?.addEventListener('click', async () => {
+    const select = $('#modal-user-type', overlay);
+    const value = String(select?.value || '').trim();
+    if (!value) return toast('SELECT USER TYPE FIRST', true);
+    try {
+      await apiJson('/api/app-settings', { method: 'PUT', body: JSON.stringify({ userType: value }) });
+      toast('USER TYPE SAVED');
+      close();
+      checkOnboarding();
+    } catch (e) {
+      toast(e.message.toUpperCase(), true);
+    }
+  });
 }
 
 async function checkOnboarding() {
@@ -4088,8 +4534,8 @@ function ensureProjectSelection() {
 }
 
 function assigneeLabel(task) {
+  if (task.assignee_type === 'human') return task.human_assignee_label || task.assignee_id || 'Human';
   if (task.assignee_type === 'unassigned' || !task.assignee_id) return 'Unassigned';
-  if (task.assignee_type === 'human') return task.assignee_id;
   const a = projectState.metadata?.agents?.find((x) => x.id === task.assignee_id) || AGENTS.find((x) => x.id === task.assignee_id);
   return a?.name || task.assignee_id;
 }
@@ -4184,25 +4630,35 @@ async function loadProjectTasks(projectId) {
 }
 
 async function refreshProjectsView() {
+  const seq = nextViewRefreshSeq('projects');
   projectState.loading = true;
   projectState.error = null;
   projectState.denied = false;
   paintProjects();
   try {
-    if (!projectState.metadata) projectState.metadata = normalizeMetadata(await boardApi('/api/board/metadata'));
+    if (!projectState.metadata) {
+      const metadata = await boardApi('/api/board/metadata');
+      if (!isCurrentViewRefreshSeq('projects', seq)) return;
+      projectState.metadata = normalizeMetadata(metadata);
+    }
     const projects = await fetchBoardListAll('/api/projects', { limit: 200 });
+    if (!isCurrentViewRefreshSeq('projects', seq)) return;
     projectState.projects = projects;
     ensureProjectSelection();
     const selectedId = projectState.selectedProjectId;
-    projectState.tasks = selectedId
+    const tasks = selectedId
       ? await fetchBoardListAll('/api/tasks', { limit: 200, query: { project_id: selectedId } })
       : [];
+    if (!isCurrentViewRefreshSeq('projects', seq)) return;
+    projectState.tasks = tasks;
     ensureProjectSelection();
     if (projectState.selectedProjectId) loadProjectStreams(projectState.selectedProjectId);
   } catch (e) {
+    if (!isCurrentViewRefreshSeq('projects', seq)) return;
     projectState.error = e;
     projectState.denied = e.status === 401 || e.status === 403;
   } finally {
+    if (!isCurrentViewRefreshSeq('projects', seq)) return;
     projectState.loading = false;
     paintProjects();
   }
@@ -4217,6 +4673,7 @@ function renderProjects(el) {
 
 function openProjectCreateDrawer() {
   const meta = projectState.metadata || normalizeMetadata({});
+  const hideTeam = !meta.visibilityOptions.includes('team');
   openDrawer(`
     <div class="drawer-head">
       <button class="drawer-close">✕</button>
@@ -4228,7 +4685,10 @@ function openProjectCreateDrawer() {
       <div class="form-field"><label>Name</label><input id="pj-new-name" placeholder="Project name"></div>
       <div class="form-field"><label>Description</label><textarea id="pj-new-desc" rows="4"></textarea></div>
       <div class="form-field"><label>Visibility</label>
-        <select id="pj-new-visibility">${meta.visibilityOptions.map((v) => `<option value="${esc(v)}" ${v === meta.defaults.visibility ? 'selected' : ''}>${esc(statusLabel(v))}</option>`).join('')}</select>
+        <select id="pj-new-visibility" ${hideTeam ? 'disabled' : ''}>
+          ${meta.visibilityOptions.map((v) => `<option value="${esc(v)}" ${v === meta.defaults.visibility ? 'selected' : ''}>${esc(statusLabel(v))}</option>`).join('')}
+        </select>
+        ${hideTeam ? '<div class="stat-note" style="margin-top:4px">Team visibility requires a backend configured for teams.</div>' : ''}
       </div>
       <div class="drawer-actions"><button id="pj-new-save" class="btn btn-primary">Create project</button></div>
     </div>
@@ -4256,6 +4716,7 @@ function openProjectCreateDrawer() {
 
 function openProjectEditDrawer(project) {
   const meta = projectState.metadata || normalizeMetadata({});
+  const hideTeam = !meta.visibilityOptions.includes('team');
   openDrawer(`
     <div class="drawer-head">
       <button class="drawer-close">✕</button>
@@ -4264,21 +4725,32 @@ function openProjectEditDrawer(project) {
       <div class="drawer-role">${esc(project.name)}</div>
     </div>
     <div class="drawer-body">
-      <div class="form-field"><label>Name</label><div>${esc(project.name)}</div></div>
-      <div class="form-field"><label>Description</label><div style="white-space:pre-wrap">${esc(project.description || '—')}</div></div>
+      <div class="form-field"><label>Name</label><input id="pj-edit-name" value="${esc(project.name)}" placeholder="Project name"></div>
+      <div class="form-field"><label>Description</label><textarea id="pj-edit-desc" rows="4">${esc(project.description || '')}</textarea></div>
       <div class="form-field"><label>Status</label>
         <select id="pj-edit-status">${PROJECT_STATUS_OPTIONS.map((s) => `<option value="${esc(s)}" ${s === project.status ? 'selected' : ''}>${esc(statusLabel(s))}</option>`).join('')}</select>
       </div>
       <div class="form-field"><label>Visibility</label>
-        <select id="pj-edit-visibility">${meta.visibilityOptions.map((v) => `<option value="${esc(v)}" ${v === project.visibility ? 'selected' : ''}>${esc(statusLabel(v))}</option>`).join('')}</select>
+        <select id="pj-edit-visibility" ${hideTeam ? 'disabled' : ''}>
+          ${meta.visibilityOptions.map((v) => `<option value="${esc(v)}" ${v === project.visibility ? 'selected' : ''}>${esc(statusLabel(v))}</option>`).join('')}
+          ${hideTeam && project.visibility === 'team' ? `<option value="team" selected>Team (Unsupported)</option>` : ''}
+        </select>
+        ${hideTeam ? '<div class="stat-note" style="margin-top:4px">Team visibility requires a backend configured for teams.</div>' : ''}
       </div>
-      <div class="drawer-actions"><button id="pj-edit-save" class="btn btn-primary">Save</button></div>
+      <div class="drawer-actions">
+        <button id="pj-edit-save" class="btn btn-primary">Save</button>
+        <button id="pj-edit-delete" class="btn btn-ghost" style="color:var(--apricot-deep)">Delete Project</button>
+      </div>
     </div>
   `);
   $('#pj-edit-save', $('#drawer'))?.addEventListener('click', async () => {
     const ops = [];
+    const n = $('#pj-edit-name')?.value.trim();
+    const d = $('#pj-edit-desc')?.value.trim();
     const s = $('#pj-edit-status')?.value || project.status;
     const v = $('#pj-edit-visibility')?.value || project.visibility;
+    if (n && n !== project.name) ops.push({ op: 'set_name', value: n });
+    if (d !== (project.description || '')) ops.push({ op: 'set_description', value: d });
     if (s !== project.status) ops.push({ op: 'set_status', value: s });
     if (!ops.length && v === project.visibility) return closeDrawer();
     try {
@@ -4305,6 +4777,20 @@ function openProjectEditDrawer(project) {
       toast('PROJECT UPDATED');
       refreshProjectsView();
     } catch (e) { toast((e.message || 'UPDATE FAILED').toUpperCase(), true); }
+  });
+  $('#pj-edit-delete', $('#drawer'))?.addEventListener('click', async () => {
+    if (!confirm('Are you sure you want to delete this project? This will permanently delete the project and ALL its tasks. This cannot be undone.')) return;
+    try {
+      await boardApi(`/api/projects/${encodeURIComponent(project.id)}`, {
+        method: 'DELETE',
+        body: { version: project.version, confirm: true },
+      });
+      projectState.projects = projectState.projects.filter((p) => p.id !== project.id);
+      if (projectState.selectedProjectId === project.id) projectState.selectedProjectId = null;
+      closeDrawer();
+      toast('PROJECT DELETED');
+      refreshProjectsView();
+    } catch (e) { toast((e.message || 'DELETE FAILED').toUpperCase(), true); }
   });
 }
 
@@ -4356,7 +4842,7 @@ function openTaskCreateDrawer(projectId, { prefill = null } = {}) {
       <div class="form-field" id="task-assignee-agent-wrap"><label>Assignee</label>
         <select id="task-new-assignee-agent">${meta.agents.map((a) => `<option value="${esc(a.id)}" ${a.id === agentDefault ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>
       </div>
-      <div class="form-field hidden" id="task-assignee-human-wrap"><label>Human assignee id</label><input id="task-new-assignee-human" placeholder="username"></div>
+      <div class="form-field hidden" id="task-assignee-human-wrap"><label>Human assignee name</label><input id="task-new-assignee-human-label" placeholder="Full name"></div>
       <div class="drawer-actions"><button id="task-new-save" class="btn btn-primary">Create task</button></div>
     </div>
   `);
@@ -4376,8 +4862,9 @@ function openTaskCreateDrawer(projectId, { prefill = null } = {}) {
     if (!title) return toast('TASK TITLE IS REQUIRED', true);
     const type = $('#task-new-assignee-type', drawer)?.value || 'agent';
     let assigneeId = null;
+    let humanAssigneeLabel = null;
     if (type === 'agent') assigneeId = $('#task-new-assignee-agent', drawer)?.value || defaults.assignee_id || 'danny';
-    if (type === 'human') assigneeId = $('#task-new-assignee-human', drawer)?.value.trim() || '';
+    if (type === 'human') humanAssigneeLabel = $('#task-new-assignee-human-label', drawer)?.value.trim() || null;
     try {
       const task = await boardApi('/api/tasks', {
         method: 'POST',
@@ -4390,6 +4877,7 @@ function openTaskCreateDrawer(projectId, { prefill = null } = {}) {
           priority: $('#task-new-priority', drawer)?.value || 'medium',
           assignee_type: type,
           assignee_id: type === 'unassigned' ? null : assigneeId,
+          human_assignee_label: type === 'human' ? humanAssigneeLabel : null,
         },
       });
       closeDrawer();
@@ -4445,40 +4933,252 @@ function openTaskDrawer(taskId) {
   const task = projectState.tasks.find((t) => t.id === taskId);
   if (!task) return;
   const project = projectState.projects.find((p) => p.id === task.project_id);
+  const meta = projectState.metadata || normalizeMetadata({});
   const canReview = task.review?.required && task.review?.state === 'needs_review';
   const artifactEntries = extractAttemptArtifactEntries(task);
+  const updates = task.execution?.execution_updates || [];
+  const initialSubtasks = (task.subtasks || [])
+    .map((st) => ({ ...st }))
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  let currentSubtasks = initialSubtasks.map((st) => ({ ...st }));
+  const originalSubtasksJson = JSON.stringify(initialSubtasks.map((st) => ({
+    id: st.id,
+    text: st.text,
+    completed: Boolean(st.completed),
+    order: Number.isInteger(st.order) ? st.order : 0,
+  })));
+
+  const renderSubtasks = () => {
+    const listHtml = currentSubtasks.length ? currentSubtasks.map((st, i) => `
+      <div class="subtask-row" data-subtask-id="${esc(st.id)}">
+        <input type="checkbox" ${st.completed ? 'checked' : ''} class="subtask-toggle">
+        <input type="text" class="subtask-text ${st.completed ? 'completed' : ''}" value="${esc(st.text)}" placeholder="Subtask text">
+        <button class="btn btn-ghost btn-small subtask-up" ${i === 0 ? 'disabled' : ''}>↑</button>
+        <button class="btn btn-ghost btn-small subtask-down" ${i === currentSubtasks.length - 1 ? 'disabled' : ''}>↓</button>
+        <button class="btn btn-ghost btn-small subtask-del" style="color:var(--apricot-deep)">✕</button>
+      </div>
+    `).join('') : '<div class="stat-note" style="margin-bottom:6px">No subtasks.</div>';
+    
+    return `
+      <div id="subtasks-container">
+        ${listHtml}
+        <button class="btn btn-ghost btn-small" id="btn-add-subtask">+ Add subtask</button>
+      </div>
+    `;
+  };
+
+  const bindSubtasks = (drawer) => {
+    $$('.subtask-row', drawer).forEach((row, i) => {
+      const id = row.dataset.subtaskId;
+      const st = currentSubtasks.find(s => s.id === id);
+      if (!st) return;
+      
+      row.querySelector('.subtask-toggle')?.addEventListener('change', (e) => {
+        st.completed = e.target.checked;
+        const textInput = row.querySelector('.subtask-text');
+        if (textInput) textInput.classList.toggle('completed', st.completed);
+      });
+      row.querySelector('.subtask-text')?.addEventListener('input', (e) => { st.text = e.target.value; });
+      row.querySelector('.subtask-up')?.addEventListener('click', () => {
+        if (i > 0) {
+          const temp = currentSubtasks[i-1];
+          currentSubtasks[i-1] = currentSubtasks[i];
+          currentSubtasks[i] = temp;
+          refreshSubtasks();
+        }
+      });
+      row.querySelector('.subtask-down')?.addEventListener('click', () => {
+        if (i < currentSubtasks.length - 1) {
+          const temp = currentSubtasks[i+1];
+          currentSubtasks[i+1] = currentSubtasks[i];
+          currentSubtasks[i] = temp;
+          refreshSubtasks();
+        }
+      });
+      row.querySelector('.subtask-del')?.addEventListener('click', () => {
+        currentSubtasks = currentSubtasks.filter(s => s.id !== id);
+        refreshSubtasks();
+      });
+    });
+    
+    $('#btn-add-subtask', drawer)?.addEventListener('click', () => {
+      currentSubtasks.push({
+        id: 'st_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        text: '',
+        completed: false,
+        order: currentSubtasks.length
+      });
+      refreshSubtasks();
+    });
+  };
+
+  const refreshSubtasks = () => {
+    const wrap = $('#subtasks-wrap');
+    if (wrap) {
+      // Re-assign order based on array position
+      currentSubtasks.forEach((st, i) => st.order = i);
+      wrap.innerHTML = renderSubtasks();
+      bindSubtasks(wrap);
+    }
+  };
+
   openDrawer(`
     <div class="drawer-head">
       <button class="drawer-close">✕</button>
       <div class="drawer-dept">TASK</div>
-      <div class="drawer-name">${esc(task.title)}</div>
+      <div class="drawer-name">Edit Task</div>
       <div class="drawer-role">${esc(project?.name || task.project_id)}</div>
     </div>
     <div class="drawer-body">
-      <div class="drawer-section">
-        <span class="badge badge-gray">${esc(statusLabel(task.status))}</span>
-        <span class="badge badge-gray">${esc(statusLabel(task.priority))}</span>
-        ${execStateBadge(task.execution?.state || 'none')}
+      <div class="form-field"><label>Title</label><input id="task-edit-title" value="${esc(task.title)}" placeholder="Task title"></div>
+      
+      <div class="form-field"><label>Instruction</label><textarea id="task-edit-desc" rows="4">${esc(task.description || '')}</textarea></div>
+      
+      <div class="form-field"><label>Status</label>
+        <select id="task-edit-status">
+          ${TASK_STATUS_OPTIONS.map((s) => `<option value="${esc(s)}" ${s === task.status ? 'selected' : ''}>${esc(statusLabel(s))}</option>`).join('')}
+        </select>
       </div>
-      <div class="drawer-section"><div class="section-title">Assignee</div><div>${esc(assigneeLabel(task))}</div></div>
-      <div class="drawer-section"><div class="section-title">Description</div><div style="white-space:pre-wrap">${esc(task.description || '—')}</div></div>
-      <div class="drawer-section"><div class="section-title">Workflow</div><div>${esc(task.workflow_id || '—')}</div></div>
+      
+      <div class="form-field"><label>Priority</label>
+        <select id="task-edit-priority">${PRIORITY_OPTIONS.map((p) => `<option value="${esc(p)}" ${p === task.priority ? 'selected' : ''}>${esc(statusLabel(p))}</option>`).join('')}</select>
+      </div>
+
+      <div class="form-field"><label>Workflow</label>
+        <select id="task-edit-workflow"><option value="">(none)</option>${meta.workflows.map((w) => `<option value="${esc(w)}" ${w === task.workflow_id ? 'selected' : ''}>${esc(w)}</option>`).join('')}</select>
+      </div>
+
+      <div class="form-field"><label>Assignee Type</label>
+        <select id="task-edit-assignee-type">
+          <option value="agent" ${task.assignee_type === 'agent' ? 'selected' : ''}>Agent</option>
+          <option value="human" ${task.assignee_type === 'human' ? 'selected' : ''}>Human</option>
+          <option value="unassigned" ${task.assignee_type === 'unassigned' ? 'selected' : ''}>Unassigned</option>
+        </select>
+      </div>
+      <div class="form-field ${task.assignee_type !== 'agent' ? 'hidden' : ''}" id="task-edit-assignee-agent-wrap"><label>Assignee Agent</label>
+        <select id="task-edit-assignee-agent">${meta.agents.map((a) => `<option value="${esc(a.id)}" ${a.id === task.assignee_id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>
+      </div>
+      <div class="form-field ${task.assignee_type !== 'human' ? 'hidden' : ''}" id="task-edit-assignee-human-wrap"><label>Human Assignee Label</label>
+        <input id="task-edit-assignee-human-label" value="${esc(task.human_assignee_label || '')}" placeholder="Optional display name">
+      </div>
+
       <div class="drawer-section">
-        <div class="section-title">Execution</div>
-        <div class="tag-row">
+        <div class="section-title">Subtasks</div>
+        <div id="subtasks-wrap">
+          ${renderSubtasks()}
+        </div>
+      </div>
+
+      <div class="drawer-actions" style="margin-bottom:16px;">
+        <button id="task-edit-save" class="btn btn-primary">Save Task</button>
+        <button id="task-edit-delete" class="btn btn-ghost" style="color:var(--apricot-deep)">Delete Task</button>
+      </div>
+
+      <div class="drawer-section">
+        <div class="section-title">Execution Controls</div>
+        <div class="tag-row" style="margin-bottom:8px">
           <button class="btn btn-small" data-task-run>Run</button>
           <button class="btn btn-ghost btn-small" data-task-cancel>Cancel</button>
           <button class="btn btn-ghost btn-small" data-task-retry>Retry</button>
         </div>
+        <div>${execStateBadge(task.execution?.state || 'none')}</div>
         ${artifactEntries.length ? `<div style="margin-top:10px;display:flex;flex-direction:column;gap:6px">
           ${artifactEntries.slice(0, 12).map((entry) => `<a class="chip" data-task-artifact="${esc(entry.key)}" style="text-decoration:none;display:inline-flex;justify-content:space-between;gap:8px" href="${esc(boardArtifactHref(task.id, entry.attemptId, entry.relPath))}" target="_blank" rel="noopener noreferrer"><span>${esc(entry.name)}</span><span class="mono-label">${esc(entry.attemptId.slice(0, 8))}</span></a>`).join('')}
           ${artifactEntries.length > 12 ? `<span class="stat-note">+${artifactEntries.length - 12} more artifacts on older attempts.</span>` : ''}
         </div>` : '<div class="stat-note" style="margin-top:10px">No linked artifacts yet.</div>'}
       </div>
+
+      ${updates.length ? `<div class="drawer-section"><div class="section-title">Execution Feed</div>
+        <div style="display:flex;flex-direction:column;gap:6px;max-height:200px;overflow-y:auto;padding-right:4px;">
+          ${updates.map(u => `
+            <div style="font-size:11px;padding:6px;background:var(--bg-layer);border-radius:4px;">
+              <div style="display:flex;justify-content:space-between;margin-bottom:2px;color:var(--text-muted)">
+                <span>${esc(u.source || 'system')}</span>
+                <span>${timeAgo(Date.parse(u.timestamp))}</span>
+              </div>
+              <div><strong style="color:var(--text-normal)">${esc(u.state)}:</strong> ${esc(u.summary)}</div>
+            </div>
+          `).join('')}
+        </div>
+      </div>` : ''}
+
       ${canReview ? `<div class="drawer-section"><div class="section-title">Review</div><div class="tag-row"><button class="btn btn-small" data-review-approve>Approve</button><button class="btn btn-ghost btn-small" data-review-changes>Request changes</button></div></div>` : ''}
     </div>
   `);
+  
   const drawer = $('#drawer');
+  bindSubtasks(drawer);
+
+  const typeEl = $('#task-edit-assignee-type', drawer);
+  typeEl?.addEventListener('change', () => {
+    const type = typeEl.value;
+    $('#task-edit-assignee-agent-wrap', drawer)?.classList.toggle('hidden', type !== 'agent');
+    $('#task-edit-assignee-human-wrap', drawer)?.classList.toggle('hidden', type !== 'human');
+  });
+
+  $('#task-edit-save', drawer)?.addEventListener('click', async () => {
+    const ops = [];
+    const t = $('#task-edit-title', drawer)?.value.trim();
+    const d = $('#task-edit-desc', drawer)?.value.trim();
+    const s = $('#task-edit-status', drawer)?.value;
+    const p = $('#task-edit-priority', drawer)?.value;
+    const w = $('#task-edit-workflow', drawer)?.value || null;
+    const aType = typeEl?.value;
+    let aId = null;
+    let hLabel = null;
+    
+    if (aType === 'agent') aId = $('#task-edit-assignee-agent', drawer)?.value || null;
+    else if (aType === 'human') {
+      aId = null;
+      hLabel = $('#task-edit-assignee-human-label', drawer)?.value.trim() || null;
+    }
+
+    if (t && t !== task.title) ops.push({ op: 'set_title', value: t });
+    if (d !== (task.description || '')) ops.push({ op: 'set_description', value: d });
+    if (s && s !== task.status) ops.push({ op: 'set_status', value: s });
+    if (p && p !== task.priority) ops.push({ op: 'set_priority', value: p });
+    if (w !== task.workflow_id) ops.push({ op: 'set_workflow_id', value: w });
+    
+    if (aType !== task.assignee_type || aId !== task.assignee_id || hLabel !== task.human_assignee_label) {
+      ops.push({ op: 'set_assignee', value: { assignee_type: aType, assignee_id: aId, human_assignee_label: hLabel } });
+    }
+
+    // Compare subtasks
+    const cleanCurrent = currentSubtasks
+      .filter((st) => st.text.trim() !== '')
+      .map((st) => ({ id: st.id, text: st.text, completed: Boolean(st.completed), order: st.order }));
+    if (JSON.stringify(cleanCurrent) !== originalSubtasksJson) {
+      ops.push({ op: 'set_subtasks', value: cleanCurrent });
+    }
+
+    if (!ops.length) return closeDrawer();
+
+    try {
+      const updated = await boardApi(`/api/tasks/${encodeURIComponent(task.id)}`, {
+        method: 'PATCH',
+        body: { version: task.version, ops },
+      });
+      applyTaskToState(updated);
+      closeDrawer();
+      toast('TASK UPDATED');
+      refreshProjectsView();
+    } catch (e) { toast((e.message || 'UPDATE FAILED').toUpperCase(), true); }
+  });
+
+  $('#task-edit-delete', drawer)?.addEventListener('click', async () => {
+    if (!confirm('Are you sure you want to delete this task? This cannot be undone.')) return;
+    try {
+      await boardApi(`/api/tasks/${encodeURIComponent(task.id)}`, {
+        method: 'DELETE',
+        body: { version: task.version, confirm: true },
+      });
+      projectState.tasks = projectState.tasks.filter((t) => t.id !== task.id);
+      closeDrawer();
+      toast('TASK DELETED');
+      refreshProjectsView();
+    } catch (e) { toast((e.message || 'DELETE FAILED').toUpperCase(), true); }
+  });
+
   $('[data-task-run]', drawer)?.addEventListener('click', () => runTaskExecution(task, 'run'));
   $('[data-task-cancel]', drawer)?.addEventListener('click', () => runTaskExecution(task, 'cancel'));
   $('[data-task-retry]', drawer)?.addEventListener('click', () => runTaskExecution(task, 'retry'));

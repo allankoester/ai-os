@@ -3,6 +3,14 @@
 Use the scripts in `scripts/` to validate setup and run the interface in a
 known initial local state.
 
+## Prerequisites by user type
+
+| Requirement | single-user | team-user | collaborator |
+|---|---:|---:|---:|
+| Node.js >= 18 | required | required | required |
+| `npm ci` | required | required | required |
+| git | optional | optional | required |
+
 Initial state defaults:
 
 - `STEADYMADE_RUNTIME=dev`
@@ -12,6 +20,12 @@ Initial state defaults:
 These defaults are applied only when env vars are not already set.
 
 ## Start
+
+Before first start:
+
+```bash
+npm ci
+```
 
 ### macOS
 
@@ -87,12 +101,23 @@ Validate paths and configuration without starting the server:
 node scripts/start.mjs --check-only
 ```
 
+`--check-only` prints PASS/WARN/FAIL entries and exits with:
+
+- `0` when no blocking failures are found
+- `1` when blocking failures are found
+
 ## What is validated before start
 
 - required files and folders exist (`CLAUDE.md`, `.claude/agents/`,
   `interface/server.mjs`, `knowledge/`, `scripts/validate.mjs`)
-- optional local files are reported (`.claude/settings.local.json`, `.mcp.json`)
 - `node scripts/validate.mjs` runs successfully
-- port `4011` is free before startup
+- runtime dependencies used by chat runtime are installed (`node_modules`)
+- ports `4011` (interface) and `4012` (chat)
+- machine-local onboarding user type is set
+- git is required only for `collaborator`
+- selected provider local readiness (binary/config only)
 
 If port `4011` is in use, run `node scripts/stop.mjs` and start again.
+
+Deep provider tests are separate from startup preflight and run on demand in
+the interface (**Settings -> AI Provider -> Run deep provider test**).

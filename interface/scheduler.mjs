@@ -14,6 +14,18 @@ const TICK_MS = 20_000;
 const MAX_RUNS_KEPT = 200;
 const SCHEDULER_PERMISSION_MODE = process.env.SCHEDULER_PERMISSION_MODE || 'default';
 const SCHEDULER_ALLOWED_TOOLS = process.env.SCHEDULER_ALLOWED_TOOLS || 'Read,Glob,Grep,Task,Skill,WebFetch';
+const SCHEDULER_OPENCODE_CONFIG_CONTENT = process.env.SCHEDULER_OPENCODE_CONFIG_CONTENT
+  || JSON.stringify({
+    permission: {
+      '*': 'deny',
+      read: 'allow',
+      glob: 'allow',
+      grep: 'allow',
+      task: 'allow',
+      skill: 'allow',
+      webfetch: 'allow',
+    },
+  });
 
 // Locate the Claude Code CLI. The binary is not always on PATH (e.g. when the
 // CLI ships inside the VS Code extension), so try in order:
@@ -201,6 +213,38 @@ export function createScheduler({ rootDir, onRunEvent = null, resolveRuntimeCont
     return out;
   }
 
+  function parseOpenCodeNdjsonEvents(rawOutput) {
+    const events = [];
+    for (const line of String(rawOutput || '').split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed && typeof parsed === 'object') events.push(parsed);
+      } catch {
+        // Keep non-JSON lines in raw log output; they are ignored for NDJSON event parsing.
+      }
+    }
+    return events;
+  }
+
+  function openCodeErrorFromEvents(events) {
+    for (const event of events || []) {
+      const type = String(event?.type || event?.event || event?.level || '').toLowerCase();
+      const isError = type === 'error' || type === 'fatal' || event?.ok === false || typeof event?.error === 'string';
+      if (!isError) continue;
+      const message = String(
+        event?.message
+        || event?.summary
+        || event?.error
+        || event?.details?.message
+        || ''
+      ).trim();
+      return message || 'OpenCode reported an error event';
+    }
+    return null;
+  }
+
   function logSchedulerUsage(run, job) {
     appendUsageEntry({
       source: 'scheduler',
@@ -263,6 +307,9 @@ export function createScheduler({ rootDir, onRunEvent = null, resolveRuntimeCont
       env[key] = asString;
       if (asString) secretValues.push(asString);
     }
+    if (!env.OPENCODE_CONFIG && !env.OPENCODE_CONFIG_CONTENT) {
+      env.OPENCODE_CONFIG_CONTENT = String(SCHEDULER_OPENCODE_CONFIG_CONTENT);
+    }
     return {
       runtimeMode,
       env,
@@ -309,6 +356,7 @@ export function createScheduler({ rootDir, onRunEvent = null, resolveRuntimeCont
 
     let output = '';
     let spawnFailed = false;
+    let openCodeErrorSummary = null;
     const execBin = usesOpenCodeDriver ? runtime.opencodeBin : claudeBin;
     if (!execBin) {
       return { error: `runtime mode ${runtimeMode} is not supported by scheduler` };
@@ -349,9 +397,20 @@ export function createScheduler({ rootDir, onRunEvent = null, resolveRuntimeCont
       running.delete(job.id);
       run.endedAt = Date.now();
       run.exitCode = code;
-      if (run.status === 'running') run.status = code === 0 ? 'ok' : 'error';
+      if (usesOpenCodeDriver) {
+        const events = parseOpenCodeNdjsonEvents(output);
+        openCodeErrorSummary = openCodeErrorFromEvents(events);
+      }
+      if (run.status === 'running') {
+        if (openCodeErrorSummary) {
+          run.status = 'error';
+        } else {
+          run.status = code === 0 ? 'ok' : 'error';
+        }
+      }
       const redactedOutput = redactSecretsInText(output, runtime.secretValues);
-      run.summary = redactedOutput.trim().slice(0, 400);
+      const fallbackSummary = redactedOutput.trim().slice(0, 400);
+      run.summary = redactSecretsInText(openCodeErrorSummary || fallbackSummary, runtime.secretValues).slice(0, 400);
       await fsp.writeFile(logFile, redactedOutput, 'utf8').catch(() => {});
       const stored = jobs.find((j) => j.id === job.id);
       if (stored) {

@@ -1,10 +1,12 @@
 #!/usr/bin/env node
+// preflight-marker
 
 import fs from 'node:fs';
 import path from 'node:path';
 import net from 'node:net';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { deriveUserTypePolicy, getAppSettingsFile, readAppSettings } from '../interface/app-settings.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PROVIDER_SETTINGS_FILE = path.join(ROOT, 'interface', 'provider-settings.json');
@@ -107,37 +109,131 @@ function isPortFree(port) {
   });
 }
 
-async function main() {
-  console.log(`Project root: ${ROOT}`);
+function resolveProviderMode(rawMode) {
+  const mode = String(rawMode || '').trim().toLowerCase();
+  if (mode === 'anthropic-api' || mode === 'opencode' || mode === 'claude-subscription') return mode;
+  return 'claude-subscription';
+}
 
-  if (!checkLayout()) {
-    console.error('\nStartup check failed: required files/folders are missing.');
-    process.exit(1);
+function resolveBinary(command, fallback) {
+  const configured = String(command || '').trim() || fallback;
+  const hasPath = configured.includes(path.sep);
+  const candidates = hasPath
+    ? [path.resolve(configured), path.resolve(ROOT, configured)]
+    : String(process.env.PATH || '').split(path.delimiter).filter(Boolean).map((dir) => path.join(dir, configured));
+  for (const candidate of [...new Set(candidates)]) {
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return { resolvedPath: candidate, reason: null };
+    } catch {
+      // keep searching
+    }
+  }
+  return {
+    resolvedPath: null,
+    reason: hasPath ? `configured path is not executable: ${configured}` : `${configured} binary not found in PATH`,
+  };
+}
+
+function preflightResultLine(entry) {
+  const status = entry.status === 'pass' ? 'PASS' : (entry.status === 'warn' ? 'WARN' : 'FAIL');
+  return `[${status}] ${entry.id}: ${entry.message}`;
+}
+
+async function runPreflightChecks() {
+  const checks = [];
+  const add = (id, status, message, options = {}) => checks.push({ id, status, message, blocking: options.blocking !== false, code: options.code });
+
+  const nodeMajor = Number((process.versions.node || '0').split('.')[0]);
+  add('node-version', nodeMajor >= 18 ? 'pass' : 'fail', nodeMajor >= 18 ? `Node ${process.versions.node} is supported` : `Node ${process.versions.node} is not supported (need >=18)`);
+
+  const missingLayout = REQUIRED.filter((rel) => !exists(rel));
+  add('required-layout', missingLayout.length ? 'fail' : 'pass', missingLayout.length ? `Missing required paths: ${missingLayout.join(', ')}` : 'Required project layout exists');
+
+  const validate = spawnSync(process.execPath, ['scripts/validate.mjs'], { cwd: ROOT, stdio: 'ignore' });
+  add('repository-validate', validate.status === 0 ? 'pass' : 'fail', validate.status === 0 ? 'scripts/validate.mjs passed' : 'scripts/validate.mjs failed');
+
+  const missingPackages = ['node-pty', 'ws', 'xterm', '@xterm/addon-fit']
+    .filter((pkg) => !fs.existsSync(path.join(ROOT, 'node_modules', ...pkg.split('/'))));
+  add('runtime-dependencies', missingPackages.length ? 'fail' : 'pass', missingPackages.length ? `Missing runtime dependencies: ${missingPackages.join(', ')} (run npm ci)` : 'Runtime dependencies are installed');
+
+  const port = Number(process.env.PORT || 4011);
+  const chatPort = Number(process.env.CHAT_PORT || 4012);
+  const interfacePortFree = await isPortFree(port);
+  const chatPortFree = await isPortFree(chatPort);
+  add('interface-port', interfacePortFree ? 'pass' : 'fail', interfacePortFree ? `Interface port ${port} is free` : `Interface port ${port} is in use (run node scripts/stop.mjs)`);
+  add('chat-port', chatPortFree ? 'pass' : 'warn', chatPortFree ? `Chat port ${chatPort} is free` : `Chat port ${chatPort} is in use (chat startup will be skipped)`, { blocking: false });
+
+  const appSettings = await readAppSettings(ROOT);
+  const userPolicy = deriveUserTypePolicy(appSettings.userType);
+  add(
+    'onboarding-user-type',
+    userPolicy.configured ? 'pass' : 'fail',
+    userPolicy.configured
+      ? `User type is set to ${userPolicy.userType}`
+      : `User type is not set in ${path.relative(ROOT, getAppSettingsFile(ROOT))} (open Settings -> Onboarding)`,
+    userPolicy.configured ? {} : { code: 'onboarding-user-type-missing' },
+  );
+
+  if (userPolicy.requiresGit) {
+    const git = spawnSync('git', ['--version'], { stdio: 'ignore' });
+    add('git-required', git.status === 0 ? 'pass' : 'fail', git.status === 0 ? 'Git is available for collaborator mode' : 'Git is required for collaborator mode');
+  } else {
+    add('git-required', 'warn', 'Git check skipped (required only for collaborator user type)', { blocking: false });
   }
 
-  if (!runValidate()) {
-    console.error('\nStartup check failed: scripts/validate.mjs returned errors.');
+  const providerSettings = readProviderSettings();
+  const mode = resolveProviderMode(providerSettings.runtimeMode);
+  const claude = resolveBinary(process.env.CLAUDE_BIN || 'claude', 'claude');
+  const opencode = resolveBinary(providerSettings.opencodeBin || process.env.OPENCODE_BIN || 'opencode', 'opencode');
+  const hasAnthropicKey = Boolean(String(providerSettings.envVault.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY || '').trim());
+  const providerReady = mode === 'opencode'
+    ? Boolean(opencode.resolvedPath)
+    : Boolean(claude.resolvedPath) && (mode !== 'anthropic-api' || hasAnthropicKey);
+  const providerMessage = providerReady
+    ? `Provider ${mode} local readiness passed`
+    : (mode === 'opencode'
+      ? opencode.reason
+      : (mode === 'anthropic-api' && !hasAnthropicKey
+        ? 'ANTHROPIC_API_KEY is missing'
+        : claude.reason));
+  add('provider-local-readiness', providerReady ? 'pass' : 'fail', providerReady ? providerMessage : `Provider ${mode} local readiness failed: ${providerMessage}`);
+
+  const blockingFailures = checks.filter((entry) => entry.status === 'fail' && entry.blocking);
+  return {
+    checks,
+    blockingFailures,
+    exitCode: blockingFailures.length ? 1 : 0,
+  };
+}
+
+async function main() {
+  console.log(`Project root: ${ROOT}`);
+  const preflight = await runPreflightChecks();
+  console.log('\nPreflight checks:');
+  for (const entry of preflight.checks) console.log(preflightResultLine(entry));
+  if (preflight.blockingFailures.length) {
+    console.log('\nBlocking failures:');
+    for (const failure of preflight.blockingFailures) {
+      console.log(`- ${failure.id}: ${failure.message}`);
+    }
+    console.log('\nResult: FAIL');
+  } else {
+    console.log('\nResult: PASS');
+  }
+  if (checkOnly) process.exit(preflight.exitCode);
+
+  const onlyUserTypeMissing = preflight.blockingFailures.length > 0
+    && preflight.blockingFailures.every((failure) => failure.code === 'onboarding-user-type-missing');
+  if (preflight.blockingFailures.length && !onlyUserTypeMissing) {
+    console.error('\nStartup aborted: blocking preflight failures found.');
     process.exit(1);
+  }
+  if (onlyUserTypeMissing) {
+    console.warn('\nContinuing startup for onboarding remediation: set user type in Settings -> Onboarding.');
   }
 
   const port = Number(process.env.PORT || 4011);
-  const free = await isPortFree(port);
-  if (checkOnly) {
-    if (free) {
-      console.log(`\nPort check: ${port} is free.`);
-    } else {
-      console.log(`\nPort check: ${port} is currently in use.`);
-      console.log('Use node scripts/stop.mjs before starting a new instance.');
-    }
-    console.log('\nCheck-only passed.');
-    process.exit(0);
-  }
-
-  if (!free) {
-    console.error(`\nPort ${port} is already in use.`);
-    console.error('Run: node scripts/stop.mjs');
-    process.exit(1);
-  }
 
   const env = {
     ...process.env,

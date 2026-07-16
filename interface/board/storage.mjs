@@ -233,7 +233,19 @@ export function createBoardStorage({ rootDir, resolveRoots = null }) {
     return path.join(scopeDirs(scope).tasksDir, `${id}.json`);
   }
 
-  async function readProject(scope, id) {
+  function legacyProjectFile(id) {
+    return path.join(legacyRoot, 'projects', `${id}.json`);
+  }
+
+  function legacyTaskFile(id) {
+    return path.join(legacyRoot, 'tasks', `${id}.json`);
+  }
+
+  function isSamePath(a, b) {
+    return path.resolve(String(a || '')) === path.resolve(String(b || ''));
+  }
+
+  async function readProjectPrimary(scope, id) {
     if (scope === 'team') {
       await detectTeamDivergenceForReads(scopeDirs(scope).projectsDir);
     }
@@ -245,7 +257,7 @@ export function createBoardStorage({ rootDir, resolveRoots = null }) {
     }
   }
 
-  async function readTask(scope, id) {
+  async function readTaskPrimary(scope, id) {
     if (scope === 'team') {
       await detectTeamDivergenceForReads(scopeDirs(scope).tasksDir);
     }
@@ -255,6 +267,40 @@ export function createBoardStorage({ rootDir, resolveRoots = null }) {
       if (err?.code !== 'ENOENT') throw err;
       return null;
     }
+  }
+
+  async function readProject(scope, id) {
+    const entity = await readProjectPrimary(scope, id);
+    if (entity) return entity;
+    if (scope === 'private') {
+      const primaryFile = projectFile(scope, id);
+      const legacyFile = legacyProjectFile(id);
+      if (!isSamePath(primaryFile, legacyFile)) {
+        try {
+          return await readEntity(legacyFile);
+        } catch (err) {
+          if (err?.code !== 'ENOENT') throw err;
+        }
+      }
+    }
+    return null;
+  }
+
+  async function readTask(scope, id) {
+    const entity = await readTaskPrimary(scope, id);
+    if (entity) return entity;
+    if (scope === 'private') {
+      const primaryFile = taskFile(scope, id);
+      const legacyFile = legacyTaskFile(id);
+      if (!isSamePath(primaryFile, legacyFile)) {
+        try {
+          return await readEntity(legacyFile);
+        } catch (err) {
+          if (err?.code !== 'ENOENT') throw err;
+        }
+      }
+    }
+    return null;
   }
 
   async function appendJsonl(scope, kind, record) {
@@ -319,7 +365,7 @@ export function createBoardStorage({ rootDir, resolveRoots = null }) {
     for (const name of names) {
       if (!name.endsWith('.json')) continue;
       const id = name.replace(/\.json$/i, '');
-      const existsInPrimary = await readProject('private', id);
+      const existsInPrimary = await readProjectPrimary('private', id);
       if (existsInPrimary) continue;
       const legacy = await readEntity(path.join(legacyRoot, 'projects', name)).catch(() => null);
       if (legacy) out.push(legacy);
@@ -334,7 +380,7 @@ export function createBoardStorage({ rootDir, resolveRoots = null }) {
     for (const name of names) {
       if (!name.endsWith('.json')) continue;
       const id = name.replace(/\.json$/i, '');
-      const existsInPrimary = await readTask('private', id);
+      const existsInPrimary = await readTaskPrimary('private', id);
       if (existsInPrimary) continue;
       const legacy = await readEntity(path.join(legacyRoot, 'tasks', name)).catch(() => null);
       if (legacy) out.push(legacy);
@@ -372,9 +418,23 @@ export function createBoardStorage({ rootDir, resolveRoots = null }) {
     writeTask: (scope, id, entity, options = {}) => writeEntityWithGuards(scope, 'task', id, entity, options.expectedVersion ?? null),
     deleteProject: async (scope, id) => {
       await fsp.unlink(projectFile(scope, id)).catch(() => {});
+      if (scope === 'private') {
+        const primaryFile = projectFile(scope, id);
+        const legacyFile = legacyProjectFile(id);
+        if (!isSamePath(primaryFile, legacyFile)) {
+          await fsp.unlink(legacyFile).catch(() => {});
+        }
+      }
     },
     deleteTask: async (scope, id) => {
       await fsp.unlink(taskFile(scope, id)).catch(() => {});
+      if (scope === 'private') {
+        const primaryFile = taskFile(scope, id);
+        const legacyFile = legacyTaskFile(id);
+        if (!isSamePath(primaryFile, legacyFile)) {
+          await fsp.unlink(legacyFile).catch(() => {});
+        }
+      }
     },
     appendActivity: (scope, record) => appendJsonl(scope, 'activity', record),
     appendAudit: (scope, record) => appendJsonl(scope, 'audit', record),
@@ -384,6 +444,14 @@ export function createBoardStorage({ rootDir, resolveRoots = null }) {
       const dirs = scopeDirs(scope);
       if (scope === 'team') await detectTeamDivergenceForReads(dirs.tasksDir);
       const all = await listEntities(dirs.tasksDir);
+      if (scope === 'private') {
+        const byId = new Map(all.map((item) => [item?.id, item]));
+        const legacy = await listLegacyPrivateTasks();
+        for (const item of legacy) {
+          if (!byId.has(item?.id)) byId.set(item?.id, item);
+        }
+        return [...byId.values()].filter((t) => t.project_id === projectId);
+      }
       return all.filter((t) => t.project_id === projectId);
     },
   };

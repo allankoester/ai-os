@@ -418,6 +418,9 @@ Ziel: Auf einer A4-Seite alles untergebracht. Margins minimal (`@page { margin: 
 
 ## Qualitätsregeln
 
+- **Em-Dash-Verbot im Fließtext (absolut):** Niemals Em-Dashes (—) in Fließtext-Sätzen. Gedankeneinschübe umformulieren: Komma, Doppelpunkt oder Punkt setzen. **Erlaubt** ist der Em-Dash als reiner Trenner (Überschriften, Meta-Zeilen, Titel wie „Modul 3 — Landingpage"). En-Dash (–) für Bereiche („1,5–2 PT", „Monat 1–2").
+- **Review-Pflicht (immer):** Vor dem finalen PDF-Export den internen Review-Agenten (`rosa-review`) über den Dokumenttext laufen lassen: Klarheit, Ton, Redundanz, AI-Slop, Em-Dash-Check. Erst nach eingearbeitetem Review exportieren und dem User vorlegen.
+- **CRM-Standard:** Wird in einem Dokument ein CRM genannt, ist es **Twenty** (https://twenty.com/). Keine anderen CRM-Produkte vorschlagen; wir setzen Twenty auch selbst ein.
 - **Kein Platzhaltertext** — immer echten, vollständigen Inhalt schreiben
 - **Tone:** Direkt, pragmatisch, kompetent — wie die Brand Voice von Steadymade (kein Berater-Deutsch, kein Hype)
 - **Datum:** Falls nicht angegeben, heutiges Datum verwenden

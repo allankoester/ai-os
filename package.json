@@ -5,7 +5,13 @@
   "description": "Steadymade AI OS chat runtime terminal dependencies",
   "scripts": {
     "test:board": "node --test tests/board/*.test.mjs",
-    "test": "node --test tests/board/*.test.mjs"
+    "test:settings": "node --test tests/board/app-settings.test.mjs",
+    "test:startup": "node --test tests/board/app-settings.test.mjs",
+    "test": "node --test tests/board/*.test.mjs",
+    "preflight": "node scripts/start.mjs --check-only"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",

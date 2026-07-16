@@ -2,9 +2,13 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 const APP_SETTINGS_FILE = 'interface/app-settings.json';
 const MAX_PATH_LENGTH = 2048;
+export const APP_SETTINGS_SCHEMA_VERSION = 2;
+export const APP_USER_TYPES = Object.freeze(['single-user', 'team-user', 'collaborator']);
+const APP_USER_TYPE_SET = new Set(APP_USER_TYPES);
 
 export function defaultPrivateBoardRoot() {
   return path.join(os.homedir(), '.steadymade-ai-os', 'board-private');
@@ -19,10 +23,48 @@ function cleanPathValue(value) {
   return String(value).trim();
 }
 
+function cleanUserType(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  return APP_USER_TYPE_SET.has(raw) ? raw : '';
+}
+
+function cleanSchemaVersion(value) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 100) return APP_SETTINGS_SCHEMA_VERSION;
+  return parsed;
+}
+
+export function deriveUserTypePolicy(userType) {
+  const type = cleanUserType(userType);
+  return {
+    userType: type,
+    configured: Boolean(type),
+    isSingleUser: type === 'single-user',
+    isTeamUser: type === 'team-user',
+    isCollaborator: type === 'collaborator',
+    requiresGit: type === 'collaborator',
+    sharedKnowledgeExpected: type === 'team-user' || type === 'collaborator',
+    canUseTeamBoard: type === 'team-user' || type === 'collaborator',
+  };
+}
+
 export function validateAppSettingsPayload(body) {
   const errors = [];
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     return ['body must be an object'];
+  }
+  if (body.schemaVersion !== undefined && !Number.isInteger(Number(body.schemaVersion))) {
+    errors.push('schemaVersion must be an integer');
+  }
+  if (body.userType !== undefined && body.userType !== null) {
+    if (typeof body.userType !== 'string') {
+      errors.push('userType must be a string');
+    } else {
+      const cleaned = String(body.userType).trim().toLowerCase();
+      if (cleaned && !APP_USER_TYPE_SET.has(cleaned)) {
+        errors.push(`userType must be one of: ${APP_USER_TYPES.join(', ')}`);
+      }
+    }
   }
   for (const key of ['personalKnowledgeRoot', 'sharedKnowledgeRoot', 'privateBoardRoot', 'teamBoardRoot']) {
     if (body[key] !== undefined && typeof body[key] !== 'string' && body[key] !== null) {
@@ -39,6 +81,8 @@ export function validateAppSettingsPayload(body) {
 
 export function sanitizeAppSettings(input) {
   return {
+    schemaVersion: cleanSchemaVersion(input?.schemaVersion),
+    userType: cleanUserType(input?.userType),
     personalKnowledgeRoot: cleanPathValue(input?.personalKnowledgeRoot),
     sharedKnowledgeRoot: cleanPathValue(input?.sharedKnowledgeRoot),
     privateBoardRoot: cleanPathValue(input?.privateBoardRoot),
@@ -104,23 +148,41 @@ export async function readAppSettings(rootDir) {
   }
 }
 
-export async function writeAppSettings(rootDir, input) {
+export async function writeAppSettings(rootDir, input, options = {}) {
   const file = getAppSettingsFile(rootDir);
-  const settings = sanitizeAppSettings(input);
-  await fsp.writeFile(file, JSON.stringify(settings, null, 2), { encoding: 'utf8', mode: 0o600 });
+  const merge = options.merge !== false;
+  const previous = merge ? await readAppSettings(rootDir) : sanitizeAppSettings({});
+  const settings = sanitizeAppSettings(merge ? { ...previous, ...(input || {}) } : input);
+
+  const dir = path.dirname(file);
+  await fsp.mkdir(dir, { recursive: true });
+  const tmp = path.join(dir, `.${path.basename(file)}.${randomUUID()}.tmp`);
+  const fh = await fsp.open(tmp, 'w', 0o600);
+  try {
+    await fh.writeFile(JSON.stringify(settings, null, 2), 'utf8');
+    await fh.sync();
+  } finally {
+    await fh.close();
+  }
+  await fsp.rename(tmp, file);
+  try {
+    const dirHandle = await fsp.open(dir, 'r');
+    try { await dirHandle.sync(); } finally { await dirHandle.close(); }
+  } catch {}
   try { await fsp.chmod(file, 0o600); } catch {}
   return settings;
 }
 
 export function buildAppSettingsStatus({ rootDir, settings, activeRuntimeRoots }) {
+  const sanitizedSettings = sanitizeAppSettings(settings);
   const fallbackSharedRoot = path.join(rootDir, 'knowledge');
   const fallbackPersonalRoot = path.join(rootDir, 'knowledge', 'personal');
   const fallbackPrivateBoardRoot = defaultPrivateBoardRoot();
 
-  const savedSharedRoot = normalizeConfiguredPath(rootDir, settings.sharedKnowledgeRoot) || fallbackSharedRoot;
-  const savedPersonalRoot = normalizeConfiguredPath(rootDir, settings.personalKnowledgeRoot) || fallbackPersonalRoot;
-  const savedPrivateBoardRoot = normalizeConfiguredPath(rootDir, settings.privateBoardRoot) || fallbackPrivateBoardRoot;
-  const savedTeamBoardRoot = normalizeConfiguredPath(rootDir, settings.teamBoardRoot);
+  const savedSharedRoot = normalizeConfiguredPath(rootDir, sanitizedSettings.sharedKnowledgeRoot) || fallbackSharedRoot;
+  const savedPersonalRoot = normalizeConfiguredPath(rootDir, sanitizedSettings.personalKnowledgeRoot) || fallbackPersonalRoot;
+  const savedPrivateBoardRoot = normalizeConfiguredPath(rootDir, sanitizedSettings.privateBoardRoot) || fallbackPrivateBoardRoot;
+  const savedTeamBoardRoot = normalizeConfiguredPath(rootDir, sanitizedSettings.teamBoardRoot);
 
   const activeSharedRoot = activeRuntimeRoots?.sharedKnowledgeRoot || fallbackSharedRoot;
   const activePersonalRoot = activeRuntimeRoots?.personalKnowledgeRoot || fallbackPersonalRoot;
@@ -145,7 +207,7 @@ export function buildAppSettingsStatus({ rootDir, settings, activeRuntimeRoots }
 
   return {
     path: APP_SETTINGS_FILE,
-    settings: sanitizeAppSettings(settings),
+    settings: sanitizedSettings,
     savedEffectiveRoots: {
       shared: toRootStatus(savedSharedRoot, true),
       personal: toRootStatus(savedPersonalRoot, false),

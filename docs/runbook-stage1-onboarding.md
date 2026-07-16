@@ -6,8 +6,15 @@ Reproducible setup for one user on one machine. Target time: under 15 minutes.
 
 - macOS / Linux / Windows with WSL
 - Node.js 18+ (`node --version`)
-- git
 - Claude Code (CLI, desktop app or IDE extension), signed in
+
+### User type matrix
+
+| Requirement | single-user | team-user | collaborator |
+|---|---:|---:|---:|
+| `npm ci` | required | required | required |
+| git | optional | optional | required |
+| shared knowledge roots | optional | recommended | recommended |
 
 ## Setup steps
 
@@ -16,6 +23,7 @@ Reproducible setup for one user on one machine. Target time: under 15 minutes.
    ```bash
    git clone <steadymade-master repo url>
    cd steadymade-master/apps/internal/steadymade-ai-os
+   npm ci
    ```
 
 2. **Open as Claude Code project**

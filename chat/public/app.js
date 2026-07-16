@@ -110,60 +110,127 @@ function safeHref(url) {
   return allowed ? esc(href) : null;
 }
 
+// Inline formatting. Input is already HTML-escaped. Order matters: protect code
+// spans first, then links, then emphasis — so no raw markdown markers survive
+// into the rendered bubble (the "MD relics" we are eliminating).
 function inline(s) {
-  return s
-    .replace(/`([^`]+)`/g, (_, c) => `<code>${c}</code>`)
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+  const codes = [];
+  let out = s.replace(/`([^`]+)`/g, (_, c) => {
+    codes.push(c);
+    return `\u0000${codes.length - 1}\u0000`;
+  });
+  out = out
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, href) => {
+      const safe = safeHref(href);
+      return safe ? `<img src="${safe}" alt="${alt}" loading="lazy">` : alt;
+    })
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => {
       const safe = safeHref(href);
       if (!safe) return label;
       return `<a href="${safe}" target="_blank" rel="noopener noreferrer">${label}</a>`;
-    });
+    })
+    .replace(/(\*\*|__)(?=\S)([\s\S]*?\S)\1/g, '<strong>$2</strong>')
+    .replace(/~~(?=\S)([\s\S]*?\S)~~/g, '<del>$1</del>')
+    .replace(/(^|[\s(])\*(?=\S)([^*\n]*?\S)\*(?=[\s).,;:!?]|$)/g, '$1<em>$2</em>')
+    .replace(/(^|[\s(])_(?=\S)([^_\n]*?\S)_(?=[\s).,;:!?]|$)/g, '$1<em>$2</em>');
+  // restore protected code spans
+  return out.replace(/\u0000(\d+)\u0000/g, (_, n) => `<code>${codes[+n]}</code>`);
 }
 
+// A small, dependency-free block renderer covering the Markdown that agents
+// actually emit: headings h1–h6, fenced code, ordered/unordered nested lists,
+// blockquotes, GFM tables, horizontal rules, and paragraphs. The goal is zero
+// stray markers ("relics") in the output.
 function renderMd(src) {
-  const lines = esc(src).split('\n');
+  return renderBlocks(esc(src).replace(/\r\n?/g, '\n'));
+}
+
+// Core block renderer. Operates on already-escaped text so it can recurse
+// (e.g. blockquote bodies) without double-escaping.
+function renderBlocks(escaped) {
+  const lines = escaped.split('\n');
   let html = '';
   let i = 0;
   let para = [];
   const flush = () => {
-    if (para.length) {
-      html += `<p>${inline(para.join('<br>'))}</p>`;
-      para = [];
-    }
+    if (para.length) { html += `<p>${inline(para.join('<br>'))}</p>`; para = []; }
   };
+  const isTableSep = (l) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$/.test(l);
+  const splitRow = (l) => l.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map((c) => c.trim());
+
   while (i < lines.length) {
     const l = lines[i];
-    if (/^```/.test(l)) {
+
+    // fenced code block
+    if (/^\s*```/.test(l)) {
       flush();
       const code = [];
       i += 1;
-      while (i < lines.length && !/^```/.test(lines[i])) code.push(lines[i++]);
+      while (i < lines.length && !/^\s*```/.test(lines[i])) code.push(lines[i++]);
       html += `<pre><code>${code.join('\n')}</code></pre>`;
       i += 1;
       continue;
     }
-    if (/^#{1,3} /.test(l)) {
+
+    // horizontal rule
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(l)) {
       flush();
-      const lvl = l.match(/^#+/)[0].length;
-      html += `<h${lvl}>${inline(l.replace(/^#+ /, ''))}</h${lvl}>`;
+      html += '<hr>';
       i += 1;
       continue;
     }
-    if (/^\s*[-*] /.test(l)) {
+
+    // heading (ATX, 1–6)
+    const h = l.match(/^(#{1,6})\s+(.*)$/);
+    if (h) {
       flush();
-      const items = [];
-      while (i < lines.length && /^\s*[-*] /.test(lines[i])) {
-        items.push(`<li>${inline(lines[i++].replace(/^\s*[-*] /, ''))}</li>`);
+      const lvl = h[1].length;
+      html += `<h${lvl}>${inline(h[2].replace(/\s+#+\s*$/, ''))}</h${lvl}>`;
+      i += 1;
+      continue;
+    }
+
+    // GFM table: header row + separator row
+    if (l.includes('|') && i + 1 < lines.length && isTableSep(lines[i + 1])) {
+      flush();
+      const headers = splitRow(l);
+      i += 2;
+      const rows = [];
+      while (i < lines.length && lines[i].includes('|') && lines[i].trim() !== '') {
+        rows.push(splitRow(lines[i]));
+        i += 1;
       }
-      html += `<ul>${items.join('')}</ul>`;
+      html += '<table><thead><tr>'
+        + headers.map((c) => `<th>${inline(c)}</th>`).join('')
+        + '</tr></thead><tbody>'
+        + rows.map((r) => '<tr>' + headers.map((_, ci) => `<td>${inline(r[ci] || '')}</td>`).join('') + '</tr>').join('')
+        + '</tbody></table>';
       continue;
     }
-    if (l.trim() === '') {
+
+    // blockquote (collapse consecutive > lines). NB: source is HTML-escaped up
+    // front, so a leading ">" now reads as "&gt;".
+    if (/^\s*&gt;\s?/.test(l)) {
       flush();
-      i += 1;
+      const quote = [];
+      while (i < lines.length && /^\s*&gt;\s?/.test(lines[i])) {
+        quote.push(lines[i].replace(/^\s*&gt;\s?/, ''));
+        i += 1;
+      }
+      html += `<blockquote>${renderBlocks(quote.join('\n'))}</blockquote>`;
       continue;
     }
+
+    // lists (ordered / unordered) with indentation-based nesting
+    if (/^\s*([-*+]|\d+[.)])\s+/.test(l)) {
+      const consumed = renderList(lines, i);
+      html += consumed.html;
+      i = consumed.next;
+      continue;
+    }
+
+    if (l.trim() === '') { flush(); i += 1; continue; }
+
     para.push(l);
     i += 1;
   }
@@ -171,9 +238,49 @@ function renderMd(src) {
   return html;
 }
 
+// Recursive list parser. Groups consecutive list items at the current indent
+// level; deeper-indented items become nested lists inside the previous <li>.
+function renderList(lines, start) {
+  const first = lines[start].match(/^(\s*)([-*+]|\d+[.)])\s+/);
+  const baseIndent = first[1].length;
+  const ordered = /\d/.test(first[2]);
+  const tag = ordered ? 'ol' : 'ul';
+  let i = start;
+  let out = `<${tag}>`;
+  const sameType = (mk) => /\d/.test(mk) === ordered;
+  while (i < lines.length) {
+    const m = lines[i].match(/^(\s*)([-*+]|\d+[.)])\s+(.*)$/);
+    if (!m) {
+      // bridge a single blank line only if the next item continues THIS list
+      // (same indent + same marker type); otherwise the list ends here
+      const nx = i + 1 < lines.length && lines[i + 1].match(/^(\s*)([-*+]|\d+[.)])\s+/);
+      if (lines[i].trim() === '' && nx && nx[1].length >= baseIndent && (nx[1].length > baseIndent || sameType(nx[2]))) { i += 1; continue; }
+      break;
+    }
+    const indent = m[1].length;
+    if (indent < baseIndent) break;
+    // a different marker type at the same level begins a separate list
+    if (indent === baseIndent && !sameType(m[2])) break;
+    if (indent > baseIndent) {
+      const nested = renderList(lines, i);
+      out = out.replace(/<\/li>$/, '') + nested.html + '</li>';
+      i = nested.next;
+      continue;
+    }
+    out += `<li>${inline(m[3])}</li>`;
+    i += 1;
+  }
+  out += `</${tag}>`;
+  return { html: out, next: i };
+}
+
+// While streaming, close any open code fence and drop a dangling table
+// separator so a half-arrived block never renders as raw markers.
 function mdStreamSafe(src) {
-  const fences = (src.match(/^```/gm) || []).length;
-  return fences % 2 ? src + '\n```' : src;
+  let s = src;
+  const fences = (s.match(/^\s*```/gm) || []).length;
+  if (fences % 2) s += '\n```';
+  return s;
 }
 
 function renderStreamingMd(bubble, raw) {
@@ -248,11 +355,69 @@ function addAssistantShell(speaker, withTyping = true) {
   return row;
 }
 
-function addToolChip(activity, d) {
-  const chip = document.createElement('span');
-  chip.className = `chip${d.sub ? ' sub' : ''}`;
-  chip.textContent = d.name === 'Task' ? `→ ${d.detail || 'Task'}` : `${d.name}${d.detail ? ` · ${d.detail}` : ''}`;
-  activity.appendChild(chip);
+// Turn a raw subagent slug (e.g. "clara-writer") into a full display name.
+// Prefer the known roster ("Clara — Writer"); otherwise prettify the whole
+// slug ("kira-image-generation-agent" → "Kira Image Generation Agent") —
+// never truncate to a fragment.
+function prettyAgent(slug) {
+  const raw = String(slug || '').trim();
+  const id = raw.split('-')[0].toLowerCase();
+  const a = state.agentById.get(id);
+  if (a) return a.function ? `${a.name} — ${a.function}` : a.name;
+  if (!raw) return 'Subagent';
+  return raw.replace(/[-_]+/g, ' ').replace(/(^|\s)\S/g, (c) => c.toUpperCase());
+}
+
+function prettyServer(server) {
+  return String(server || '')
+    .replace(/^(claude_ai_|plugin_)/i, '')
+    .replace(/_/g, ' ')
+    .trim() || 'MCP';
+}
+
+// Classify a tool event into a typed trace token so the chat can visually
+// distinguish agent hand-offs, skills, MCP tools and routine file/web calls.
+function classifyTool(d) {
+  const name = String(d.name || '');
+  const detail = String(d.detail || '');
+  // Only a real Task call is an agent hand-off. Tools that a subagent runs
+  // (d.sub) keep their own type and are shown indented under the hand-off.
+  if (name === 'Task') {
+    const [who, ...rest] = detail.split(' · ');
+    const agentName = prettyAgent(who);
+    return { kind: 'agent', type: 'AGENT', target: agentName, note: rest.join(' · '), initial: (agentName[0] || 'A').toUpperCase() };
+  }
+  if (name === 'Skill') return { kind: 'skill', type: 'SKILL', target: detail || 'skill' };
+  if (name.startsWith('mcp__')) {
+    const parts = name.slice(5).split('__');
+    return { kind: 'mcp', type: 'MCP', target: prettyServer(parts[0]), note: parts.slice(1).join(' ').replace(/_/g, ' ') };
+  }
+  if (name === 'Read' || name === 'Glob') return { kind: 'read', type: 'READ', target: detail || name };
+  if (name === 'Grep') return { kind: 'read', type: 'SEARCH', target: detail || 'grep' };
+  if (name === 'Write' || name === 'Edit') return { kind: 'edit', type: name.toUpperCase(), target: detail };
+  if (name === 'WebFetch' || name === 'WebSearch') return { kind: 'web', type: 'WEB', target: detail || name };
+  if (name === 'Bash') return { kind: 'bash', type: 'RUN', target: detail };
+  return { kind: 'tool', type: (name || 'TOOL').toUpperCase(), target: detail };
+}
+
+function clearActiveTrace(activity) {
+  if (activity) activity.querySelectorAll('.trace-item.active').forEach((el) => el.classList.remove('active'));
+}
+
+function addToolChip(activity, d, { active = false } = {}) {
+  const c = classifyTool(d);
+  const item = document.createElement('span');
+  item.className = `trace-item ti-${c.kind}${d.sub ? ' sub' : ''}`;
+  const glyph = c.kind === 'agent'
+    ? `<span class="ti-avatar">${esc(c.initial)}</span>`
+    : '<span class="ti-dot"></span>';
+  const note = c.note ? `<span class="ti-note">${esc(c.note)}</span>` : '';
+  item.innerHTML = `${glyph}<span class="ti-type">${esc(c.type)}</span><span class="ti-target">${esc(c.target)}</span>${note}`;
+  if (active) {
+    clearActiveTrace(activity);
+    item.classList.add('active');
+  }
+  activity.appendChild(item);
 }
 
 function addMetaLine(shell, d) {
@@ -877,12 +1042,13 @@ function handleStreamEvent(ev, d, streamAgentId) {
     }
     case 'tool': {
       const live = ensureLive(streamAgentId || agentSel.value || 'danny');
-      addToolChip(live.activity, d);
+      addToolChip(live.activity, d, { active: true });
       scrollDown();
       break;
     }
     case 'result': {
       const live = ensureLive(streamAgentId || agentSel.value || 'danny');
+      clearActiveTrace(live.activity);
       if (live.raw) live.bubble.innerHTML = renderMd(live.raw);
       else if (d.error_text) live.bubble.innerHTML = `<em>${esc(d.error_text)}</em>`;
       addMetaLine(live.shell, d);
@@ -905,6 +1071,7 @@ function handleStreamEvent(ev, d, streamAgentId) {
       console.warn('[chat]', d.text);
       break;
     case 'done':
+      if (state.live) clearActiveTrace(state.live.activity);
       state.live = null;
       state.running = false;
       state.abort = null;
