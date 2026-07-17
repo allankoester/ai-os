@@ -3293,14 +3293,18 @@ function usageDetailsHtml(data, { compact = false } = {}) {
         const cost = e.cost_usd == null ? '—' : fmtUsd(e.cost_usd);
         const tokens = e.total_tokens == null ? '—' : `${fmtInt(e.total_tokens)} tokens`;
         return `
-        <div class="list-row" style="cursor:default">
-          ${badge}
-          <span class="list-title">${title}</span>
-          <span class="list-meta">${esc(e.model || 'default')}</span>
-          <span class="list-meta">${duration}</span>
-          <span class="list-meta">${cost}</span>
-          <span class="list-meta">${tokens}</span>
-          <span class="list-meta" title="${esc(e.timestamp || '')}">${e.timestamp ? timeAgo(Date.parse(e.timestamp)) : '—'}</span>
+        <div class="list-row usage-row" style="cursor:default">
+          <div class="usage-row-top">
+            ${badge}
+            <span class="list-title">${title}</span>
+            <span class="list-meta" title="${esc(e.timestamp || '')}">${e.timestamp ? timeAgo(Date.parse(e.timestamp)) : '—'}</span>
+          </div>
+          <div class="usage-row-meta">
+            <span class="list-meta">${esc(e.model || 'default')}</span>
+            <span class="list-meta">${duration}</span>
+            <span class="list-meta">${cost}</span>
+            <span class="list-meta">${tokens}</span>
+          </div>
         </div>`;
       }).join('') : '<div class="stat-note">No usage recorded yet. Run one chat turn or scheduler job to create the first entry.</div>'}
     </div>

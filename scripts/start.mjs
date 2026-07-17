@@ -172,7 +172,7 @@ async function runPreflightChecks() {
     userPolicy.configured
       ? `User type is set to ${userPolicy.userType}`
       : `User type is not set in ${path.relative(ROOT, getAppSettingsFile(ROOT))} (open Settings -> Onboarding)`,
-    userPolicy.configured ? {} : { code: 'onboarding-user-type-missing' },
+    userPolicy.configured ? {} : { code: 'onboarding-user-type-missing', blocking: false },
   );
 
   if (userPolicy.requiresGit) {
@@ -223,14 +223,13 @@ async function main() {
   }
   if (checkOnly) process.exit(preflight.exitCode);
 
-  const onlyUserTypeMissing = preflight.blockingFailures.length > 0
-    && preflight.blockingFailures.every((failure) => failure.code === 'onboarding-user-type-missing');
-  if (preflight.blockingFailures.length && !onlyUserTypeMissing) {
+  if (preflight.blockingFailures.length) {
     console.error('\nStartup aborted: blocking preflight failures found.');
     process.exit(1);
   }
-  if (onlyUserTypeMissing) {
-    console.warn('\nContinuing startup for onboarding remediation: set user type in Settings -> Onboarding.');
+  const userTypeMissing = preflight.checks.some((entry) => entry.code === 'onboarding-user-type-missing');
+  if (userTypeMissing) {
+    console.warn('\nOnboarding incomplete: user type not set. Startup continues; set it in Settings -> Onboarding.');
   }
 
   const port = Number(process.env.PORT || 4011);

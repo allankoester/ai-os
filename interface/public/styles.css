@@ -507,6 +507,11 @@ input, textarea, select { font-family: inherit; }
   color: var(--headline);
 }
 .list-row:last-child { border-bottom: none; }
+
+.usage-row { flex-direction: column; align-items: stretch; gap: 4px; }
+.usage-row-top { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.usage-row-top .list-title { flex: 1; }
+.usage-row-meta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .list-row:hover .list-title { color: var(--green-light); }
 .list-title { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .list-meta { font-family: var(--font-mono); font-size: 9.5px; color: var(--muted); letter-spacing: 0.06em; white-space: nowrap; }
