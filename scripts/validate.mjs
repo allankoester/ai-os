@@ -236,7 +236,7 @@ function parseWorkflowListFromDoc(file) {
   if (!exists(file)) return [];
   const text = read(file);
   const out = new Set();
-  const known = ['strategy_review', 'knowledge_retrieval', 'knowledge_intake', 'setup_profile', 'marketing_content', 'proposal', 'delivery', 'document', 'creative_image', 'calendar_planning', 'security_audit', 'dev_spec', 'multi_department'];
+  const known = ['strategy_review', 'knowledge_retrieval', 'knowledge_intake', 'transcript_intake', 'setup_profile', 'marketing_content', 'proposal', 'delivery', 'document', 'creative_image', 'calendar_planning', 'security_audit', 'dev_spec', 'multi_department'];
   for (const m of text.matchAll(/`([a-z_]+)`/g)) {
     const id = m[1];
     if (known.includes(id)) {
@@ -250,7 +250,7 @@ function parseWorkflowListFromDoc(file) {
   return [...out];
 }
 
-const canonicalWorkflowIds = ['strategy_review', 'knowledge_retrieval', 'knowledge_intake', 'setup_profile', 'marketing_content', 'proposal', 'delivery', 'document', 'creative_image', 'calendar_planning', 'security_audit', 'dev_spec', 'multi_department'];
+const canonicalWorkflowIds = ['strategy_review', 'knowledge_retrieval', 'knowledge_intake', 'transcript_intake', 'setup_profile', 'marketing_content', 'proposal', 'delivery', 'document', 'creative_image', 'calendar_planning', 'security_audit', 'dev_spec', 'multi_department'];
 const dataWorkflowIds = [...dataJs.matchAll(/id:\s*'([a-z_]+)'/g)].map((m) => m[1]);
 for (const id of canonicalWorkflowIds) {
   check(`workflow exists in interface/public/data.js: ${id}`, dataWorkflowIds.includes(id));

@@ -130,10 +130,38 @@ export function createScheduler({ rootDir, onRunEvent = null, resolveRuntimeCont
   const running = new Map();   // jobId -> child process
   const lastFired = new Map(); // jobId -> minute key
 
+  // Per-job override of the read-only default tool list. Comma-separated tool
+  // specs, each "Tool" or "Tool(scope)" — e.g. "Read,Skill,Write(./knowledge/inbox/transcripts/**)".
+  // The global memory disallow list still applies on top of any override.
+  const ALLOWED_TOOL_SPEC = /^[A-Za-z][A-Za-z0-9_]*(\([^()]*\))?$/;
+
+  function normalizeAllowedTools(value) {
+    if (value === undefined || value === null || String(value).trim() === '') return null;
+    return String(value).split(',').map((t) => t.trim()).filter(Boolean).join(',');
+  }
+
   function validateJob(input) {
     const errors = [];
     if (!input.name || !String(input.name).trim()) errors.push('name is required');
     if (!input.prompt || !String(input.prompt).trim()) errors.push('prompt is required');
+    if (input.allowedTools !== undefined && input.allowedTools !== null && String(input.allowedTools).trim() !== '') {
+      const specs = String(input.allowedTools).split(',').map((t) => t.trim()).filter(Boolean);
+      if (!specs.length || specs.some((t) => !ALLOWED_TOOL_SPEC.test(t))) {
+        errors.push('allowedTools must be a comma-separated list of tool specs like "Read" or "Write(./path/**)"');
+      } else {
+        // High-risk specs are rejected server-side (Simon review 2026-07-18):
+        // no Bash, no unscoped or root-scoped Write/Edit, no WebFetch alongside write access.
+        const broadScope = /^(Write|Edit)(\(\s*(\.?\/?\*\*?|\/|\.\/)?\s*\))?$/;
+        for (const s of specs) {
+          if (/^Bash\b/.test(s)) errors.push('allowedTools override must not include Bash');
+          if (broadScope.test(s)) errors.push(`allowedTools: ${s.replace(/\(.*/, '')} needs a narrow scope, e.g. Write(./knowledge/inbox/transcripts/**)`);
+        }
+        const hasWrite = specs.some((s) => /^(Write|Edit)\(/.test(s));
+        if (hasWrite && specs.some((s) => /^WebFetch\b/.test(s))) {
+          errors.push('allowedTools override must not combine WebFetch with Write/Edit access');
+        }
+      }
+    }
     const type = input.scheduleType || 'cron';
     if (type === 'once') {
       const runAt = Number(input.runAt);
@@ -350,7 +378,7 @@ export function createScheduler({ rootDir, onRunEvent = null, resolveRuntimeCont
       ? ['run', buildPrompt(job), '--format', 'json']
       : ['-p', buildPrompt(job), '--output-format', 'text',
         '--permission-mode', SCHEDULER_PERMISSION_MODE,
-        '--allowedTools', SCHEDULER_ALLOWED_TOOLS,
+        '--allowedTools', job.allowedTools || SCHEDULER_ALLOWED_TOOLS,
         '--disallowedTools', 'Write(./memory/MEMORY.md),Edit(./memory/MEMORY.md)'];
     if (job.model && usesClaudeDriver) args.push('--model', job.model);
 
@@ -485,9 +513,12 @@ export function createScheduler({ rootDir, onRunEvent = null, resolveRuntimeCont
         scheduleType: input.scheduleType === 'once' ? 'once' : 'cron',
         schedule: String(input.schedule || '').trim(),
         runAt: input.scheduleType === 'once' ? Number(input.runAt) : null,
-        enabled: input.enabled !== false,
+        // Jobs with a widened tool list start disabled; enabling is a separate,
+        // deliberate step via UI/API after review (Simon review 2026-07-18).
+        enabled: normalizeAllowedTools(input.allowedTools) ? false : input.enabled !== false,
         timeoutMinutes: Number(input.timeoutMinutes ?? 15),
         model: input.model || null,
+        allowedTools: normalizeAllowedTools(input.allowedTools),
         meta: input.meta && typeof input.meta === 'object' && !Array.isArray(input.meta) ? input.meta : null,
         createdAt: Date.now(),
         lastRun: null,
@@ -507,6 +538,7 @@ export function createScheduler({ rootDir, onRunEvent = null, resolveRuntimeCont
       merged.schedule = String(merged.schedule || '').trim();
       merged.runAt = merged.scheduleType === 'once' ? Number(merged.runAt) : null;
       merged.workflow = merged.workflow || null;
+      merged.allowedTools = normalizeAllowedTools(merged.allowedTools);
       merged.meta = merged.meta && typeof merged.meta === 'object' && !Array.isArray(merged.meta) ? merged.meta : null;
       merged.timeoutMinutes = Number(merged.timeoutMinutes);
       merged.enabled = Boolean(merged.enabled);

@@ -22,6 +22,21 @@ scheduler/
 - A job runs `claude -p "<prompt>"` headless in the project root, so
   CLAUDE.md, subagents and active skills all apply. Optional per job: a
   specific subagent and a timeout (1–120 min).
+- Default tool access is read-only (`SCHEDULER_ALLOWED_TOOLS`:
+  `Read,Glob,Grep,Task,Skill,WebFetch`). A job may carry an optional
+  `allowedTools` field (comma-separated tool specs, e.g.
+  `Read,Skill,Edit(./knowledge/inbox/transcripts/**)`) that replaces the
+  default for that job only — keep write scopes as narrow as possible; the
+  memory-file disallow list always applies on top. Note: file-write scopes
+  must be expressed as `Edit(path)` rules — `Edit` rules cover all
+  file-editing tools, while `Write(path)` rules are not matched by the
+  permission checks. Per-job overrides that
+  widen write access go through a Simon review before use. Hard limits
+  (server-enforced): no `Bash`, no unscoped or root-scoped `Write`/`Edit`,
+  no `WebFetch` combined with write access. Jobs created with an override
+  start **disabled**; enabling them is a deliberate second step via UI/API.
+- `jobs.json` is read once at server start; the running server is the source
+  of truth. Disable or change jobs via UI/API, not by editing the file.
 - Jobs only run **while the interface server is running** (Stage 1/2 is
   local-first — always-on execution is Stage 4, VM runtime).
 - If the app is offline during a recurring cron window, that missed window is

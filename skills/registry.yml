@@ -118,6 +118,14 @@ skills:
     allowed_agents: [danny, ada]
     approval_required: false
 
+  transcript-intake:
+    owner: alex
+    scope: company
+    status: active
+    purpose: Transkripte aus knowledge/inbox/transcripts/ klassifizieren und Massnahmenvorschlaege erzeugen (Ablage, To-dos, Dokument-Patches); Umsetzung nur nach User-Freigabe.
+    allowed_agents: [danny, mara]
+    approval_required: true
+
   steadymade-docs:
     owner: alex
     scope: company

@@ -7,7 +7,7 @@
 Name and role.
 
 **Workflow Type:**
-strategy_review / knowledge_retrieval / knowledge_intake / setup_profile / marketing_content / proposal / delivery / document / creative_image / calendar_planning / security_audit / dev_spec / multi_department
+strategy_review / knowledge_retrieval / knowledge_intake / transcript_intake / setup_profile / marketing_content / proposal / delivery / document / creative_image / calendar_planning / security_audit / dev_spec / multi_department
 
 **Task:**
 What the agent should do.
