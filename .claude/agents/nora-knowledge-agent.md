@@ -47,7 +47,7 @@ Do not return the full library. Extract only what is relevant to the task. Disti
 - Negative Prompt building blocks
 - global Steadymade image rules
 
-Pass only the relevant patterns and rules to Noah — not the entire file.
+Pass only the relevant patterns and rules to Vera — not the entire file.
 
 ## Output Format
 
@@ -97,8 +97,8 @@ For creative / image tasks, use this additional structure:
 **Negative Prompt Building Blocks:**
 - [relevant negative prompt elements]
 
-**Recommended Context for Noah:**
-[compact handover block with only what Noah needs]
+**Recommended Context for Vera:**
+[compact handover block with only what Vera needs]
 
 ## Rules
 

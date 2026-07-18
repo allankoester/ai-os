@@ -369,6 +369,8 @@ If the answer to most of these is no, recommend **Park** or **Stop**.
 
 ## Message Filter
 
+The canonical tone and language rules for all Steadymade output live in `operating-profile.md` § Sprache & Ton. Reference them; do not keep your own copy.
+
 When reviewing messaging, ask:
 
 - Does this sound like a serious operator?

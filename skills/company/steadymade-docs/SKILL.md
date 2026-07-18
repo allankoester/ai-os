@@ -1,7 +1,7 @@
 ---
 name: steadymade-docs
-version: 0.1.0
-description: Erstellt professionelle, druckfertige Dokumente im Steadymade.ai Brand-System — als Markdown, HTML und PDF. Aktivieren wenn der User ein Anschreiben, Angebot, Report, Brief, One-Pager oder sonstiges Schriftstück für Steadymade.ai braucht — oder wenn er /steadymade-docs aufruft. Auch triggern wenn der User sagt "schreib mir einen Brief", "erstell ein Angebot", "ich brauche ein Dokument", "mach mir einen One-Pager" im Kontext von Steadymade.ai oder Kundenkommunikation.
+version: 0.2.0
+description: Erstellt professionelle, druckfertige Dokumente im Steadymade.ai Brand-System — als Markdown, HTML und PDF. Aktivieren wenn der User ein Anschreiben, Angebot, Report, Brief, One-Pager, Konzeptpapier, Workshop-Dokument oder internes Briefing für Steadymade.ai braucht — oder wenn er /steadymade-docs aufruft. Auch triggern wenn der User sagt "schreib mir einen Brief", "erstell ein Angebot", "ich brauche ein Dokument", "mach mir einen One-Pager" im Kontext von Steadymade.ai oder Kundenkommunikation.
 ---
 
 # Steadymade Docs
@@ -414,6 +414,32 @@ Der One-Pager braucht eine starke visuelle Hierarchie — er wird als Handout ge
 
 Ziel: Auf einer A4-Seite alles untergebracht. Margins minimal (`@page { margin: 18mm }`).
 
+### Konzeptpapier
+
+Für Lösungskonzepte, Projektideen und Entscheidungsvorlagen. Kein Empfängerblock, stattdessen Meta-Zeile (Mono) mit Projekt, Datum, Status (z. B. `DRAFT`, `ZUR FREIGABE`). Struktur:
+
+1. **Ausgangslage** — Problem oder Anlass, 1–2 Absätze
+2. **Zielbild** — was danach wahr sein soll
+3. **Lösungsansatz** — Kern des Konzepts, `<h2>`/`<h3>`-Gliederung, Tabellen für Varianten
+4. **Annahmen & offene Punkte** — explizit als Liste
+5. **Nächste Schritte** — konkret, mit Ownern wo bekannt
+
+Annahmen nie in den Lösungstext mischen; fehlende Informationen klar markieren.
+
+### Workshop-Dokument
+
+Für Agenden, Teilnehmerunterlagen und Ergebnisdokumentation. Struktur:
+
+- Kopf: Workshop-Titel, Datum, Ort/Remote, Teilnehmerkreis (Mono-Meta-Zeile)
+- **Agenda-Tabelle:** Zeitfenster (Mono) | Block | Ziel des Blocks
+- Pro Block eine `<h3>`-Sektion mit Inhalt bzw. Ergebnisraum
+- **Ergebnisse & Vereinbarungen** (bei Nachbereitung): Entscheidung, Owner, Termin
+- Abschluss: nächste Schritte
+
+### Interner Brief / Projekt-Briefing
+
+Für interne Weitergaben (kein Kundenversand): kompakter als Kundendokumente, kein Signaturblock nötig. Struktur: Kontext (kurz), Auftrag/Frage, relevante Fakten als Liste, Constraints, gewünschtes Ergebnis, Deadline. Eine Seite ist das Ziel.
+
 ---
 
 ## Qualitätsregeln
@@ -429,3 +455,10 @@ Ziel: Auf einer A4-Seite alles untergebracht. Margins minimal (`@page { margin: 
 - Das HTML muss **standalone** funktionieren — alle Styles embedded, keine externen Abhängigkeiten außer Google Fonts CDN
 - **Seitenumbrüche:** `<div class="doc-pagebreak"></div>` sparsam einsetzen — aber **aktiv nutzen**, wenn ein Abschnittstitel nach dem PDF-Export am unteren Seitenende landet. Chromium/Puppeteer ignoriert `break-after: avoid` wenn die Seite zu voll ist; harter Seitenumbruch vor dem betroffenen Abschnitt ist dann die zuverlässige Lösung. Nach Abschnitten mit vielen Tabellen (Infrastruktur, Serverdetails, lange Listen) präventiv einsetzen.
 - **Orphan-Prävention (Abschnittstitel):** CSS-Doppelstrategie anwenden: `break-after: avoid` + `page-break-after: avoid` auf `.section-title` UND `break-before: avoid` + `page-break-before: avoid` auf `.section > .doc-body`. Beide Regeln sowohl im normalen CSS als auch im `@media print`-Block setzen. Wenn das nicht reicht → `<div class="doc-pagebreak"></div>` vor dem betroffenen Abschnitt.
+
+---
+
+## Changelog
+
+- 0.2.0 (2026-07-18): Strukturvorlagen für Konzeptpapier, Workshop-Dokument und internen Brief aus dem aufgelösten Dora-Agenten überführt (Phase 2 der Agent-Konsolidierung). steadymade-docs ist der kanonische Document-Production-Skill.
+- 0.1.0: Initiale Version (Anschreiben, Angebot, Report, One-Pager, Rechnung).

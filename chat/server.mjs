@@ -46,21 +46,17 @@ const AGENT_FILE_ALIASES = {
   nora: 'nora-knowledge-agent.md',
   mara: 'mara-setup-agent.md',
   ada: 'ada-marketing-strategy.md',
-  clara: 'clara-writer.md',
   rosa: 'rosa-review.md',
-  jonas: 'jonas-calendar-agent.md',
   otto: 'otto-proposal-agent.md',
-  dora: 'dora-document-agent.md',
+  paula: 'paula-delivery-agent.md',
   vera: 'vera-visual-concept.md',
-  noah: 'noah-image-prompt-router.md',
-  kira: 'kira-image-generation-agent.md',
   simon: 'simon-security-audit.md',
   iris: 'iris-spec-architect.md',
 };
 
 // Editorial style gate applies to client-facing content drafts only —
 // running it on every conversational turn is noise (2026-07-10 decision).
-const CONTENT_AGENTS = new Set(['clara', 'otto', 'dora', 'rosa']);
+const CONTENT_AGENTS = new Set(['ada', 'otto', 'paula', 'vera', 'rosa']);
 
 const DANNY_PROMPT = `FRONTEND MODE (Steadymade AI OS Chat).
 You are Danny, the central orchestrator. The user always talks to Danny.

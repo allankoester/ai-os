@@ -89,14 +89,10 @@ const CHAT_AGENT_MAP = {
   nora: 'nora',
   mara: 'mara',
   ada: 'ada',
-  clara: 'clara',
   rosa: 'rosa',
-  jonas: 'jonas',
   otto: 'otto',
-  dora: 'dora',
+  paula: 'paula',
   vera: 'vera',
-  noah: 'noah',
-  kira: 'kira',
   simon: 'simon',
   iris: 'iris',
 };
@@ -1958,7 +1954,7 @@ function paintFlows() {
 
       <div class="flows-section-label">Scheduled Jobs${schedErr ? ' · <span style="color:var(--apricot-deep)">scheduler offline</span>' : ''}</div>
       <div class="card">
-        ${shownJobs.length ? shownJobs.map(jobRowHtml).join('') : '<div class="stat-note" style="white-space:normal">No scheduled jobs in this group. Create one, for example a Monday-morning LinkedIn draft by Clara, or a weekly knowledge-inbox review by Mara.</div>'}
+        ${shownJobs.length ? shownJobs.map(jobRowHtml).join('') : '<div class="stat-note" style="white-space:normal">No scheduled jobs in this group. Create one, for example a Monday-morning LinkedIn draft by Ada, or a weekly knowledge-inbox review by Mara.</div>'}
         <div class="stat-note" style="margin-top:10px;white-space:normal">Cron format: <code>min hour day month weekday</code> — e.g. <code>0 7 * * 1-5</code> = weekdays 07:00. Run history is in the Command Center.</div>
       </div>
 

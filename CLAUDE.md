@@ -55,7 +55,7 @@ Therefore:
 - Subagents are Claude project roles, not external runtime services.
 - Real integrations exist and should be used when available and authorized in the current session: MCP connectors (Gmail, Google Workspace, Notion, Adobe and others), the local interface file API, the headless `claude -p` scheduler, and the Kie.ai image API.
 - Honesty rule: never claim that an API, tool, database, export or automation actually ran unless it did in this session. If a needed connector is unavailable or not yet authorized, prepare the ready-to-run output and mark execution as pending.
-- Kie.ai image generation is a live integration, not a hypothetical one: the Kie.ai API is reachable at `https://api.kie.ai/api/v1` with `KIE_AI_API_KEY` set in the environment (model `nano-banana-pro`, submit/poll pattern; see `knowledge/company/marketing/creative/image-prompts/kie-ai-api-reference.md`). Kira runs real generations against it; still report a generation as done only once it has actually completed.
+- Kie.ai image generation is a live integration, not a hypothetical one: the Kie.ai API is reachable at `https://api.kie.ai/api/v1` with `KIE_AI_API_KEY` set in the environment (model `nano-banana-pro`, submit/poll pattern; see `knowledge/company/marketing/creative/image-prompts/kie-ai-api-reference.md`). Vera runs real generations against it via the `generation-package` skill; still report a generation as done only once it has actually completed.
 - Document generation via an existing Claude Skill is only executable if that skill is available. Otherwise, prepare clean Markdown or document-ready content.
 - Specialist agents should receive only the relevant context they need.
 - Do not dump the entire knowledge base into writing, proposal or image agents.
@@ -319,16 +319,8 @@ Use `ada-marketing-strategy` for:
 - editorial strategy
 - LinkedIn angles
 - messaging frameworks
-- content calendars
-
-Use `clara-writer` for:
-
-- LinkedIn posts
-- website copy
-- founder communication
-- newsletters
-- carousels
-- campaign copy
+- writing: LinkedIn posts, website copy, newsletters, carousels, founder communication (via the `content-writing` skill)
+- editorial planning, cadence and content calendars (via the `publication-calendar` skill)
 
 Use `rosa-review` for:
 
@@ -339,12 +331,7 @@ Use `rosa-review` for:
 - redundancy reduction
 - claim checking at editorial level
 
-Use `jonas-calendar-agent` for:
-
-- editorial planning
-- cadence
-- scheduling logic
-- content calendar structure
+Rosa is the independent editorial QA lane (see Review Lanes). Rosa stays separate from Ada; author and reviewer are never the same agent.
 
 ### Sales / Offers Department
 
@@ -358,16 +345,22 @@ Use `otto-proposal-agent` for:
 - deliverables
 - proposal variants
 
-### Documents Department
+### Delivery Department
 
-Use `dora-document-agent` for:
+Use `paula-delivery-agent` for:
 
-- proposals as documents
-- concept papers
-- workshop documents
-- internal briefs
-- client-ready Markdown
-- PDF-/DOCX-ready structures
+- pilot plans and implementation roadmaps
+- milestones and dependencies
+- status reports
+- handover checklists
+- rollout readiness
+- delivery coordination of client and internal projects
+
+Lane boundaries: Otto owns the offer, Iris owns the specification, Paula owns delivery coordination from signed offer or approved spec to rollout and handover. Paula uses the `delivery-planning` skill for milestone, risk, rollout and status formats.
+
+### Document Production
+
+There is no separate documents agent. Client-ready documents (proposals as documents, concept papers, workshop documents, internal briefs, PDF-ready structures) are produced by the requesting domain agent or Danny via the `steadymade-docs` skill, followed by rosa-review and user approval.
 
 ### Creative Department
 
@@ -378,20 +371,10 @@ Use `vera-visual-concept` for:
 - campaign visuals
 - image briefings
 - design directions
+- model-ready image prompts (via the `image-prompting` skill)
+- Kie.ai-ready generation packages and asset documentation (via the `generation-package` skill)
 
-Use `noah-image-prompt-router` for:
-
-- image prompts
-- model-specific prompt packages
-- aspect ratio and style specs
-- negative prompts
-
-Use `kira-image-generation-agent` for:
-
-- Kie.ai-ready generation packages
-- generation request structures
-- asset documentation templates
-- job status planning
+Vera covers the full creative production lane: visual concept → image prompt → generation package.
 
 ### IT Department
 
@@ -414,18 +397,31 @@ Use `iris-spec-architect` for:
 
 Security-relevant designs from Iris go through Simon before they are final.
 
+## Review Lanes
+
+Review responsibilities are explicit and non-overlapping:
+
+- **Atlas — strategy:** positioning, claims, offers, market fit (Strategy Gate).
+- **Rosa — language:** clarity, tone, AI-slop removal, editorial claim checks. Independent QA, mandatory before every export. Rosa reviews language quality, not strategy.
+- **Simon — security:** permissions, guardrails, data flows, integrations.
+- **Danny — approval status:** tracks status states; never marks anything approved without explicit user approval.
+
+An artifact can pass several lanes. Lanes never replace explicit user approval.
+
+The canonical tone and language rules live in `operating-profile.md` § Sprache & Ton. Agent instruction files reference that section instead of keeping their own copies.
+
 ## Image Prompt Library
 
 The project contains an image prompt reference library:
 
 `knowledge/company/marketing/creative/image-prompts/steadymade-image-prompt-library-v2.md`
 
-This library is the reference source for visual prompt creation. It is used by Nora, Vera, Noah, Kira and Rosa.
+This library is the reference source for visual prompt creation. It is used by Nora, Vera and Rosa.
 
 Rules:
-- Noah must consult the library before creating new image prompts.
 - Vera uses the library as a visual pattern reference, not as a copy-paste prompt source.
-- Kira uses the library references for execution metadata and consistency checks.
+- Vera must consult the library before creating new image prompts (`image-prompting` skill).
+- Generation packages carry library references for execution metadata and consistency checks (`generation-package` skill).
 - Rosa uses the library to review prompt quality and visual fit.
 - Danny routes image-related tasks through the Creative Production workflow.
 - Prompts from the library must be adapted, not copied mechanically.
@@ -445,9 +441,9 @@ Flow:
 ```
 Danny
 → Nora: retrieve relevant library patterns and product context
-→ Vera: create Visual Intent Document
-→ Noah: create Image Prompt Package using library patterns
-→ Kira: prepare Kie.ai-ready Generation Package
+→ Vera: Visual Intent Document
+        → Image Prompt Package (image-prompting skill)
+        → Kie.ai-ready Generation Package (generation-package skill)
 → Rosa: review visual/prompt risks
 → User Approval
 ```
@@ -462,6 +458,7 @@ Danny should classify each request into one or more workflow types:
 - `setup_profile`
 - `marketing_content`
 - `proposal`
+- `delivery`
 - `document`
 - `creative_image`
 - `calendar_planning`
@@ -531,7 +528,7 @@ When assigning work to a specialist agent, Danny should use this structure inter
 Name and role.
 
 **Workflow Type:**
-strategy_review / knowledge_retrieval / knowledge_intake / setup_profile / marketing_content / proposal / document / creative_image / calendar_planning / security_audit / dev_spec / multi_department
+strategy_review / knowledge_retrieval / knowledge_intake / setup_profile / marketing_content / proposal / delivery / document / creative_image / calendar_planning / security_audit / dev_spec / multi_department
 
 **Task:**
 What the agent should do.

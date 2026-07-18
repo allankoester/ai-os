@@ -143,6 +143,19 @@ if (fs.existsSync(companySkillsDir)) {
   for (const required of ['company-onboarding', 'personal-onboarding']) {
     check(`onboarding skill exists: skills/company/${required}`, exists(`skills/company/${required}/SKILL.md`));
   }
+  // every company skill must be registered in the skill registry (Phase 0, agent consolidation)
+  check('skill registry exists: skills/registry.yml', exists('skills/registry.yml'));
+  if (exists('skills/registry.yml')) {
+    const registry = read('skills/registry.yml');
+    for (const d of skillDirs) {
+      check(`skill ${d.name}: registered in skills/registry.yml`, new RegExp(`^  ${d.name}:`, 'm').test(registry));
+    }
+    // reverse check: no registry entry without a skill folder
+    const dirNames = new Set(skillDirs.map((d) => d.name));
+    for (const m of registry.matchAll(/^  ([a-z0-9][a-z0-9-]*):\s*$/gm)) {
+      check(`registry entry has skill folder: ${m[1]}`, dirNames.has(m[1]));
+    }
+  }
 }
 
 // personal skills and skill activation symlinks must not be git-tracked
@@ -172,6 +185,19 @@ for (const f of agentFiles) {
   if (name) agentNames.push(name);
 }
 
+// skill registry allowed_agents entries must resolve to real agents (or 'all'/'danny')
+if (exists('skills/registry.yml')) {
+  const registryText = read('skills/registry.yml');
+  const allowedIds = new Set();
+  for (const m of registryText.matchAll(/allowed_agents:\s*(all|\[([^\]]*)\])/g)) {
+    if (m[2] !== undefined) for (const id of m[2].split(',')) allowedIds.add(id.trim());
+  }
+  for (const id of allowedIds) {
+    const okId = id === 'danny' || agentNames.some((n) => n === id || n.startsWith(id + '-'));
+    check(`registry allowed_agents id resolves to an agent: ${id}`, okId);
+  }
+}
+
 // no stale pre-contract knowledge paths in instructions
 const OLD_PATH = /`knowledge\/(?!company(?:\/|\b)|personal(?:\/|\b)|inbox(?:\/|\b)|team(?:\/|\b)|README)[^`]+`/;
 for (const f of ['CLAUDE.md', ...agentFiles.map((a) => `.claude/agents/${a}`)]) {
@@ -185,9 +211,12 @@ for (const f of agentFiles.map((a) => `.claude/agents/${a}`)) {
   check(`no unmanaged ~/.claude/skills refs in ${f}`, !/~\/\.claude\/skills\//.test(text));
 }
 
-if (exists('.claude/agents/kira-image-generation-agent.md')) {
-  const kira = read('.claude/agents/kira-image-generation-agent.md');
-  check('kira does not assume API key availability', !/The Kie\.ai API key is available/.test(kira));
+// Kie.ai execution discipline lives in the generation-package skill since the
+// creative merge (Vera absorbed Kira); the skill must not assume key availability.
+if (exists('skills/company/generation-package/SKILL.md')) {
+  const genPkg = read('skills/company/generation-package/SKILL.md');
+  check('generation-package skill does not assume API key availability', !/The Kie\.ai API key is available/.test(genPkg));
+  check('generation-package skill keeps execution-pending discipline', /Execution pending/.test(genPkg));
 }
 
 // ---------- 4. Interface model consistency ----------
@@ -207,7 +236,7 @@ function parseWorkflowListFromDoc(file) {
   if (!exists(file)) return [];
   const text = read(file);
   const out = new Set();
-  const known = ['strategy_review', 'knowledge_retrieval', 'knowledge_intake', 'setup_profile', 'marketing_content', 'proposal', 'document', 'creative_image', 'calendar_planning', 'security_audit', 'dev_spec', 'multi_department'];
+  const known = ['strategy_review', 'knowledge_retrieval', 'knowledge_intake', 'setup_profile', 'marketing_content', 'proposal', 'delivery', 'document', 'creative_image', 'calendar_planning', 'security_audit', 'dev_spec', 'multi_department'];
   for (const m of text.matchAll(/`([a-z_]+)`/g)) {
     const id = m[1];
     if (known.includes(id)) {
@@ -221,7 +250,7 @@ function parseWorkflowListFromDoc(file) {
   return [...out];
 }
 
-const canonicalWorkflowIds = ['strategy_review', 'knowledge_retrieval', 'knowledge_intake', 'setup_profile', 'marketing_content', 'proposal', 'document', 'creative_image', 'calendar_planning', 'security_audit', 'dev_spec', 'multi_department'];
+const canonicalWorkflowIds = ['strategy_review', 'knowledge_retrieval', 'knowledge_intake', 'setup_profile', 'marketing_content', 'proposal', 'delivery', 'document', 'creative_image', 'calendar_planning', 'security_audit', 'dev_spec', 'multi_department'];
 const dataWorkflowIds = [...dataJs.matchAll(/id:\s*'([a-z_]+)'/g)].map((m) => m[1]);
 for (const id of canonicalWorkflowIds) {
   check(`workflow exists in interface/public/data.js: ${id}`, dataWorkflowIds.includes(id));

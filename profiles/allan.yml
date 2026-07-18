@@ -9,15 +9,11 @@ agents:
     - nora-knowledge-agent
     - mara-setup-agent
     - ada-marketing-strategy
-    - clara-writer
     - rosa-review
     - otto-proposal-agent
-    - dora-document-agent
+    - paula-delivery-agent
   optional:
-    - jonas-calendar-agent
     - vera-visual-concept
-    - noah-image-prompt-router
-    - kira-image-generation-agent
     - simon-security-audit
     - iris-spec-architect
   excluded: []
@@ -27,4 +23,4 @@ skills:
   optional: []
   excluded: []
 
-notes: "Kira stays optional until a real Kie.ai integration is connected."
+notes: "2026-07-18 agent consolidation: Clara, Jonas, Dora, Noah and Kira were dissolved into skills (content-writing, publication-calendar, steadymade-docs, image-prompting, generation-package); Ada covers marketing incl. writing, Vera covers creative production incl. Kie.ai packages, Paula (new) covers delivery."

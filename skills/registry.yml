@@ -1,0 +1,127 @@
+# Skill Registry — Steadymade AI OS
+#
+# Kanonisches Inventar der Company-Skills (Phase 0 der Agent-Konsolidierung,
+# eingeführt 2026-07-18). Pflegeregeln:
+# - Jeder Ordner unter skills/company/ braucht hier einen Eintrag
+#   (geprüft durch scripts/validate.mjs).
+# - version bleibt ausschließlich im SKILL.md-Frontmatter (SSOT, kein Drift).
+# - allowed_agents: "all" oder Liste von Agenten-IDs. Danny respektiert diese
+#   Liste beim Routing; technisch sind aktive Skills für alle Agenten sichtbar.
+# - approval_required: true, wenn der Skill typischerweise externe Artefakte
+#   erzeugt (Approval-Checkliste + User-Freigabe vor Finalisierung).
+#
+# Persönliche Skills (skills/personal/, gitignored) und Marketplace-Installs
+# werden hier nicht registriert; deren Herkunft dokumentiert .install.json.
+
+skills:
+  challenge-review:
+    owner: alex
+    scope: company
+    status: active
+    purpose: Idee/Entwurf/Entscheidung aus mehreren Perspektiven stresstesten (Debate + Interview).
+    allowed_agents: all
+    approval_required: false
+
+  company-onboarding:
+    owner: alex
+    scope: company
+    status: active
+    purpose: Gefuehrtes Interview, befuellt operating-profile.md (Company Custom Instructions).
+    allowed_agents: [danny, mara]
+    approval_required: false
+
+  content-writing:
+    owner: alex
+    scope: company
+    status: active
+    purpose: Writing-Handwerk fuer LinkedIn, Website, Newsletter, Carousels, Founder-Kommunikation (aus Clara ueberfuehrt, Phase 4).
+    allowed_agents: [danny, ada]
+    approval_required: true
+
+  decision-brief:
+    owner: alex
+    scope: company
+    status: active
+    purpose: Entscheidungen in Brief mit Kriterien, Optionen, Trade-offs, Empfehlung strukturieren.
+    allowed_agents: all
+    approval_required: false
+
+  delivery-planning:
+    owner: alex
+    scope: company
+    status: active
+    purpose: Meilensteine, Risiken, Rollout-Phasen, Statusformat fuer Projektlieferung (Phase 1).
+    allowed_agents: [danny, paula]
+    approval_required: true
+
+  generation-package:
+    owner: alex
+    scope: company
+    status: active
+    purpose: Kie.ai-Generierungspakete inkl. Submit/Poll-Disziplin und Status-Ehrlichkeitsregeln (aus Kira ueberfuehrt, Phase 3).
+    allowed_agents: [danny, vera]
+    approval_required: true
+
+  image-prompting:
+    owner: alex
+    scope: company
+    status: active
+    purpose: Modellgerechte Bild-Prompts mit Library-Pflicht, Format-, Stil- und Negativ-Prompt-Regeln (aus Noah ueberfuehrt, Phase 3).
+    allowed_agents: [danny, vera]
+    approval_required: false
+
+  meeting-briefing:
+    owner: alex
+    scope: company
+    status: active
+    purpose: Quellenbasiertes One-Page-Meeting-Briefing.
+    allowed_agents: all
+    approval_required: false
+
+  memory-consolidation:
+    owner: alex
+    scope: company
+    status: active
+    purpose: Verdichtet memory/daily/* in memory/MEMORY.md, aggregiert Feedback.
+    allowed_agents: [danny]
+    approval_required: false
+
+  new-project:
+    owner: alex
+    scope: company
+    status: active
+    purpose: Kontrollierter Intake- und Setup-Flow fuer neue Projekte.
+    allowed_agents: [danny, mara]
+    approval_required: false
+
+  personal-onboarding:
+    owner: alex
+    scope: company
+    status: active
+    purpose: Persoenliches Profil, CLAUDE.local.md und Skills-Profil-Abgleich pro User.
+    allowed_agents: [danny, mara]
+    approval_required: false
+
+  promote-knowledge:
+    owner: alex
+    scope: company
+    status: active
+    purpose: Rohes Gespraechsmaterial in freigegebenes Firmenwissen ueberfuehren (Draft + User-Approval).
+    allowed_agents: [danny, mara]
+    approval_required: true
+
+  publication-calendar:
+    owner: alex
+    scope: company
+    status: active
+    purpose: Kadenz, Planungslogik und Kalenderstruktur fuer Redaktionsplanung (aus Jonas ueberfuehrt, Phase 2).
+    allowed_agents: [danny, ada]
+    approval_required: false
+
+  steadymade-docs:
+    owner: alex
+    scope: company
+    status: active
+    purpose: Druckfertige Steadymade-Dokumente als MD/HTML/PDF inkl. Strukturvorlagen fuer Konzepte, Briefe und Workshop-Dokumente.
+    allowed_agents: all
+    approval_required: true

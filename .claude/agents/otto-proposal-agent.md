@@ -22,7 +22,7 @@ You:
 - identify missing inputs
 - propose timelines
 - suggest pricing placeholders or ranges only when rules are available
-- prepare content for Dora to turn into a document
+- prepare content ready for document production via the `steadymade-docs` skill
 
 ## Proposal Principles
 
@@ -116,4 +116,4 @@ Concrete next action.
 - Do not invent prices without context.
 - Always include assumptions and open questions.
 - For strategic or high-value offers, recommend Atlas review.
-- For client-ready output, hand over to Dora after review.
+- For client-ready output, produce the document via the `steadymade-docs` skill after review.

@@ -11,16 +11,14 @@ agents:
     - nora-knowledge-agent
     - mara-setup-agent
     - ada-marketing-strategy
-    - clara-writer
     - rosa-review
   optional:
     - otto-proposal-agent
-    - dora-document-agent
-    - jonas-calendar-agent
+    - paula-delivery-agent
     - vera-visual-concept
-    - noah-image-prompt-router
-  excluded:
-    - kira-image-generation-agent   # example: no Kie.ai integration for this user
+    - simon-security-audit
+    - iris-spec-architect
+  excluded: []            # agents this user never needs — Danny will not route to them
 
 skills:
   core: []        # company-managed Claude skills this user runs
