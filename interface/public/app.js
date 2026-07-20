@@ -1529,6 +1529,14 @@ function knSystemFolderKey(key) {
   return key === '_agents' || key === '_system';
 }
 
+function knIsEligibleForUpload(folderKey) {
+  if (!folderKey) return false;
+  const folder = knFolderList().find((f) => f.key === folderKey);
+  const isSystem = folder ? folder.kind === 'system' : knSystemFolderKey(folderKey);
+  if (isSystem) return false;
+  return knChildren(folderKey).length === 0;
+}
+
 function knArtifactsForFolder(folderKey) {
   if (!folderKey || knSystemFolderKey(folderKey)) return [];
   const prefix = `knowledge/${folderKey}/`;
@@ -1541,9 +1549,8 @@ function paintKnDocs() {
   const el = $('#kn-docs');
   if (!el) return;
   const folder = knFolderList().find((f) => f.key === state.kn.folder);
-  const isSystemFolder = folder ? folder.kind === 'system' : knSystemFolderKey(state.kn.folder);
   const headerLabel = folder ? folder.label : (state.kn.folder || '—') + '/';
-  const showNewDoc = !isSystemFolder && Boolean(state.kn.folder);
+  const showNewDoc = knIsEligibleForUpload(state.kn.folder);
   if (state.kn.filter !== 'review-needed' && state.kn.filter !== 'all') state.kn.filter = 'all';
   if (state.kn.docsMode !== 'artifacts' && state.kn.docsMode !== 'docs') state.kn.docsMode = 'docs';
 

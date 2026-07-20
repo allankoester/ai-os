@@ -18,6 +18,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const PUBLIC = path.join(__dirname, 'public');
 const PORT = Number(process.env.CHAT_PORT || 4012);
+const DEFAULT_CHAT_MODEL = 'sonnet';
 const CHAT_CLI_BRIDGE_ENABLED = /^(1|true|yes|on)$/i.test(String(process.env.CHAT_CLI_BRIDGE_ENABLED || '').trim());
 const CHAT_CLI_TOKEN = String(process.env.CHAT_CLI_TOKEN || '').trim();
 const LEGACY_USAGE_LOG = path.join(ROOT, 'runs', 'chat-usage.jsonl');
@@ -1471,6 +1472,12 @@ function shouldUseOpenCodeModel(model) {
   return value.includes('/');
 }
 
+function resolveEffectiveChatModel(rawModel) {
+  const requestedModel = String(rawModel || '').trim();
+  if (!requestedModel || requestedModel === 'default') return DEFAULT_CHAT_MODEL;
+  return requestedModel;
+}
+
 function extractSessionIdFromEvent(ev) {
   if (!ev || typeof ev !== 'object') return '';
   return String(
@@ -1605,6 +1612,7 @@ function emitAssistantResult(run, selectedAgent, text, { errorText } = {}) {
 }
 
 function startClaudeChatRun({ run, context, resumeId, model, agent }) {
+  const effectiveModel = resolveEffectiveChatModel(model);
   const runMessage = context.incognito
     ? `[Incognito turn] Do not write memory files, daily notes, or run logs for this turn, and do not store anything about this exchange anywhere.\n\n${context.message}`
     : context.message;
@@ -1619,7 +1627,7 @@ function startClaudeChatRun({ run, context, resumeId, model, agent }) {
   ];
   if (DISALLOWED_TOOLS) args.push('--disallowedTools', DISALLOWED_TOOLS);
   if (resumeId) args.push('--resume', resumeId);
-  if (model) args.push('--model', model);
+  args.push('--model', effectiveModel);
 
   const env = buildChatChildEnv();
   delete env.CLAUDECODE;
@@ -1862,9 +1870,7 @@ async function handleChat(req, res) {
   const legacySessionId = typeof payload.sessionId === 'string' ? payload.sessionId.trim() : '';
   const requestedConvId = typeof payload.conversationId === 'string' && SAFE_ID.test(payload.conversationId.trim())
     ? payload.conversationId.trim() : '';
-  const requestedModel = typeof payload.model === 'string' ? payload.model.trim() : '';
-  const explicitModel = requestedModel && requestedModel !== 'default' ? requestedModel : '';
-  const model = explicitModel || 'sonnet';
+  const model = resolveEffectiveChatModel(payload.model);
   const agent = resolveAgent(payload.agent);
   const selectedAgent = agent.id;
   const mode = selectedAgent === 'danny' ? 'danny' : 'direct_specialist';
