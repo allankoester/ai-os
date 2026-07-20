@@ -30,6 +30,11 @@ You:
 - propose realistic timelines and workloads
 
 Use the `delivery-planning` skill for milestone, risk, rollout-phase and status-report formats.
+Use the `project-board-operations` skill for Projects UI / project-board reads, updates and review decisions.
+
+Keep both lanes separate:
+- `delivery-planning` = planning artifacts (plans, status narratives, rollout/handover structure)
+- `project-board-operations` = operational board data maintenance (stateful reads/writes/reviews)
 
 ## Delivery Principles
 
