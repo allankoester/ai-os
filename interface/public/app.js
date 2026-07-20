@@ -1550,9 +1550,49 @@ function paintKnDocs() {
           <span class="badge ${statusBadgeClass(docMeta(d.path).status)}">${docMeta(d.path).status.toUpperCase()}</span>
           <span>${timeAgo(d.mtime)}</span><span>${d.words}w</span>
         </div>
-      </button>`).join('') : `<div class="stat-note" style="padding:0 12px">${folder ? (state.kn.filter === 'review-needed' ? 'No review-needed docs in this folder.' : 'Empty folder.') : 'No documents at this level - open a subfolder.'}</div>`);
+      </button>`).join('') : `<div class="stat-note" style="padding:0 12px">${folder ? (state.kn.filter === 'review-needed' ? 'No review-needed docs in this folder.' : 'Empty folder.') : 'No documents at this level - open a subfolder.'}</div>`) +
+      (showNewDoc ? `<div class="kn-dropzone" id="kn-dropzone">
+        <svg class="kn-dropzone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 4v11m0 0l-4-4m4 4l4-4" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 17v2a2 2 0 002 2h10a2 2 0 002-2v-2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Drop a .md file here to add it to ${esc(headerLabel)}
+      </div>` : '');
     $('[data-new-doc]', el)?.addEventListener('click', () => openNewDocDrawer(state.kn.folder));
     $$('.kn-doc-btn[data-path]', el).forEach((b) => b.addEventListener('click', () => loadDoc(b.dataset.path)));
+    bindKnDropzone($('#kn-dropzone'), state.kn.folder);
+  }
+}
+
+function bindKnDropzone(zone, folder) {
+  if (!zone || !folder) return;
+  const setOver = (on) => zone.classList.toggle('drag-over', on);
+  zone.addEventListener('dragover', (e) => { e.preventDefault(); setOver(true); });
+  zone.addEventListener('dragenter', (e) => { e.preventDefault(); setOver(true); });
+  zone.addEventListener('dragleave', () => setOver(false));
+  zone.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    setOver(false);
+    const files = [...(e.dataTransfer?.files || [])];
+    if (!files.length) return;
+    for (const file of files) await handleDroppedFile(file, folder);
+  });
+}
+
+async function handleDroppedFile(file, folder) {
+  if (!/\.md$/i.test(file.name)) {
+    toast('ONLY .MD FILES CAN BE DROPPED HERE: ' + file.name.toUpperCase(), true);
+    return;
+  }
+  const relPath = `knowledge/${folder}/${file.name}`;
+  const existing = findDocEntry(relPath);
+  if (existing && !confirm(`"${file.name}" already exists in ${folder}. Overwrite it?`)) return;
+  try {
+    const content = await file.text();
+    await putFileGuarded(relPath, content);
+    try { state.system = await apiJson('/api/system'); } catch { /* keep stale model */ }
+    paintKnFolders();
+    paintKnDocs();
+    toast((existing ? 'REPLACED ' : 'ADDED ') + file.name.toUpperCase());
+  } catch (e) {
+    if (!/cancelled/.test(e.message)) toast(e.message.toUpperCase(), true);
   }
 }
 

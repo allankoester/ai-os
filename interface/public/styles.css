@@ -860,6 +860,27 @@ input, textarea, select { font-family: inherit; }
 .kn-doc-title { font-weight: 600; font-size: 12.5px; color: var(--headline); line-height: 1.35; }
 .kn-doc-meta { font-family: var(--font-mono); font-size: 8.5px; color: var(--muted); margin-top: 4px; letter-spacing: 0.06em; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
+/* Drop zone: always visible on a leaf (document-holding) folder level */
+.kn-dropzone {
+  margin: 10px 2px 2px;
+  padding: 14px 10px;
+  border: 1.5px dashed var(--border);
+  border-radius: 8px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.kn-dropzone-icon { display: block; margin: 0 auto 4px; width: 16px; height: 16px; color: var(--muted); }
+.kn-dropzone.drag-over {
+  border-color: var(--green-light);
+  background: var(--green-tint);
+  color: var(--green-light);
+}
+.kn-dropzone.drag-over .kn-dropzone-icon { color: var(--green-light); }
+
 /* editor */
 .kn-editor {
   display: flex;
