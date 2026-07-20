@@ -1551,6 +1551,10 @@ function paintKnDocs() {
   const folder = knFolderList().find((f) => f.key === state.kn.folder);
   const headerLabel = folder ? folder.label : (state.kn.folder || '—') + '/';
   const showNewDoc = knIsEligibleForUpload(state.kn.folder);
+  // Drop zone uses a looser rule than "+ New Doc": any real (non-system) knowledge
+  // folder qualifies, even if it also has subfolders — always-visible drop target.
+  const isSystemFolder = folder ? folder.kind === 'system' : knSystemFolderKey(state.kn.folder);
+  const showDropzone = !isSystemFolder && Boolean(state.kn.folder);
   if (state.kn.filter !== 'review-needed' && state.kn.filter !== 'all') state.kn.filter = 'all';
   if (state.kn.docsMode !== 'artifacts' && state.kn.docsMode !== 'docs') state.kn.docsMode = 'docs';
 
@@ -1589,7 +1593,7 @@ function paintKnDocs() {
           <span>${timeAgo(d.mtime)}</span><span>${d.words}w</span>
         </div>
       </button>`).join('') : `<div class="stat-note" style="padding:0 12px">${folder ? (state.kn.filter === 'review-needed' ? 'No review-needed docs in this folder.' : 'Empty folder.') : 'No documents at this level - open a subfolder.'}</div>`) +
-      (showNewDoc ? `<div class="kn-dropzone" id="kn-dropzone">
+      (showDropzone ? `<div class="kn-dropzone" id="kn-dropzone">
         <svg class="kn-dropzone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 4v11m0 0l-4-4m4 4l4-4" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 17v2a2 2 0 002 2h10a2 2 0 002-2v-2" stroke-linecap="round" stroke-linejoin="round"/></svg>
         Drop a .md or .docx file here to add it to ${esc(headerLabel)}
       </div>` : '');
@@ -2125,14 +2129,14 @@ function paintFlows() {
         <button class="btn btn-ghost btn-small" data-act="refresh">Refresh</button>
       </div>
 
-      <div class="flows-section-label">Workflows</div>
-      ${shownFlows.length ? shownFlows.map(workflowCardHtml).join('') : '<div class="card stat-note">No workflows in this group.</div>'}
-
-      <div class="flows-section-label">Scheduled Jobs${schedErr ? ' · <span style="color:var(--apricot-deep)">scheduler offline</span>' : ''}</div>
+      <div class="flows-section-label flows-section-label--primary">Scheduled Jobs${schedErr ? ' · <span style="color:var(--apricot-deep)">scheduler offline</span>' : ''}</div>
       <div class="card">
         ${shownJobs.length ? shownJobs.map(jobRowHtml).join('') : '<div class="stat-note" style="white-space:normal">No scheduled jobs in this group. Create one, for example a Monday-morning LinkedIn draft by Ada, or a weekly knowledge-inbox review by Mara.</div>'}
         <div class="stat-note" style="margin-top:10px;white-space:normal">Cron format: <code>min hour day month weekday</code> — e.g. <code>0 7 * * 1-5</code> = weekdays 07:00. Run history is in the Command Center.</div>
       </div>
+
+      <div class="flows-section-label">Workflows</div>
+      ${shownFlows.length ? shownFlows.map(workflowCardHtml).join('') : '<div class="card stat-note">No workflows in this group.</div>'}
 
       ${deletedBuiltins.length && active === 'all' ? `<div class="flows-section-label">Deleted Built-in Workflows</div>
       <div class="card">
