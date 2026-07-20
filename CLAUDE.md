@@ -411,6 +411,29 @@ An artifact can pass several lanes. Lanes never replace explicit user approval.
 
 The canonical tone and language rules live in `operating-profile.md` § Sprache & Ton. Agent instruction files reference that section instead of keeping their own copies.
 
+## Agent Result Validation (Mandatory)
+
+Before presenting any subagent result to the user:
+
+1. **Verify data access:** Did the agent actually read/load all required files?
+   - Look for explicit confirmation: "File loaded", "Read successful", or agent references specific file content
+   - Red flags: "cannot read", "not found", "I don't see", "permission denied"
+   
+2. **Stop immediately if data access failed.** Do not present incomplete work as complete.
+
+3. **Inform user explicitly:** "Agent could not access [file]. The [review/analysis] is invalid. Fixing this now."
+
+4. **Re-brief the agent:**
+   - Provide direct file path
+   - Require explicit confirmation: "Read [path] and confirm you loaded it successfully"
+   - Only then accept and present results
+
+5. **Special case — Agent handoff via SendMessage:** Agent loses file context. Always re-provide paths and ask for confirmation.
+
+**Rationale:** False confidence in invalid work is worse than technical failure. User must always know whether a result is based on complete information or incomplete data. Transparency is non-negotiable.
+
+See `memory/agent-validation-rule.md` for detailed rules.
+
 ## Image Prompt Library
 
 The project contains an image prompt reference library:

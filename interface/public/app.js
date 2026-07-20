@@ -1796,6 +1796,7 @@ function workflowCardHtml(w) {
         ${w.builtin ? '' : '<span class="badge badge-gray">CUSTOM</span>'}
         ${w.overridden ? '<span class="badge badge-apricot">EDITED</span>' : ''}
         <span style="margin-left:auto;display:flex;gap:6px">
+          <button class="chip chip-accent" data-wf-schedule="${esc(w.id)}">SCHEDULE</button>
           <button class="chip" data-wf-edit="${esc(w.id)}">EDIT</button>
           ${w.overridden ? `<button class="chip" data-wf-reset="${esc(w.id)}">RESET</button>` : ''}
           <button class="chip" data-wf-del="${esc(w.id)}" style="color:var(--apricot-deep)">DELETE</button>
@@ -1824,6 +1825,10 @@ function workflowCardHtml(w) {
 
 function bindWorkflowCardHandlers(scope) {
   $$('[data-agent]', scope).forEach((b) => b.addEventListener('click', () => { setView('map'); selectMapAgent(b.dataset.agent); }));
+  $$('[data-wf-schedule]', scope).forEach((b) => b.addEventListener('click', () => {
+    const w = FLOWS.find((x) => x.id === b.dataset.wfSchedule);
+    if (w) openJobDrawer(null, { name: w.name, workflow: w.id, prompt: 'Run the ' + w.name + ' workflow.' });
+  }));
   $$('[data-wf-edit]', scope).forEach((b) => b.addEventListener('click', () => openWorkflowDrawer(FLOWS.find((w) => w.id === b.dataset.wfEdit))));
   $$('[data-wf-reset]', scope).forEach((b) => b.addEventListener('click', async () => {
     delete flowsCfg.overrides[b.dataset.wfReset];
@@ -1850,14 +1855,20 @@ function bindWorkflowCardHandlers(scope) {
 }
 
 function jobRowHtml(j) {
-  return `<div class="list-row" style="cursor:default">
+  const clock = '<svg class="job-clock" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const nextLabel = j.enabled ? (j.nextRun ? 'next ' + fmtWhen(j.nextRun) : 'next —') : 'paused';
+  const lastLabel = j.lastRun ? 'last ' + esc(j.lastRun.status) : 'never ran';
+  return `<div class="list-row job-row" style="cursor:default">
       <span class="badge ${j.enabled ? 'badge-green' : 'badge-gray'}">${j.enabled ? 'ON' : j.scheduleType === 'once' && j.lastRun ? 'DONE' : 'OFF'}</span>
-      <span class="list-title">${esc(j.name)}${j.running ? ' <span class="badge badge-apricot">RUNNING</span>' : ''}</span>
-      <span class="list-meta mono-label">${j.scheduleType === 'once' ? 'once · ' + fmtWhen(j.runAt) : esc(j.schedule)}</span>
-      <span class="list-meta">${esc(j.workflow || '')}${j.workflow ? ' · ' : ''}${esc(j.agent || 'danny (main)')}</span>
-      <span class="list-meta">next: ${j.nextRun ? fmtWhen(j.nextRun) : j.enabled ? '—' : 'paused'}</span>
-      <span class="list-meta">${j.lastRun ? 'last: ' + esc(j.lastRun.status) : 'never ran'}</span>
-      <span style="display:flex;gap:6px">
+      <span class="job-main">
+        <span class="job-name">${esc(j.name)}${j.running ? ' <span class="badge badge-apricot">RUNNING</span>' : ''}</span>
+        <span class="job-target">${esc(j.workflow || '')}${j.workflow ? ' · ' : ''}${esc(j.agent || 'danny (main)')}</span>
+      </span>
+      <span class="job-sched ${j.enabled ? 'job-sched--on' : ''}">
+        <span class="job-sched-when">${clock}${esc(humanizeSchedule(j))}</span>
+        <span class="job-sched-next">${nextLabel} · ${lastLabel}</span>
+      </span>
+      <span class="job-actions">
         <button class="chip" data-run="${j.id}">RUN NOW</button>
         <button class="chip" data-edit="${j.id}">EDIT</button>
         <button class="chip" data-toggle="${j.id}">${j.enabled ? 'PAUSE' : 'ENABLE'}</button>
@@ -1949,14 +1960,14 @@ function paintFlows() {
         <button class="btn btn-ghost btn-small" data-act="refresh">Refresh</button>
       </div>
 
-      <div class="flows-section-label">Workflows</div>
-      ${shownFlows.length ? shownFlows.map(workflowCardHtml).join('') : '<div class="card stat-note">No workflows in this group.</div>'}
-
-      <div class="flows-section-label">Scheduled Jobs${schedErr ? ' · <span style="color:var(--apricot-deep)">scheduler offline</span>' : ''}</div>
+      <div class="flows-section-label flows-section-label--primary">Scheduled Jobs${schedErr ? ' · <span style="color:var(--apricot-deep)">scheduler offline</span>' : ''}</div>
       <div class="card">
         ${shownJobs.length ? shownJobs.map(jobRowHtml).join('') : '<div class="stat-note" style="white-space:normal">No scheduled jobs in this group. Create one, for example a Monday-morning LinkedIn draft by Ada, or a weekly knowledge-inbox review by Mara.</div>'}
         <div class="stat-note" style="margin-top:10px;white-space:normal">Cron format: <code>min hour day month weekday</code> — e.g. <code>0 7 * * 1-5</code> = weekdays 07:00. Run history is in the Command Center.</div>
       </div>
+
+      <div class="flows-section-label">Workflows</div>
+      ${shownFlows.length ? shownFlows.map(workflowCardHtml).join('') : '<div class="card stat-note">No workflows in this group.</div>'}
 
       ${deletedBuiltins.length && active === 'all' ? `<div class="flows-section-label">Deleted Built-in Workflows</div>
       <div class="card">
@@ -2129,6 +2140,28 @@ function fmtWhen(ts) {
   return ts ? new Date(ts).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' }) : '—';
 }
 
+const DOW_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+// Turn a job's schedule into a plain-language label so it is immediately clear when it runs.
+function humanizeSchedule(j) {
+  if (!j) return '';
+  if (j.scheduleType === 'once') return 'Once · ' + fmtWhen(j.runAt);
+  const b = parseCronToBuilder(j.schedule);
+  const pad = (n) => String(n).padStart(2, '0');
+  if (b.freq === 'hourly') return 'Hourly · :' + pad(b.minute || 0);
+  if (b.freq === 'daily') return 'Daily · ' + b.time;
+  if (b.freq === 'weekly') {
+    const days = [...b.days].sort((a, c) => a - c);
+    let label;
+    if (days.length === 7) label = 'Every day';
+    else if (days.length === 5 && [1, 2, 3, 4, 5].every((d) => b.days.has(d))) label = 'Weekdays';
+    else if (days.length === 2 && b.days.has(0) && b.days.has(6)) label = 'Weekends';
+    else label = days.map((d) => DOW_NAMES[d]).join(', ');
+    return label + ' · ' + b.time;
+  }
+  if (b.freq === 'monthly') return 'Monthly · day ' + b.dom + ' · ' + b.time;
+  return 'Cron · ' + (j.schedule || '');
+}
+
 
 const CRON_PRESETS = [
   { label: 'Weekdays 07:00', value: '0 7 * * 1-5' },
@@ -2186,8 +2219,8 @@ function toLocalDatetimeValue(ts) {
   return d.toISOString().slice(0, 16);
 }
 
-function openJobDrawer(job) {
-  const j = job || { name: '', agent: '', workflow: '', prompt: '', scheduleType: 'cron', schedule: '0 7 * * 1', runAt: null, enabled: true, timeoutMinutes: 15 };
+function openJobDrawer(job, prefill) {
+  const j = job || { name: '', agent: '', workflow: '', prompt: '', scheduleType: 'cron', schedule: '0 7 * * 1', runAt: null, enabled: true, timeoutMinutes: 15, ...(prefill || {}) };
   const workflowId = String(j.workflow || '').replace(/_workflow$/, '');
   openDrawer(`
     <div class="drawer-head">
@@ -2637,7 +2670,7 @@ function paintSkills() {
   const scopes = skillState.data.scopes;
   const personalScopes = scopes.filter((s) => s.kind === 'personal');
   el.innerHTML = `
-  <div class="view-pad simple-list" style="max-width:920px">
+  <div class="view-pad simple-list">
     <div class="card">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <input id="sk-search" class="filter-input" type="text" placeholder="Search skills…" value="${esc(skillState.q)}" style="flex:1;min-width:180px">
@@ -3189,7 +3222,7 @@ function paintArtifacts(el) {
       <span class="list-meta" title="${new Date(a.ctime || a.mtime).toLocaleString()}">${timeAgo(a.ctime || a.mtime)}</span>
     </button>`).join('');
 
-  el.innerHTML = `<div class="view-pad simple-list" style="max-width:1040px">
+  el.innerHTML = `<div class="view-pad simple-list">
     <div class="card">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <div class="section-title" style="margin:0">Artifacts <span class="list-meta">${items.length} of ${state.system.artifacts.length}</span></div>
@@ -3256,7 +3289,7 @@ function fmtDuration(ms) {
 function usageDetailsHtml(data, { compact = false } = {}) {
   const s = data.summary || {};
   const entries = data.entries || [];
-  return `${compact ? '' : '<div class="view-pad simple-list" style="max-width:1040px">'}
+  return `${compact ? '' : '<div class="view-pad simple-list">'}
     <div class="card">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <div class="section-title" style="flex:1;margin:0">Usage Report</div>
@@ -3504,6 +3537,12 @@ function paintSettingsBody(el) {
   const teamBoardActive = boardActive.team || {};
   const sharedFolders = sharedActive.detectedSubfolders || sharedSaved.detectedSubfolders || {};
   const boardSafetyErrors = Array.isArray(appCfg.boardSafetyErrors) ? appCfg.boardSafetyErrors : [];
+  const ksStatusPill = (state) => {
+    const s = String(state || '');
+    if (s === 'exists') return '<span class="ks-status ks-status--ok">exists</span>';
+    if (s === 'missing') return '<span class="ks-status ks-status--missing">missing</span>';
+    return `<span class="ks-status ks-status--none">${esc(s || 'not configured')}</span>`;
+  };
   const ksDone = Boolean(workspace.knowledgeSpaces?.personalReady && workspace.knowledgeSpaces?.sharedReady);
   const userTypeDone = Boolean(onb?.userTypeDone);
 
@@ -3517,8 +3556,8 @@ function paintSettingsBody(el) {
 
   const onboardingCard = !onb ? '' : `
     <div class="card" data-section="onboarding" ${onb.complete ? '' : 'style="border-color:var(--apricot)"'}>
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
-        <div class="section-title" style="flex:1;margin:0">Onboarding</div>
+      <div class="card-head">
+        <div class="section-title">Onboarding</div>
         <span class="badge ${onb.complete ? 'badge-green' : 'badge-apricot'}">${onb.complete ? 'COMPLETE' : 'INCOMPLETE'}</span>
       </div>
       <div class="kv-row">
@@ -3585,69 +3624,84 @@ function paintSettingsBody(el) {
 
     ${show('runtime') ? `
     <div class="card" data-section="runtime">
-      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-        <div style="flex:1;min-width:220px">
-          <div class="section-title" style="margin:0 0 4px">Runtime</div>
-          <div class="stat-note" style="white-space:normal">
-            Interface changes (guardrails enforcement, scheduler, skill hub) apply <strong>immediately</strong>.
-            Claude Code permission/MCP changes apply to <strong>new Claude sessions</strong> — scheduler jobs pick them
-            up automatically (each run is a fresh session); an open interactive Claude session must be restarted by you.
-          </div>
-        </div>
+      <div class="card-head">
+        <div class="section-title">Runtime</div>
         <button class="btn btn-primary btn-small" data-act="restart-app">Restart App + Chat</button>
+      </div>
+      <div class="rt-signals">
+        <div class="rt-signal rt-signal--now">
+          <span class="badge badge-green">IMMEDIATE</span>
+          <span>Guardrails enforcement, scheduler and skill hub changes apply right away, no restart needed.</span>
+        </div>
+        <div class="rt-signal rt-signal--next">
+          <span class="badge badge-apricot">NEW SESSIONS</span>
+          <span>Claude Code permission and MCP changes apply to new Claude sessions. Scheduler jobs pick them up automatically (each run is a fresh session); an open interactive session must be restarted by you.</span>
+        </div>
       </div>
     </div>` : ''}
 
     ${show('knowledge-spaces') ? `
     <div class="card" data-section="knowledge-spaces" ${ksDone ? '' : 'style="border-color:var(--apricot)"'}>
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
-        <div class="section-title" style="flex:1;margin:0">Knowledge Spaces</div>
+      <div class="card-head">
+        <div class="section-title">Knowledge Spaces</div>
         <span class="badge ${ksDone ? 'badge-green' : 'badge-apricot'}">${ksDone ? 'READY' : 'CHECK PATHS'}</span>
       </div>
-      <div class="form-field">
-        <label for="ks-personal-root">Personal knowledge root (maps to <code>knowledge/personal/…</code>)</label>
+      <div class="ks-space ks-space--personal">
+        <div class="ks-space-head">
+          <span class="ks-scope-tag">Personal</span>
+          <label for="ks-personal-root">Personal knowledge root (maps to <code>knowledge/personal/…</code>)</label>
+        </div>
         <div class="ks-path-edit-row">
           <input id="ks-personal-root" class="filter-input" type="text" value="${esc(appCfgSettings.personalKnowledgeRoot || '')}" placeholder="knowledge/personal" readonly>
           <button class="btn btn-ghost btn-small" type="button" data-ks-edit="ks-personal-root" data-ks-label="Personal knowledge root">Edit</button>
         </div>
+        <div class="ks-space-status">
+          <div class="ks-status-line"><span class="ks-status-label">Saved</span> <code>${esc(personalSaved.path || 'knowledge/personal')}</code> ${ksStatusPill(personalSaved.exists ? 'exists' : 'missing')}${personalSaved.isSymlink ? ' · symlink' : ''}</div>
+          <div class="ks-status-line"><span class="ks-status-label">Active</span> <code>${esc(personalActive.path || personalSaved.path || 'knowledge/personal')}</code> ${ksStatusPill(personalActive.exists ? 'exists' : 'missing')}${personalActive.isSymlink ? ' · symlink' : ''}</div>
+        </div>
       </div>
-      <div class="stat-note" style="white-space:normal;margin-bottom:8px">
-        Saved root: <code>${esc(personalSaved.path || 'knowledge/personal')}</code> · ${personalSaved.exists ? 'exists' : 'missing'}${personalSaved.isSymlink ? ' · symlink' : ''}<br>
-        Active runtime root: <code>${esc(personalActive.path || personalSaved.path || 'knowledge/personal')}</code> · ${personalActive.exists ? 'exists' : 'missing'}${personalActive.isSymlink ? ' · symlink' : ''}
-      </div>
-      <div class="form-field">
-        <label for="ks-shared-root">Shared company/team knowledge root (maps to <code>knowledge/company</code>, <code>knowledge/inbox</code>, <code>knowledge/team</code>)</label>
+      <div class="ks-space ks-space--shared">
+        <div class="ks-space-head">
+          <span class="ks-scope-tag">Shared</span>
+          <label for="ks-shared-root">Shared company/team knowledge root (maps to <code>knowledge/company</code>, <code>knowledge/inbox</code>, <code>knowledge/team</code>)</label>
+        </div>
         <div class="ks-path-edit-row">
           <input id="ks-shared-root" class="filter-input" type="text" value="${esc(appCfgSettings.sharedKnowledgeRoot || '')}" placeholder="knowledge" readonly>
           <button class="btn btn-ghost btn-small" type="button" data-ks-edit="ks-shared-root" data-ks-label="Shared knowledge root">Edit</button>
         </div>
+        <div class="ks-space-status">
+          <div class="ks-status-line"><span class="ks-status-label">Saved</span> <code>${esc(sharedSaved.path || 'knowledge')}</code> ${ksStatusPill(sharedSaved.exists ? 'exists' : 'missing')}${sharedSaved.isSymlink ? ' · symlink' : ''}</div>
+          <div class="ks-status-line"><span class="ks-status-label">Active</span> <code>${esc(sharedActive.path || sharedSaved.path || 'knowledge')}</code> ${ksStatusPill(sharedActive.exists ? 'exists' : 'missing')}${sharedActive.isSymlink ? ' · symlink' : ''}</div>
+          <div class="ks-subfolders">Subfolders: <span class="${sharedFolders.company ? 'ks-sub-ok' : 'ks-sub-no'}">company ${sharedFolders.company ? '✓' : '—'}</span> · <span class="${sharedFolders.inbox ? 'ks-sub-ok' : 'ks-sub-no'}">inbox ${sharedFolders.inbox ? '✓' : '—'}</span> · <span class="${sharedFolders.team ? 'ks-sub-ok' : 'ks-sub-no'}">team ${sharedFolders.team ? '✓' : '—'}</span></div>
+        </div>
       </div>
-      <div class="stat-note" style="white-space:normal;margin-bottom:8px">
-        Saved root: <code>${esc(sharedSaved.path || 'knowledge')}</code> · ${sharedSaved.exists ? 'exists' : 'missing'}${sharedSaved.isSymlink ? ' · symlink' : ''}<br>
-        Active runtime root: <code>${esc(sharedActive.path || sharedSaved.path || 'knowledge')}</code> · ${sharedActive.exists ? 'exists' : 'missing'}${sharedActive.isSymlink ? ' · symlink' : ''}<br>
-        Shared subfolders detected: company ${sharedFolders.company ? '✓' : '—'} · inbox ${sharedFolders.inbox ? '✓' : '—'} · team ${sharedFolders.team ? '✓' : '—'}
-      </div>
-      <div class="form-field">
-        <label for="ks-private-board-root">Private board root (Project Board private scope storage)</label>
+      <div class="ks-space ks-space--personal">
+        <div class="ks-space-head">
+          <span class="ks-scope-tag">Private</span>
+          <label for="ks-private-board-root">Private board root (Project Board private scope storage)</label>
+        </div>
         <div class="ks-path-edit-row">
           <input id="ks-private-board-root" class="filter-input" type="text" value="${esc(appCfgSettings.privateBoardRoot || '')}" placeholder="(default local runtime private board root)" readonly>
           <button class="btn btn-ghost btn-small" type="button" data-ks-edit="ks-private-board-root" data-ks-label="Private board root">Edit</button>
         </div>
+        <div class="ks-space-status">
+          <div class="ks-status-line"><span class="ks-status-label">Saved</span> <code>${esc(privateBoardSaved.path || '(default local runtime private board root)')}</code> ${ksStatusPill(privateBoardSaved.exists ? 'exists' : 'missing')}${privateBoardSaved.isSymlink ? ' · symlink' : ''}</div>
+          <div class="ks-status-line"><span class="ks-status-label">Active</span> <code>${esc(privateBoardActive.path || privateBoardSaved.path || '(default local runtime private board root)')}</code> ${ksStatusPill(privateBoardActive.exists ? 'exists' : 'missing')}${privateBoardActive.isSymlink ? ' · symlink' : ''}</div>
+        </div>
       </div>
-      <div class="stat-note" style="white-space:normal;margin-bottom:8px">
-        Saved root: <code>${esc(privateBoardSaved.path || '(default local runtime private board root)')}</code> · ${privateBoardSaved.exists ? 'exists' : 'missing'}${privateBoardSaved.isSymlink ? ' · symlink' : ''}<br>
-        Active runtime root: <code>${esc(privateBoardActive.path || privateBoardSaved.path || '(default local runtime private board root)')}</code> · ${privateBoardActive.exists ? 'exists' : 'missing'}${privateBoardActive.isSymlink ? ' · symlink' : ''}
-      </div>
-      <div class="form-field">
-        <label for="ks-team-board-root">Team board root (Project Board team scope storage)</label>
+      <div class="ks-space ks-space--shared">
+        <div class="ks-space-head">
+          <span class="ks-scope-tag">Team</span>
+          <label for="ks-team-board-root">Team board root (Project Board team scope storage)</label>
+        </div>
         <div class="ks-path-edit-row">
           <input id="ks-team-board-root" class="filter-input" type="text" value="${esc(appCfgSettings.teamBoardRoot || '')}" placeholder="/absolute/path/to/team-board" readonly>
           <button class="btn btn-ghost btn-small" type="button" data-ks-edit="ks-team-board-root" data-ks-label="Team board root">Edit</button>
         </div>
-      </div>
-      <div class="stat-note" style="white-space:normal;margin-bottom:8px">
-        Saved root: <code>${esc(teamBoardSaved.path || 'not configured')}</code> · ${teamBoardSaved.path ? (teamBoardSaved.exists ? 'exists' : 'missing') : 'not configured'}${teamBoardSaved.isSymlink ? ' · symlink' : ''}<br>
-        Active runtime root: <code>${esc(teamBoardActive.path || teamBoardSaved.path || 'not configured')}</code> · ${teamBoardActive.path ? (teamBoardActive.exists ? 'exists' : 'missing') : 'not configured'}${teamBoardActive.isSymlink ? ' · symlink' : ''}
+        <div class="ks-space-status">
+          <div class="ks-status-line"><span class="ks-status-label">Saved</span> <code>${esc(teamBoardSaved.path || 'not configured')}</code> ${ksStatusPill(teamBoardSaved.path ? (teamBoardSaved.exists ? 'exists' : 'missing') : 'not configured')}${teamBoardSaved.isSymlink ? ' · symlink' : ''}</div>
+          <div class="ks-status-line"><span class="ks-status-label">Active</span> <code>${esc(teamBoardActive.path || teamBoardSaved.path || 'not configured')}</code> ${ksStatusPill(teamBoardActive.path ? (teamBoardActive.exists ? 'exists' : 'missing') : 'not configured')}${teamBoardActive.isSymlink ? ' · symlink' : ''}</div>
+        </div>
       </div>
       ${boardSafetyErrors.length ? `<div class="stat-note" style="color:var(--apricot-deep);white-space:normal;margin-bottom:8px">Board root checks: ${boardSafetyErrors.map((msg) => esc(msg)).join(' · ')}</div>` : ''}
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -3735,8 +3789,8 @@ function paintSettingsBody(el) {
 
     ${show('plugins') ? `
     <div class="card" data-section="plugins">
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
-        <div class="section-title" style="flex:1;margin:0">Plugins</div>
+      <div class="card-head">
+        <div class="section-title">Plugins</div>
         <button class="btn btn-ghost btn-small" data-act="add-plugin">Add Plugin</button>
       </div>
       ${plugins.map((p) => `
