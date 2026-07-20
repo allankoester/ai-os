@@ -2817,7 +2817,7 @@ function paintSkills() {
   const scopes = skillState.data.scopes;
   const personalScopes = scopes.filter((s) => s.kind === 'personal');
   el.innerHTML = `
-  <div class="view-pad simple-list" style="max-width:920px">
+  <div class="view-pad simple-list">
     <div class="card">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <input id="sk-search" class="filter-input" type="text" placeholder="Search skills…" value="${esc(skillState.q)}" style="flex:1;min-width:180px">
@@ -3369,7 +3369,7 @@ function paintArtifacts(el) {
       <span class="list-meta" title="${new Date(a.ctime || a.mtime).toLocaleString()}">${timeAgo(a.ctime || a.mtime)}</span>
     </button>`).join('');
 
-  el.innerHTML = `<div class="view-pad simple-list" style="max-width:1040px">
+  el.innerHTML = `<div class="view-pad simple-list">
     <div class="card">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <div class="section-title" style="margin:0">Artifacts <span class="list-meta">${items.length} of ${state.system.artifacts.length}</span></div>
@@ -3436,7 +3436,7 @@ function fmtDuration(ms) {
 function usageDetailsHtml(data, { compact = false } = {}) {
   const s = data.summary || {};
   const entries = data.entries || [];
-  return `${compact ? '' : '<div class="view-pad simple-list" style="max-width:1040px">'}
+  return `${compact ? '' : '<div class="view-pad simple-list">'}
     <div class="card">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <div class="section-title" style="flex:1;margin:0">Usage Report</div>

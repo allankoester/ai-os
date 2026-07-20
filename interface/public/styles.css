@@ -1614,7 +1614,9 @@ span.clickable:hover, span.clickable:focus-visible { background: var(--green-tin
 /* ============ Settings ============ */
 
 .simple-list .card { margin-bottom: 10px; }
-.settings-block { max-width: 880px; }
+/* Unified content width for list/settings views — fills the screen, caps on ultra-wide for readability */
+.view-pad.simple-list { max-width: 1320px; }
+.settings-block { max-width: 1320px; }
 .settings-block .card { margin-bottom: 14px; }
 .settings-block .section-title { margin-bottom: 10px; }
 .kv-row > span:first-child { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -2012,8 +2014,9 @@ span.clickable:hover, span.clickable:focus-visible { background: var(--green-tin
 }
 
 /* settings section filter */
-.settings-filter { padding: 12px 16px; }
-.settings-filter .filter-tabs { flex-wrap: wrap; }
+.settings-filter { padding: 12px 16px; overflow-x: auto; }
+.settings-filter .filter-tabs { flex-wrap: nowrap; max-width: 100%; }
+.settings-filter .filter-tab { white-space: nowrap; }
 
 /* ===== Drawer date/time picker ===== */
 
