@@ -1,0 +1,21 @@
+[
+  {
+    "id": "job_sched_minimal",
+    "name": "Daily Digest",
+    "agent": "danny",
+    "workflow": null,
+    "prompt": "Summarize yesterday's board activity.",
+    "scheduleType": "once",
+    "schedule": "",
+    "runAt": 1762000000000,
+    "enabled": true,
+    "timeoutMinutes": 15,
+    "model": null,
+    "allowedTools": null,
+    "meta": {
+      "runtime_mode": "claude-subscription"
+    },
+    "createdAt": 1761990000000,
+    "lastRun": null
+  }
+]

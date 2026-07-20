@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import {
@@ -14,6 +15,7 @@ import {
   TASK_STATUS_TRANSITIONS,
   TASK_STATUSES,
   TERMINAL_EXECUTION_STATES,
+  WORK_TYPES,
 } from './constants.mjs';
 import { boardError } from './errors.mjs';
 import {
@@ -21,9 +23,17 @@ import {
   ensureLength,
   ensureId,
   normalizeDueAt,
+  sanitizeComponentTags,
+  sanitizeCompletionPercent,
+  sanitizeCustomFields,
+  sanitizeDependencies,
+  sanitizeExternalLinks,
   sanitizeHumanAssigneeLabel,
   sanitizeReviewers,
+  sanitizeSprint,
+  sanitizeStoryPoints,
   sanitizeSubtasks,
+  sanitizeWorkType,
   validateLinkedPaths,
   validateLinkedRuns,
   validateProjectCreate,
@@ -32,6 +42,43 @@ import {
 import { assertReviewStateTransition, assertTaskStatusTransition } from './transitions.mjs';
 
 function nowIso() { return new Date().toISOString(); }
+
+const DEFAULT_ARTIFACT_ALLOWED_CONTENT_TYPES = new Set([
+  'text/plain',
+  'text/markdown',
+  'text/csv',
+  'text/html',
+  'text/xml',
+  'application/json',
+  'application/pdf',
+  'application/xml',
+  'application/yaml',
+  'application/x-yaml',
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+]);
+const DEFAULT_ARTIFACT_MAX_BYTES = 25 * 1024 * 1024;
+const DEFAULT_ARTIFACT_HASH_MAX_BYTES = 10 * 1024 * 1024;
+const DEFAULT_ARTIFACT_RETENTION_CLASS = 'task_attempt';
+const EXT_TO_CONTENT_TYPE = {
+  '.md': 'text/markdown',
+  '.txt': 'text/plain',
+  '.log': 'text/plain',
+  '.json': 'application/json',
+  '.csv': 'text/csv',
+  '.html': 'text/html',
+  '.xml': 'application/xml',
+  '.yaml': 'application/yaml',
+  '.yml': 'application/yaml',
+  '.pdf': 'application/pdf',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+};
 
 const SUPPORTED_RUNTIME_MODES = new Set(['claude-subscription', 'anthropic-api', 'opencode']);
 const CALLBACK_TO_EXECUTION_STATE = {
@@ -68,6 +115,52 @@ function slashPath(value) {
   return String(value || '').split(path.sep).join('/');
 }
 
+function parsePositiveIntOr(defaultValue, raw) {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return defaultValue;
+  return Math.floor(n);
+}
+
+function artifactPolicy() {
+  const allowedRaw = String(process.env.BOARD_ARTIFACT_ALLOWED_CONTENT_TYPES || '').trim();
+  const allowed = new Set(
+    (allowedRaw
+      ? allowedRaw.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean)
+      : [...DEFAULT_ARTIFACT_ALLOWED_CONTENT_TYPES])
+  );
+  return {
+    allowedContentTypes: allowed,
+    maxBytes: parsePositiveIntOr(DEFAULT_ARTIFACT_MAX_BYTES, process.env.BOARD_ARTIFACT_MAX_BYTES),
+    hashMaxBytes: parsePositiveIntOr(DEFAULT_ARTIFACT_HASH_MAX_BYTES, process.env.BOARD_ARTIFACT_HASH_MAX_BYTES),
+    retentionClass: String(process.env.BOARD_ARTIFACT_RETENTION_CLASS || DEFAULT_ARTIFACT_RETENTION_CLASS).trim() || DEFAULT_ARTIFACT_RETENTION_CLASS,
+  };
+}
+
+function contentTypeForArtifactFile(relPath) {
+  const ext = path.extname(String(relPath || '')).toLowerCase();
+  return EXT_TO_CONTENT_TYPE[ext] || 'application/octet-stream';
+}
+
+function safeArtifactReferenceForAudit({ artifactId = null, taskId = null, attemptId = null, relPath = null }) {
+  const sanitizedRel = String(relPath || '').replace(/\\/g, '/').split('/').filter(Boolean).slice(-3).join('/');
+  if (artifactId) return `id:${artifactId}`;
+  if (taskId && attemptId && sanitizedRel) return `legacy:${taskId}/${attemptId}/${sanitizedRel}`;
+  if (taskId && attemptId) return `legacy:${taskId}/${attemptId}`;
+  return 'unknown';
+}
+
+async function sha256File(absFile) {
+  const hash = createHash('sha256');
+  const fh = await fsp.open(absFile, 'r');
+  try {
+    const stream = fh.createReadStream();
+    for await (const chunk of stream) hash.update(chunk);
+    return hash.digest('hex');
+  } finally {
+    await fh.close();
+  }
+}
+
 function asItemList(items, { limit = 50, offset = 0 } = {}) {
   return items.slice(offset, offset + limit);
 }
@@ -87,6 +180,14 @@ function clearBlockedState(task) {
 function normalizeTaskShape(task) {
   task.subtasks = Array.isArray(task.subtasks) ? task.subtasks : [];
   task.human_assignee_label = sanitizeHumanAssigneeLabel(task.human_assignee_label);
+  try { task.work_type = sanitizeWorkType(task.work_type); } catch { task.work_type = 'feature'; }
+  try { task.component_tags = sanitizeComponentTags(task.component_tags); } catch { task.component_tags = []; }
+  try { task.sprint = sanitizeSprint(task.sprint); } catch { task.sprint = null; }
+  try { task.story_points = sanitizeStoryPoints(task.story_points); } catch { task.story_points = null; }
+  try { task.completion_percent = sanitizeCompletionPercent(task.completion_percent); } catch { task.completion_percent = 0; }
+  try { task.dependencies = sanitizeDependencies(task.dependencies); } catch { task.dependencies = []; }
+  try { task.external_links = sanitizeExternalLinks(task.external_links); } catch { task.external_links = []; }
+  try { task.custom_fields = sanitizeCustomFields(task.custom_fields); } catch { task.custom_fields = {}; }
   task.execution = task.execution && typeof task.execution === 'object' ? task.execution : {};
   task.execution.attempts = Array.isArray(task.execution.attempts) ? task.execution.attempts : [];
   task.execution.execution_updates = Array.isArray(task.execution.execution_updates) ? task.execution.execution_updates : [];
@@ -139,10 +240,38 @@ function makeEvent({ entityType, entityId, projectId, action, actorId, oldVersio
   };
 }
 
-export function createBoardService({ rootDir, guardrails, scheduler, storage, getRuntimeSettingsRaw, listCanonicalAgentIds, listCanonicalWorkflowIds }) {
+export function createBoardService({ rootDir, guardrails, scheduler, storage, getRuntimeSettingsRaw, listCanonicalAgentIds, listCanonicalWorkflowIds, resolveDeploymentState }) {
+  async function getDeploymentState() {
+    if (typeof resolveDeploymentState === 'function') {
+      const state = await resolveDeploymentState();
+      if (state && typeof state === 'object') return state;
+    }
+    return {
+      requestedDeployment: 'team-server',
+      effectiveDeployment: 'team-server',
+      teamCapability: { status: 'enabled', reason: null },
+    };
+  }
+
+  async function assertTeamCapabilityAvailable() {
+    const state = await getDeploymentState();
+    const capabilityStatus = String(state?.teamCapability?.status || '').toLowerCase();
+    const capabilityEnabled = capabilityStatus === 'enabled';
+    if (state?.effectiveDeployment === 'team-server' && capabilityEnabled) return;
+    throw boardError(503, 'TEAM_CAPABILITY_UNAVAILABLE', 'team board capability is unavailable', {
+      requestedDeployment: state?.requestedDeployment || null,
+      effectiveDeployment: state?.effectiveDeployment || null,
+      reason: state?.teamCapability?.reason || null,
+    });
+  }
+
+  async function assertTeamMutationAllowed(scope) {
+    if (scope !== 'team') return;
+    await assertTeamCapabilityAvailable();
+  }
+
   async function appendEvents(scope, record) {
     await storage.appendActivity(scope, record);
-    await storage.appendAudit(scope, record);
   }
 
   function canReadProject(project, actor) {
@@ -225,6 +354,32 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
     return { ...located, project: projectInfo.project };
   }
 
+  async function auditArtifactAccess({
+    actor,
+    operation,
+    result,
+    reasonCode = null,
+    scope = null,
+    projectId = null,
+    taskId = null,
+    attemptId = null,
+    artifactId = null,
+    relPath = null,
+  }) {
+    await storage.appendArtifactAccessAudit({
+      actorId: actorIdFrom(actor),
+      operation,
+      scope,
+      projectId,
+      taskId,
+      attemptId,
+      artifactId,
+      artifactReference: safeArtifactReferenceForAudit({ artifactId, taskId, attemptId, relPath }),
+      result,
+      reasonCode,
+    });
+  }
+
   async function listScopeProjectsSafe(scope) {
     try {
       return await storage.listProjects(scope);
@@ -252,6 +407,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       const actorId = actorIdFrom(actor);
       const located = await findProjectScoped(id);
       if (!located) throw boardError(404, 'not_found', 'project not found');
+      await assertTeamMutationAllowed(located.scope);
       if (!canWriteProject(located.project, actor)) throw boardError(403, 'forbidden', 'project access denied');
       const existing = located.project;
       const before = existing.version;
@@ -260,16 +416,18 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       next.updated_at = nowIso();
       next.updated_by = actorId;
       next.version = before + 1;
-      await storage.writeProject(located.scope, id, next, { expectedVersion: before });
-      await appendEvents(located.scope, makeEvent({
-        entityType: 'project',
-        entityId: id,
-        projectId: id,
-        action,
-        actorId,
-        oldVersion: before,
-        newVersion: next.version,
-      }));
+      await storage.writeProject(located.scope, id, next, {
+        expectedVersion: before,
+        event: makeEvent({
+          entityType: 'project',
+          entityId: id,
+          projectId: id,
+          action,
+          actorId,
+          oldVersion: before,
+          newVersion: next.version,
+        }),
+      });
       return next;
     });
   }
@@ -278,6 +436,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
     return storage.withLock(`task:${id}`, async () => {
       const actorId = actorIdFrom(actor);
       const located = await assertTaskReadable(id, actor);
+      await assertTeamMutationAllowed(located.scope);
       if (!options.skipProjectWriteCheck && !canWriteProject(located.project, actor)) {
         throw boardError(403, 'forbidden', 'task access denied');
       }
@@ -289,16 +448,18 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       next.updated_at = nowIso();
       next.updated_by = actorId;
       next.version = before + 1;
-      await storage.writeTask(located.scope, id, next, { expectedVersion: before });
-      await appendEvents(located.scope, makeEvent({
-        entityType: 'task',
-        entityId: id,
-        projectId: next.project_id,
-        action,
-        actorId,
-        oldVersion: before,
-        newVersion: next.version,
-      }));
+      await storage.writeTask(located.scope, id, next, {
+        expectedVersion: before,
+        event: makeEvent({
+          entityType: 'task',
+          entityId: id,
+          projectId: next.project_id,
+          action,
+          actorId,
+          oldVersion: before,
+          newVersion: next.version,
+        }),
+      });
       return next;
     });
   }
@@ -378,6 +539,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
     const attemptRoot = resolveAttemptRoot(scope, visibility, taskId, attemptId);
     const { rootRef, absRoot, scopeRootAbs } = attemptRoot;
     const { realAttemptRoot } = await canonicalizeRootBoundary(scopeRootAbs, absRoot, visibility);
+    const policy = artifactPolicy();
     const out = [];
     const stack = [realAttemptRoot];
     while (stack.length) {
@@ -397,7 +559,35 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
         if (!real || !isPathWithin(realAttemptRoot, real)) continue;
         const relFromAttempt = slashPath(path.relative(realAttemptRoot, real));
         if (!relFromAttempt || relFromAttempt.startsWith('..')) continue;
-        out.push({ path: `${rootRef}/${relFromAttempt}`, kind: 'file' });
+        const contentType = contentTypeForArtifactFile(relFromAttempt);
+        if (!policy.allowedContentTypes.has(contentType.toLowerCase())) {
+          throw boardError(422, 'artifact_type_rejected', 'artifact content type is not allowed by policy', {
+            rel_path: relFromAttempt,
+            content_type: contentType,
+          });
+        }
+        const sizeBytes = Number(lst.size || 0);
+        if (sizeBytes > policy.maxBytes) {
+          throw boardError(422, 'artifact_size_rejected', 'artifact exceeds max size policy', {
+            rel_path: relFromAttempt,
+            size_bytes: sizeBytes,
+            max_bytes: policy.maxBytes,
+          });
+        }
+        let hashSha256 = null;
+        if (sizeBytes > 0 && sizeBytes <= policy.hashMaxBytes) {
+          hashSha256 = await sha256File(real).catch(() => null);
+        }
+        const pathRef = `${rootRef}/${relFromAttempt}`;
+        out.push({
+          path: pathRef,
+          storage_ref: pathRef,
+          kind: 'file',
+          content_type: contentType,
+          size_bytes: sizeBytes,
+          hash_sha256: hashSha256,
+          retention_class: policy.retentionClass,
+        });
       }
     }
     return out;
@@ -539,21 +729,24 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
   }
 
   async function persistTaskMutation(scope, taskId, task, actorId, action, details = null) {
+    await assertTeamMutationAllowed(scope);
     const before = task.version;
     task.version = before + 1;
     task.updated_at = nowIso();
     task.updated_by = actorId;
-    await storage.writeTask(scope, taskId, task, { expectedVersion: before });
-    await appendEvents(scope, makeEvent({
-      entityType: 'task',
-      entityId: taskId,
-      projectId: task.project_id,
-      action,
-      actorId,
-      oldVersion: before,
-      newVersion: task.version,
-      ...(details ? { details } : {}),
-    }));
+    await storage.writeTask(scope, taskId, task, {
+      expectedVersion: before,
+      event: makeEvent({
+        entityType: 'task',
+        entityId: taskId,
+        projectId: task.project_id,
+        action,
+        actorId,
+        oldVersion: before,
+        newVersion: task.version,
+        ...(details ? { details } : {}),
+      }),
+    });
   }
 
   async function reconcileDispatchFailure(task, summary) {
@@ -589,6 +782,154 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
     return requestedVersion;
   }
 
+  function parseArtifactStorageRef(ref, expectedTaskId = null, expectedAttemptId = null) {
+    const normalized = slashPath(String(ref || '')).replace(/^\/+/, '');
+    const match = normalized.match(/^artifacts\/project-board\/(private|team)\/([^/]+)\/([^/]+)\/(.+)$/);
+    if (!match) return null;
+    const [, visibility, taskId, attemptId, relPath] = match;
+    if (expectedTaskId && taskId !== expectedTaskId) return null;
+    if (expectedAttemptId && attemptId !== expectedAttemptId) return null;
+    return {
+      visibility,
+      scope: visibility === 'team' ? 'team' : 'private',
+      taskId,
+      attemptId,
+      relPath,
+    };
+  }
+
+  async function resolveCatalogArtifactLocation(task, artifactRow) {
+    const refs = [artifactRow?.storage_ref, artifactRow?.path].filter(Boolean);
+    for (const ref of refs) {
+      const parsed = parseArtifactStorageRef(ref, task.id, artifactRow?.attempt_id || null);
+      if (!parsed) continue;
+      const root = resolveAttemptRoot(parsed.scope, parsed.visibility, task.id, parsed.attemptId);
+      const { realAttemptRoot } = await canonicalizeRootBoundary(root.scopeRootAbs, root.absRoot, parsed.visibility);
+      const abs = path.join(root.absRoot, ...String(parsed.relPath || '').split('/'));
+      const lst = await fsp.lstat(abs).catch(() => null);
+      if (!lst || !lst.isFile() || lst.isSymbolicLink()) continue;
+      const real = await fsp.realpath(abs).catch(() => null);
+      if (!real || !isPathWithin(realAttemptRoot, real)) {
+        throw boardError(403, 'forbidden', 'artifact escaped confinement');
+      }
+      return {
+        abs: real,
+        rel: slashPath(ref),
+        relFilePath: parsed.relPath,
+      };
+    }
+    return null;
+  }
+
+  async function quarantineArtifactPath({ scope, absPath, artifactId = null }) {
+    if (!absPath) return null;
+    const scopeRootAbs = storage.resolveScopeRoot(scope === 'team' ? 'team' : 'private');
+    const quarantineDir = path.join(scopeRootAbs, 'artifacts', 'project-board', 'quarantine');
+    await fsp.mkdir(quarantineDir, { recursive: true, mode: 0o700 });
+    const base = path.basename(String(absPath || '')) || 'artifact.bin';
+    const safeBase = base.replace(/[^a-zA-Z0-9._-]/g, '_').slice(-120);
+    const quarantineName = `${artifactId || 'artifact'}_${Date.now()}_${safeBase}`;
+    const quarantineAbs = path.join(quarantineDir, quarantineName);
+    await fsp.rename(absPath, quarantineAbs).catch(() => null);
+    return quarantineAbs;
+  }
+
+  async function validateCatalogArtifactReadIntegrity({ row, resolved }) {
+    const policy = artifactPolicy();
+    const lst = await fsp.lstat(resolved.abs).catch(() => null);
+    if (!lst || !lst.isFile() || lst.isSymbolicLink()) {
+      return { ok: false, reasonCode: 'artifact_missing_or_unsafe' };
+    }
+    const real = await fsp.realpath(resolved.abs).catch(() => null);
+    if (!real || real !== resolved.abs) {
+      return { ok: false, reasonCode: 'artifact_realpath_mismatch' };
+    }
+    const contentType = contentTypeForArtifactFile(resolved.relFilePath);
+    if (!policy.allowedContentTypes.has(String(contentType || '').toLowerCase())) {
+      return { ok: false, reasonCode: 'artifact_policy_type_mismatch' };
+    }
+    const sizeBytes = Number(lst.size || 0);
+    if (sizeBytes > policy.maxBytes) {
+      return { ok: false, reasonCode: 'artifact_policy_size_mismatch' };
+    }
+    if (row.size_bytes !== null && row.size_bytes !== undefined && Number(row.size_bytes) !== sizeBytes) {
+      return { ok: false, reasonCode: 'artifact_catalog_size_mismatch' };
+    }
+    if (row.hash_sha256) {
+      const hash = await sha256File(real).catch(() => null);
+      if (!hash || hash !== String(row.hash_sha256)) {
+        return { ok: false, reasonCode: 'artifact_catalog_hash_mismatch' };
+      }
+    }
+    return {
+      ok: true,
+      contentType,
+      sizeBytes,
+    };
+  }
+
+  async function secureDeleteBestEffort(absPath) {
+    const st = await fsp.stat(absPath).catch(() => null);
+    if (!st || !st.isFile()) return { removed: false, overwritten: false };
+    let overwritten = false;
+    try {
+      if (st.size > 0) {
+        const fh = await fsp.open(absPath, 'r+');
+        try {
+          const chunk = Buffer.alloc(Math.min(st.size, 1024 * 1024), 0);
+          let written = 0;
+          while (written < st.size) {
+            const next = Math.min(chunk.length, st.size - written);
+            await fh.write(chunk.subarray(0, next), 0, next, written);
+            written += next;
+          }
+          await fh.sync();
+          overwritten = true;
+        } finally {
+          await fh.close();
+        }
+      }
+    } catch {
+      overwritten = false;
+    }
+    await fsp.unlink(absPath).catch(() => {});
+    const exists = await fsp.stat(absPath).then(() => true).catch(() => false);
+    return { removed: !exists, overwritten };
+  }
+
+  async function deleteCatalogArtifactInternal({ artifactRow, actorId, reasonCode }) {
+    const dummyTask = { id: artifactRow.task_id };
+    const resolved = await resolveCatalogArtifactLocation(dummyTask, artifactRow);
+    const erase = resolved ? await secureDeleteBestEffort(resolved.abs) : { removed: false, overwritten: false };
+    const eventId = randomUUID();
+    await storage.markCatalogArtifactDeleted({
+      artifactId: artifactRow.artifact_id,
+      actorId,
+      reason: reasonCode,
+      eventId,
+    });
+    return { erase, eventId };
+  }
+
+  async function deleteTaskArtifactsByScopeTask({ scope, taskId, actor, reasonCode }) {
+    const rows = await storage.listCatalogArtifacts({ scope, taskId, includeDeleted: false });
+    const actorId = actorIdFrom(actor);
+    for (const row of rows) {
+      const deleted = await deleteCatalogArtifactInternal({ artifactRow: row, actorId, reasonCode });
+      await auditArtifactAccess({
+        actor,
+        operation: 'delete',
+        result: 'ok',
+        scope: row.scope,
+        projectId: row.project_id,
+        taskId: row.task_id,
+        attemptId: row.attempt_id,
+        artifactId: row.artifact_id,
+        reasonCode: deleted.erase.overwritten ? 'best_effort_overwrite_and_unlink' : 'unlink_only',
+      });
+    }
+  }
+
   return {
     async listProjects(query, actor) {
       const allRaw = [
@@ -612,6 +953,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       const actorId = actorIdFrom(actor);
       const project = validateProjectCreate(body);
       const scope = project.visibility === 'team' ? 'team' : 'private';
+      await assertTeamMutationAllowed(scope);
       project.schema_version = SCHEMA_VERSION;
       project.created_by = actorId;
       project.updated_by = actorId;
@@ -622,16 +964,18 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
         if (!actor?.isHuman) throw boardError(403, 'forbidden', 'project create requires authenticated human');
         const existing = await findProjectScoped(project.id);
         if (existing) throw boardError(409, 'conflict', 'project id already exists');
-        await storage.writeProject(scope, project.id, project, { expectedVersion: null });
-        await appendEvents(scope, makeEvent({
-          entityType: 'project',
-          entityId: project.id,
-          projectId: project.id,
-          action: 'create_project',
-          actorId,
-          oldVersion: 0,
-          newVersion: project.version,
-        }));
+        await storage.writeProject(scope, project.id, project, {
+          expectedVersion: null,
+          event: makeEvent({
+            entityType: 'project',
+            entityId: project.id,
+            projectId: project.id,
+            action: 'create_project',
+            actorId,
+            oldVersion: 0,
+            newVersion: project.version,
+          }),
+        });
       });
       return project;
     },
@@ -682,6 +1026,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
         const actorId = actorIdFrom(actor);
         const located = await findProjectScoped(projectId);
         if (!located) throw boardError(404, 'not_found', 'project not found');
+        await assertTeamMutationAllowed(located.scope);
         if (!canWriteProject(located.project, actor)) throw boardError(403, 'forbidden', 'project access denied');
         if (located.project.version !== requestedVersion) {
           throw boardError(409, 'conflict', 'Version mismatch', { expected: located.project.version, got: requestedVersion });
@@ -691,9 +1036,8 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
         if (activeTask) {
           throw boardError(409, 'execution_active', `cannot delete project while task ${activeTask.id} has active execution`);
         }
-        for (const task of tasks) {
-          await storage.deleteTask(located.scope, task.id);
-          await appendEvents(located.scope, makeEvent({
+        const events = [
+          ...tasks.map((task) => makeEvent({
             entityType: 'task',
             entityId: task.id,
             projectId,
@@ -701,19 +1045,27 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
             actorId,
             oldVersion: task.version,
             newVersion: task.version + 1,
-          }));
+          })),
+          makeEvent({
+            entityType: 'project',
+            entityId: projectId,
+            projectId,
+            action: 'delete_project',
+            actorId,
+            oldVersion: located.project.version,
+            newVersion: located.project.version + 1,
+            details: { deleted_task_ids: tasks.map((task) => task.id) },
+          }),
+        ];
+        for (const task of tasks) {
+          await deleteTaskArtifactsByScopeTask({
+            scope: located.scope,
+            taskId: task.id,
+            actor,
+            reasonCode: 'project_delete_cascade',
+          });
         }
-        await storage.deleteProject(located.scope, projectId);
-        await appendEvents(located.scope, makeEvent({
-          entityType: 'project',
-          entityId: projectId,
-          projectId,
-          action: 'delete_project',
-          actorId,
-          oldVersion: located.project.version,
-          newVersion: located.project.version + 1,
-          details: { deleted_task_ids: tasks.map((task) => task.id) },
-        }));
+        await storage.deleteProject(located.scope, projectId, { events });
         return { id: projectId, deleted: true, cascade_deleted_tasks: tasks.length };
       });
     },
@@ -749,6 +1101,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       const locatedProject = await findProjectScoped(task.project_id);
       const project = locatedProject?.project;
       if (!project) throw boardError(422, 'validation_error', 'project_id does not exist');
+      await assertTeamMutationAllowed(locatedProject.scope);
       if (!canWriteProject(project, actor)) throw boardError(403, 'forbidden', 'project access denied');
       if (task.assignee_type === 'agent' && !task.assignee_id) task.assignee_id = 'danny';
       task.schema_version = SCHEMA_VERSION;
@@ -764,16 +1117,18 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       await storage.withLock(`task:${task.id}`, async () => {
         const existing = await findTaskScoped(task.id);
         if (existing) throw boardError(409, 'conflict', 'task id already exists');
-        await storage.writeTask(locatedProject.scope, task.id, task, { expectedVersion: null });
-        await appendEvents(locatedProject.scope, makeEvent({
-          entityType: 'task',
-          entityId: task.id,
-          projectId: task.project_id,
-          action: 'create_task',
-          actorId,
-          oldVersion: 0,
-          newVersion: task.version,
-        }));
+        await storage.writeTask(locatedProject.scope, task.id, task, {
+          expectedVersion: null,
+          event: makeEvent({
+            entityType: 'task',
+            entityId: task.id,
+            projectId: task.project_id,
+            action: 'create_task',
+            actorId,
+            oldVersion: 0,
+            newVersion: task.version,
+          }),
+        });
       });
       return task;
     },
@@ -836,6 +1191,30 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
             case 'set_priority':
               task.priority = ensureEnum(op.value, PRIORITIES, 'priority');
               break;
+            case 'set_work_type':
+              task.work_type = sanitizeWorkType(op.value);
+              break;
+            case 'set_component_tags':
+              task.component_tags = sanitizeComponentTags(op.value);
+              break;
+            case 'set_sprint':
+              task.sprint = sanitizeSprint(op.value);
+              break;
+            case 'set_story_points':
+              task.story_points = sanitizeStoryPoints(op.value);
+              break;
+            case 'set_completion_percent':
+              task.completion_percent = sanitizeCompletionPercent(op.value);
+              break;
+            case 'set_dependencies':
+              task.dependencies = sanitizeDependencies(op.value);
+              break;
+            case 'set_external_links':
+              task.external_links = sanitizeExternalLinks(op.value);
+              break;
+            case 'set_custom_fields':
+              task.custom_fields = sanitizeCustomFields(op.value);
+              break;
             case 'set_assignee': {
               const type = ensureEnum(op?.value?.assignee_type, ASSIGNEE_TYPES, 'assignee_type');
               task.assignee_type = type;
@@ -889,6 +1268,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       return storage.withLock(`task:${taskId}`, async () => {
         const actorId = actorIdFrom(actor);
         const located = await assertTaskReadable(taskId, actor);
+        await assertTeamMutationAllowed(located.scope);
         if (!canWriteProject(located.project, actor)) throw boardError(403, 'forbidden', 'task access denied');
         if (located.task.version !== requestedVersion) {
           throw boardError(409, 'conflict', 'Version mismatch', { expected: located.task.version, got: requestedVersion });
@@ -896,8 +1276,13 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
         if (ACTIVE_EXECUTION_STATES.has(located.task.execution?.state || 'none')) {
           throw boardError(409, 'execution_active', 'cannot delete task while execution is active');
         }
-        await storage.deleteTask(located.scope, taskId);
-        await appendEvents(located.scope, makeEvent({
+        await deleteTaskArtifactsByScopeTask({
+          scope: located.scope,
+          taskId,
+          actor,
+          reasonCode: 'task_delete_cascade',
+        });
+        await storage.deleteTask(located.scope, taskId, { event: makeEvent({
           entityType: 'task',
           entityId: taskId,
           projectId: located.task.project_id,
@@ -905,7 +1290,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
           actorId,
           oldVersion: located.task.version,
           newVersion: located.task.version + 1,
-        }));
+        }) });
         return { id: taskId, deleted: true };
       });
     },
@@ -920,6 +1305,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       const id = ensureId(taskId);
       return storage.withLock(`task:${id}`, async () => {
         const located = await assertTaskReadable(id, actor);
+        await assertTeamMutationAllowed(located.scope);
         if (!canWriteProject(located.project, actor)) throw boardError(403, 'forbidden', 'task access denied');
         const task = located.task;
         normalizeTaskShape(task);
@@ -1025,6 +1411,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       const id = ensureId(taskId);
       return storage.withLock(`task:${id}`, async () => {
         const located = await assertTaskReadable(id, actor);
+        await assertTeamMutationAllowed(located.scope);
         if (!canWriteProject(located.project, actor)) throw boardError(403, 'forbidden', 'task access denied');
         const task = located.task;
         normalizeTaskShape(task);
@@ -1118,6 +1505,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       return storage.withLock(`task:${taskId}`, async () => {
         const located = await findTaskScoped(taskId);
         if (!located) throw boardError(404, 'not_found', 'task not found');
+        await assertTeamMutationAllowed(located.scope);
         const task = located.task;
         normalizeTaskShape(task);
         if (task.execution?.attempt_id !== attemptId) {
@@ -1200,6 +1588,15 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
             taskId: task.id,
             attemptId,
           });
+          const catalogArtifacts = await storage.upsertCatalogArtifacts({
+            scope: located.scope,
+            projectId: task.project_id,
+            taskId: task.id,
+            attemptId,
+            actorId,
+            retentionClass: artifactPolicy().retentionClass,
+            artifacts,
+          });
           task.linked_runs = appendNewestBounded(
             task.linked_runs || [],
             runId ? [{ source: 'scheduler', id: String(runId) }] : [],
@@ -1208,7 +1605,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
           );
           task.linked_paths = appendNewestBounded(
             task.linked_paths || [],
-            artifacts,
+            catalogArtifacts.map((a) => ({ ...a, kind: 'file' })),
             LIMITS.linkedPathsMax,
             (p) => p.path,
           );
@@ -1217,7 +1614,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
             completed_at: nowIso(),
             result_summary: ensureLength(redactedResultSummary || '', 'result_summary', 0, LIMITS.resultSummaryMax) || null,
             failure_summary: null,
-            artifact_paths: artifacts.map((a) => a.path),
+            artifact_paths: catalogArtifacts.map((a) => a.path),
             scheduler_run_id: runId || null,
             scheduler_job_id: callbackJobId || task.execution?.scheduler_job_id || null,
           });
@@ -1237,9 +1634,18 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
             taskId: task.id,
             attemptId,
           });
+          const catalogArtifacts = await storage.upsertCatalogArtifacts({
+            scope: located.scope,
+            projectId: task.project_id,
+            taskId: task.id,
+            attemptId,
+            actorId,
+            retentionClass: artifactPolicy().retentionClass,
+            artifacts,
+          });
           task.linked_paths = appendNewestBounded(
             task.linked_paths || [],
-            artifacts,
+            catalogArtifacts.map((a) => ({ ...a, kind: 'file' })),
             LIMITS.linkedPathsMax,
             (p) => p.path,
           );
@@ -1255,7 +1661,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
             failure_summary: ensureLength(redactedFailureSummary || '', 'failure_summary', 0, LIMITS.failureSummaryMax) || null,
             scheduler_run_id: runId,
             scheduler_job_id: callbackJobId || task.execution?.scheduler_job_id || null,
-            artifact_paths: artifacts.map((a) => a.path),
+            artifact_paths: catalogArtifacts.map((a) => a.path),
           });
           appendExecutionUpdate(task, {
             state: failedState,
@@ -1273,17 +1679,19 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
         task.version = before + 1;
         task.updated_at = nowIso();
         task.updated_by = actorId;
-        await storage.writeTask(located.scope, taskId, task, { expectedVersion: before });
-        await appendEvents(located.scope, makeEvent({
-          entityType: 'task',
-          entityId: taskId,
-          projectId: task.project_id,
-          action: 'execution_callback',
-          actorId,
-          oldVersion: before,
-          newVersion: task.version,
-          details: { attempt_id: attemptId, state },
-        }));
+        await storage.writeTask(located.scope, taskId, task, {
+          expectedVersion: before,
+          event: makeEvent({
+            entityType: 'task',
+            entityId: taskId,
+            projectId: task.project_id,
+            action: 'execution_callback',
+            actorId,
+            oldVersion: before,
+            newVersion: task.version,
+            details: { attempt_id: attemptId, state },
+          }),
+        });
         return task;
       });
     },
@@ -1328,6 +1736,52 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       return storage.readActivity(located.scope, (row) => row.project_id === located.project.id || row.entity_id === located.project.id);
     },
 
+    async getProjectDashboard(projectId, actor) {
+      const located = await assertProjectReadable(projectId, actor);
+      const tasks = await storage.listProjectTasks(located.scope, located.project.id);
+      const byStatus = Object.fromEntries([...TASK_STATUSES].map((status) => [status, 0]));
+      const byPriority = Object.fromEntries([...PRIORITIES].map((priority) => [priority, 0]));
+      const byWorkType = Object.fromEntries([...WORK_TYPES].map((workType) => [workType, 0]));
+      const sprintBreakdown = {};
+      const nowMs = Date.now();
+      let blockedCount = 0;
+      let overdueCount = 0;
+      let inProgressCount = 0;
+      let doneCount = 0;
+      let completionTotal = 0;
+
+      for (const task of tasks) {
+        normalizeTaskShape(task);
+        byStatus[task.status] = (byStatus[task.status] || 0) + 1;
+        byPriority[task.priority] = (byPriority[task.priority] || 0) + 1;
+        byWorkType[task.work_type] = (byWorkType[task.work_type] || 0) + 1;
+        if (task.blocked?.is_blocked || task.status === 'blocked') blockedCount += 1;
+        if (task.status === 'in_progress') inProgressCount += 1;
+        if (task.status === 'done') doneCount += 1;
+
+        const dueAtMs = task.due_at ? Date.parse(task.due_at) : NaN;
+        if (Number.isFinite(dueAtMs) && dueAtMs < nowMs && task.status !== 'done') overdueCount += 1;
+        completionTotal += Number.isInteger(task.completion_percent) ? task.completion_percent : 0;
+
+        if (task.sprint) sprintBreakdown[task.sprint] = (sprintBreakdown[task.sprint] || 0) + 1;
+      }
+
+      const totalTasks = tasks.length;
+      return {
+        project_id: located.project.id,
+        total_tasks: totalTasks,
+        by_status: byStatus,
+        by_priority: byPriority,
+        by_work_type: byWorkType,
+        blocked_count: blockedCount,
+        overdue_count: overdueCount,
+        in_progress_count: inProgressCount,
+        done_count: doneCount,
+        avg_completion_percent: totalTasks ? Math.round(completionTotal / totalTasks) : 0,
+        sprint_breakdown: sprintBreakdown,
+      };
+    },
+
     async getProjectAudit(projectId, actor) {
       const located = await assertProjectReadable(projectId, actor);
       return storage.readAudit(located.scope, (row) => row.project_id === located.project.id || row.entity_id === located.project.id);
@@ -1351,7 +1805,10 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
           throw err;
         }
       }
-      const visibilityOptions = teamAvailable ? ['private', 'team'] : ['private'];
+      const deploymentState = await getDeploymentState();
+      const teamCapabilityEnabled = String(deploymentState?.teamCapability?.status || '').toLowerCase() === 'enabled'
+        && deploymentState?.effectiveDeployment === 'team-server';
+      const visibilityOptionsEffective = (teamAvailable && teamCapabilityEnabled) ? ['private', 'team'] : ['private'];
       const statusTransitions = Object.fromEntries(
         Object.entries(TASK_STATUS_TRANSITIONS).map(([from, allowed]) => [from, [...allowed.values()]])
       );
@@ -1369,7 +1826,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
           team_root_configured: teamConfigured,
           team_root_available: teamAvailable,
         },
-        visibility_options: visibilityOptions,
+        visibility_options: visibilityOptionsEffective,
         task_status_transitions: statusTransitions,
       };
     },
@@ -1414,6 +1871,8 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
         }
 
         const toScope = toVisibility === 'team' ? 'team' : 'private';
+        await assertTeamMutationAllowed(toScope);
+        if (entries.some((e) => e.scope === 'team')) await assertTeamMutationAllowed('team');
         storage.resolveScopeRoot(toScope);
 
         const existingMarker = located.project.scope_migration || null;
@@ -1513,13 +1972,139 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       });
     },
 
+    async readArtifactById({ artifactId, actor }) {
+      const id = String(artifactId || '').trim();
+      if (!id) throw boardError(422, 'validation_error', 'artifact_id is required');
+      const row = await storage.readCatalogArtifactById(id);
+      if (!row) {
+        await auditArtifactAccess({ actor, operation: 'read', result: 'denied', reasonCode: 'artifact_not_found', artifactId: id });
+        throw boardError(404, 'not_found', 'artifact not found');
+      }
+      let located;
+      try {
+        located = await assertTaskReadable(row.task_id, actor);
+      } catch (err) {
+        await auditArtifactAccess({
+          actor,
+          operation: 'read',
+          result: 'denied',
+          reasonCode: err?.code || 'access_denied',
+          scope: row.scope,
+          projectId: row.project_id,
+          taskId: row.task_id,
+          attemptId: row.attempt_id,
+          artifactId: row.artifact_id,
+        });
+        throw err;
+      }
+      const rowProjectId = row.project_id || located.task.project_id;
+      if (located.scope !== row.scope || located.task.project_id !== rowProjectId) {
+        await auditArtifactAccess({
+          actor,
+          operation: 'read',
+          result: 'denied',
+          reasonCode: 'scope_mismatch',
+          scope: row.scope,
+          projectId: row.project_id,
+          taskId: row.task_id,
+          attemptId: row.attempt_id,
+          artifactId: row.artifact_id,
+        });
+        throw boardError(409, 'conflict', 'artifact scope relationship mismatch');
+      }
+      if (row.deleted_at) {
+        await auditArtifactAccess({
+          actor,
+          operation: 'read',
+          result: 'denied',
+          reasonCode: 'artifact_deleted',
+          scope: row.scope,
+          projectId: row.project_id,
+          taskId: row.task_id,
+          attemptId: row.attempt_id,
+          artifactId: row.artifact_id,
+        });
+        throw boardError(404, 'not_found', 'artifact not found');
+      }
+      const resolved = await resolveCatalogArtifactLocation(located.task, row);
+      if (!resolved) {
+        await auditArtifactAccess({
+          actor,
+          operation: 'read',
+          result: 'denied',
+          reasonCode: 'artifact_missing',
+          scope: row.scope,
+          projectId: row.project_id,
+          taskId: row.task_id,
+          attemptId: row.attempt_id,
+          artifactId: row.artifact_id,
+        });
+        throw boardError(404, 'not_found', 'artifact not found');
+      }
+      const integrity = await validateCatalogArtifactReadIntegrity({ row, resolved });
+      if (!integrity.ok) {
+        await quarantineArtifactPath({ scope: row.scope, absPath: resolved.abs, artifactId: row.artifact_id });
+        await storage.markCatalogArtifactDeleted({
+          artifactId: row.artifact_id,
+          actorId: actorIdFrom(actor),
+          reason: integrity.reasonCode,
+          eventId: randomUUID(),
+        }).catch(() => {});
+        await auditArtifactAccess({
+          actor,
+          operation: 'read',
+          result: 'denied',
+          reasonCode: integrity.reasonCode,
+          scope: row.scope,
+          projectId: rowProjectId,
+          taskId: row.task_id,
+          attemptId: row.attempt_id,
+          artifactId: row.artifact_id,
+          relPath: resolved.relFilePath,
+        });
+        throw boardError(409, 'artifact_integrity_mismatch', 'artifact integrity validation failed');
+      }
+      await auditArtifactAccess({
+        actor,
+        operation: 'read',
+        result: 'ok',
+        scope: row.scope,
+        projectId: rowProjectId,
+        taskId: row.task_id,
+        attemptId: row.attempt_id,
+        artifactId: row.artifact_id,
+        relPath: resolved.relFilePath,
+      });
+      return {
+        artifact_id: row.artifact_id,
+        abs: resolved.abs,
+        rel: resolved.rel,
+        content_type: row.content_type || integrity.contentType || contentTypeForArtifactFile(resolved.relFilePath),
+      };
+    },
+
     async readTaskArtifact({ taskId, attemptId, artifactPath, actor }) {
-      const located = await assertTaskReadable(taskId, actor);
+      const rawPath = String(artifactPath || '').replace(/\\/g, '/');
+      const segments = rawPath.split('/').filter((seg) => seg.length > 0);
+      const hasTraversal = segments.some((seg) => seg === '..' || seg === '.');
+      const normalized = path.posix.normalize('/' + rawPath).slice(1);
+      if (!normalized || hasTraversal || normalized.includes('..')) {
+        await auditArtifactAccess({ actor, operation: 'read_legacy', result: 'denied', reasonCode: 'invalid_path', taskId, attemptId, relPath: normalized });
+        throw boardError(422, 'validation_error', 'invalid artifact path');
+      }
+      let located;
+      try {
+        located = await assertTaskReadable(taskId, actor);
+      } catch (err) {
+        await auditArtifactAccess({ actor, operation: 'read_legacy', result: 'denied', reasonCode: err?.code || 'access_denied', taskId, attemptId, relPath: normalized });
+        throw err;
+      }
       const task = located.task;
       const allowedAttempts = (task.execution?.attempts || []).filter((a) => a.attempt_id === attemptId);
-      if (!allowedAttempts.length) throw boardError(404, 'not_found', 'artifact attempt not found');
-      const normalized = path.posix.normalize('/' + String(artifactPath || '').replace(/\\/g, '/')).slice(1);
-      if (!normalized || normalized.includes('..')) throw boardError(422, 'validation_error', 'invalid artifact path');
+      if (!allowedAttempts.length) {
+        await auditArtifactAccess({ actor, operation: 'read_legacy', result: 'denied', reasonCode: 'attempt_not_found', scope: located.scope, projectId: task.project_id, taskId: task.id, attemptId, relPath: normalized });
+        throw boardError(404, 'not_found', 'artifact attempt not found');
+      }
       const attempt = allowedAttempts[0];
       const roots = [resolveAttemptRoot(located.scope, task.visibility || 'private', task.id, attemptId)];
       const strictAttemptRootRe = new RegExp(`^artifacts/project-board/(private|team)/${task.id}/${attemptId}$`);
@@ -1532,27 +2117,141 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
         if (!roots.some((r) => r.scope === oldRoot.scope && r.rootRef === oldRoot.rootRef)) roots.push(oldRoot);
       }
       const candidatePaths = roots.map((root) => `${slashPath(root.rootRef)}/${normalized}`);
-      const linkedRef = (attempt.artifact_paths || []).some((p) => {
-        const value = slashPath(p);
-        return candidatePaths.includes(value);
-      }) || (task.linked_paths || []).some((p) => {
-        const value = slashPath(p?.path);
-        return candidatePaths.includes(value);
+      let rows = await storage.listCatalogArtifactsByAttemptPathVariants({
+        scope: located.scope,
+        taskId: task.id,
+        attemptId,
+        candidatePaths,
       });
-      if (!linkedRef) {
-        throw boardError(404, 'not_found', 'artifact not linked to attempt');
+
+      if (!rows.length) {
+        const linkedRef = (attempt.artifact_paths || []).some((p) => candidatePaths.includes(slashPath(p)))
+          || (task.linked_paths || []).some((p) => candidatePaths.includes(slashPath(p?.path)));
+        if (!linkedRef) {
+          await auditArtifactAccess({ actor, operation: 'read_legacy', result: 'denied', reasonCode: 'not_linked', scope: located.scope, projectId: task.project_id, taskId: task.id, attemptId, relPath: normalized });
+          throw boardError(404, 'not_found', 'artifact not linked to attempt');
+        }
+        for (const root of roots) {
+          const parsed = parseArtifactStorageRef(`${slashPath(root.rootRef)}/${normalized}`, task.id, attemptId);
+          if (!parsed) continue;
+          const { realAttemptRoot } = await canonicalizeRootBoundary(root.scopeRootAbs, root.absRoot, root.visibility);
+          const abs = path.join(root.absRoot, ...normalized.split('/'));
+          const st = await fsp.stat(abs).catch(() => null);
+          if (!st || !st.isFile()) continue;
+          const real = await fsp.realpath(abs).catch(() => null);
+          if (!real || !isPathWithin(realAttemptRoot, real)) continue;
+          const type = contentTypeForArtifactFile(parsed.relPath);
+          const policy = artifactPolicy();
+          if (!policy.allowedContentTypes.has(type)) continue;
+          if (Number(st.size || 0) > policy.maxBytes) continue;
+          const hashSha256 = Number(st.size || 0) <= policy.hashMaxBytes ? await sha256File(real).catch(() => null) : null;
+          const inserted = await storage.upsertCatalogArtifacts({
+            scope: located.scope,
+            projectId: task.project_id,
+            taskId: task.id,
+            attemptId,
+            actorId: actorIdFrom(actor),
+            retentionClass: policy.retentionClass,
+            artifacts: [{
+              path: `${slashPath(root.rootRef)}/${normalized}`,
+              storage_ref: `${slashPath(root.rootRef)}/${normalized}`,
+              content_type: type,
+              size_bytes: Number(st.size || 0),
+              hash_sha256: hashSha256,
+            }],
+          });
+          rows = inserted.filter((r) => candidatePaths.includes(slashPath(r.path || '')));
+          if (rows.length) break;
+        }
       }
-      for (const root of roots) {
-        const { realAttemptRoot } = await canonicalizeRootBoundary(root.scopeRootAbs, root.absRoot, root.visibility);
-        const abs = path.join(root.absRoot, ...normalized.split('/'));
-        const lst = await fsp.lstat(abs).catch(() => null);
-        if (!lst || !lst.isFile() || lst.isSymbolicLink()) continue;
-        const real = await fsp.realpath(abs).catch(() => null);
-        const confined = real && isPathWithin(realAttemptRoot, real);
-        if (!confined) throw boardError(403, 'forbidden', 'artifact escaped confinement');
-        return { abs: real, rel: `${slashPath(root.rootRef)}/${normalized}` };
+
+      const row = rows.find((r) => r.artifact_id) || rows[0];
+      if (!row?.artifact_id) {
+        await auditArtifactAccess({ actor, operation: 'read_legacy', result: 'denied', reasonCode: 'catalog_mapping_failed', scope: located.scope, projectId: task.project_id, taskId: task.id, attemptId, relPath: normalized });
+        throw boardError(404, 'not_found', 'artifact not found');
       }
-      throw boardError(404, 'not_found', 'artifact not found');
+      await auditArtifactAccess({
+        actor,
+        operation: 'read_legacy',
+        result: 'ok',
+        scope: row.scope,
+        projectId: row.project_id,
+        taskId: row.task_id,
+        attemptId: row.attempt_id,
+        artifactId: row.artifact_id,
+        relPath: normalized,
+      });
+      return this.readArtifactById({ artifactId: row.artifact_id, actor });
+    },
+
+    async deleteArtifactById({ artifactId, actor, reason = '' }) {
+      const id = String(artifactId || '').trim();
+      if (!id) throw boardError(422, 'validation_error', 'artifact_id is required');
+      const row = await storage.readCatalogArtifactById(id);
+      if (!row || row.deleted_at) {
+        await auditArtifactAccess({ actor, operation: 'delete', result: 'denied', reasonCode: 'artifact_not_found', artifactId: id });
+        throw boardError(404, 'not_found', 'artifact not found');
+      }
+      let located;
+      try {
+        located = await assertTaskReadable(row.task_id, actor);
+      } catch (err) {
+        await auditArtifactAccess({
+          actor,
+          operation: 'delete',
+          result: 'denied',
+          reasonCode: err?.code || 'access_denied',
+          scope: row.scope,
+          projectId: row.project_id,
+          taskId: row.task_id,
+          attemptId: row.attempt_id,
+          artifactId: row.artifact_id,
+        });
+        throw err;
+      }
+      const rowProjectId = row.project_id || located.task.project_id;
+      await assertTeamMutationAllowed(located.scope);
+      if (!canWriteProject(located.project, actor)) {
+        await auditArtifactAccess({
+          actor,
+          operation: 'delete',
+          result: 'denied',
+          reasonCode: 'forbidden',
+          scope: row.scope,
+          projectId: rowProjectId,
+          taskId: row.task_id,
+          attemptId: row.attempt_id,
+          artifactId: row.artifact_id,
+        });
+        throw boardError(403, 'forbidden', 'artifact delete access denied');
+      }
+      const deleted = await deleteCatalogArtifactInternal({
+        artifactRow: row,
+        actorId: actorIdFrom(actor),
+        reasonCode: String(reason || '').trim() || 'manual_delete',
+      });
+      await auditArtifactAccess({
+        actor,
+        operation: 'delete',
+        result: 'ok',
+        scope: row.scope,
+        projectId: rowProjectId,
+        taskId: row.task_id,
+        attemptId: row.attempt_id,
+        artifactId: row.artifact_id,
+        reasonCode: deleted.erase.overwritten ? 'best_effort_overwrite_and_unlink' : 'unlink_only',
+      });
+      return {
+        artifact_id: row.artifact_id,
+        deleted: true,
+        retention_class: row.retention_class || artifactPolicy().retentionClass,
+        deletion: {
+          removed: Boolean(deleted.erase.removed),
+          overwrite_attempted: true,
+          overwrite_succeeded: Boolean(deleted.erase.overwritten),
+          guarantee: 'best_effort',
+        },
+      };
     },
 
     async applySchedulerEvent(event) {

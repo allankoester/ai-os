@@ -5,10 +5,12 @@ Everything here except this README is gitignored.
 
 ```
 scheduler/
-├── jobs.json    job definitions (name, cron schedule, agent, prompt, …)
-├── runs.json    run history (last 200)
-└── logs/        full output per run (<runId>.log)
+├── logs/        full output per run (<runId>.log)
+└── (legacy JSON compatibility files may appear during migration/debug windows)
 ```
+
+Canonical scheduler operational state is machine-local SQLite.
+`scheduler/jobs.json` and `scheduler/runs.json` are legacy compatibility inputs/exports only and are not canonical authority.
 
 ## How it works
 
@@ -35,8 +37,7 @@ scheduler/
   (server-enforced): no `Bash`, no unscoped or root-scoped `Write`/`Edit`,
   no `WebFetch` combined with write access. Jobs created with an override
   start **disabled**; enabling them is a deliberate second step via UI/API.
-- `jobs.json` is read once at server start; the running server is the source
-  of truth. Disable or change jobs via UI/API, not by editing the file.
+- Scheduler state authority is SQLite at runtime; disable/change jobs via UI/API.
 - Jobs only run **while the interface server is running** (Stage 1/2 is
   local-first — always-on execution is Stage 4, VM runtime).
 - If the app is offline during a recurring cron window, that missed window is

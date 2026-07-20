@@ -7,7 +7,7 @@ Machine: ____________  User: ____________  Date: __________
 
 ## Software
 
-- [ ] Node.js 18+ (`node --version`)
+- [ ] Node.js 22+ (`node --version`)
 - [ ] git installed and authenticated for the repo
 - [ ] Claude Code installed and signed in
 - [ ] Repo cloned at a known path; `git pull` clean (no local divergence)
@@ -30,3 +30,5 @@ Machine: ____________  User: ____________  Date: __________
 - [ ] Backup created within the last 7 days (`scripts/backup.sh list`)
 - [ ] Restore tested at least once on this machine
 - [ ] User has read `docs/runbook-team-operations.md`
+- [ ] Machine-local runtime root is writable and used for SQLite operational domains (board/scheduler/chat session metadata)
+- [ ] No expectation that `scheduler/jobs.json` or `chat/sessions.json` is canonical authority

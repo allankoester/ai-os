@@ -46,6 +46,8 @@ Company skill names must be kebab-case and match their folder name
   `scripts/validate.mjs`) plus a `## Changelog` section — bump the version
   and add a changelog line on every behavioral change; git review stays the
   change gate.
+- **Agent definitions and company skills are Git-versioned authority.**
+  Runtime-generated activation/materialization state is not.
 - **Marketplace installs are pinned:** `.install.json` records
   owner/repo/ref and the branch-head `sha` at install time.
   `GET /api/marketplace/updates` compares the pin against the current head
@@ -56,6 +58,11 @@ Company skill names must be kebab-case and match their folder name
   git repo (never gets a remote; the parent repo ignores the folder). The
   hub snapshots automatically on install; after manual edits, snapshot with
   plain `git add -A && git commit` inside that folder.
+
+Validator boundary:
+
+- `scripts/validate.mjs` enforces company skill metadata/version contracts and repo structure rules.
+- It does not enforce runtime invocation-time authorization for skills/tools.
 
 ## Included company skills
 

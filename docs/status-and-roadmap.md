@@ -10,7 +10,7 @@ the same change set.
 
 ## Last Verified Snapshot
 
-- Date: 2026-07-09
+- Date: 2026-07-20
 - Validation: `node scripts/validate.mjs` (passed, 243 checks)
 - Scope verified: docs, interface, scheduler, knowledge contract, scripts,
   personal-assistant layer (memory, chat history, learning loop, skill
@@ -33,10 +33,20 @@ the same change set.
 
 - Interface server is implemented: `interface/server.mjs`
 - Scheduler is implemented and executable now: `interface/scheduler.mjs`
-- Scheduler persistence is machine-local JSON in `scheduler/jobs.json` and
-  `scheduler/runs.json`
+- Scheduler operational persistence is machine-local SQLite (canonical)
+- Private board operational persistence is machine-local SQLite (canonical)
+- Chat session metadata/search index persistence is machine-local SQLite (canonical)
+- Chat transcripts remain canonical JSONL in `chat/history/*.jsonl`
+- Usage telemetry stream remains canonical JSONL in `runs/usage.jsonl` (with legacy compatibility read path for `runs/chat-usage.jsonl`)
 - Scheduler run logs are machine-local files in `scheduler/logs/`
 - Headless execution path is implemented via `claude -p`
+- Local Microsoft 365 MCP read-only integration baseline is implemented:
+  - local MCP server: `mcp/m365/server.mjs`
+  - plugin materialization: built-in `m365-readonly` in `interface/plugins.mjs`
+  - setup guide + Azure CLI app-registration helper:
+    `docs/guide-m365-mcp-readonly-setup.md`, `scripts/m365-app-registration.sh`
+  - explicit boundary: separate from app-only Graph backend in
+    `interface/storage/graph-storage.mjs`
 
 ### Knowledge and governance
 
@@ -91,6 +101,7 @@ verification evidence, commits); analysis:
   `CLAUDE.md` and `.claude/agents/`
 - Skill hub and profile model are implemented with `skills/`, `.skill-profile`,
   and interface skill APIs
+- Versioning and permission-boundary reference: `docs/architecture/agent-versioning-and-permission-boundaries.md`
 
 ### Prototype vs live boundaries
 
@@ -114,12 +125,16 @@ Roadmap baseline references:
 
 | Phase | Intent | Status | Notes |
 | --- | --- | --- | --- |
-| 0 | Contracts and schemas | partial | Folder/state contracts exist in docs and code; canonical runtime schema still to formalize |
-| 1 | Local scheduler + run history | implemented (JSON) | Working scheduler exists; persistence currently JSON |
+| 0 | Contracts and schemas | implemented baseline | Folder/state contracts exist in docs/code; Phase 0 contract lane includes ADR + migration contract + migration fixtures/tests (`docs/architecture/adr-2026-07-20-phase0-runtime-storage-decisions.md`, `docs/architecture/migration-contract-phase0-json-to-sqlite.md`, `tests/board/fixtures/phase0-migration/`, `tests/board/migration-fixtures-contract.test.mjs`) |
+| 1 | Local scheduler + run history | implemented (SQLite core) | Working scheduler exists; operational persistence is SQLite, logs remain file-based |
 | 2 | Skills operations and profile handling | implemented baseline | Skill hub, profile activation, and docs present |
 | 3 | Personal assistant layer (OpenClaw-compatible) | foundations implemented | Memory/chat-history/learning/promotion implemented Claude-native 2026-07-09; memory files use OpenClaw semantics, adoption decision open |
-| 4 | VM execution runtime and common harness | planned | Runtime migration not active yet; target SQLite-backed scheduler harness |
+| 4 | VM execution runtime and common harness | planned | Local SQLite core is implemented; VM runtime rollout remains planned |
 | 5 | Enterprise connectors/policy | planned | Not implemented |
+
+Connector checkpoint note (2026-07-20): a local, delegated, read-only Microsoft
+365 MCP baseline is now implemented for interactive sessions; scheduler/headless
+connector execution and full native PKCE token lifecycle remain follow-up scope.
 
 ### Desktop packaging track (new spec drafted 2026-07-13)
 
@@ -137,17 +152,16 @@ Roadmap baseline references:
 - Phase 4 (copy-first migration execution): implemented
 - Phase 5 (canonical switch and stabilization): implemented baseline
 
-### Planned runtime shift for Stage 4
+### Stage 4 runtime scope after local-core SQLite rollout
 
-The scheduler persistence model should move from machine-local JSON to a common
-SQLite-backed harness for reliability and shared operational behavior.
+The scheduler/board/chat local operational model already uses machine-local SQLite canonical authority.
 
 Target direction for Stage 4:
 
-- one common scheduler/run harness
-- SQLite state store for jobs/runs
+- one common scheduler/run harness across local and VM runtime modes
+- SQLite state store continuity for jobs/runs
 - consistent lifecycle/state transitions across local and VM runtime modes
-- migration path from `scheduler/*.json` to SQLite without losing history
+- compatibility and rollback path for legacy JSON inputs where still present
 
 ### Stage 3 assistant layer scope
 
@@ -185,8 +199,9 @@ Examples:
   - `knowledge/personal/` (private, never committed)
   - `knowledge/inbox/` (transit only)
 - Runtime state today:
-  - `scheduler/jobs.json`
-  - `scheduler/runs.json`
+  - machine-local SQLite runtime DB files (board/scheduler/chat-index/event domains)
+  - `chat/history/*.jsonl`
+  - `runs/usage.jsonl`
   - `scheduler/logs/`
   - `runs/`
   - `interface/meta.json`
@@ -207,16 +222,17 @@ still need a manual cleanup pass.
 2. Define governed company-knowledge retrieval patterns for assistant use.
 3. Define markdown metadata templates for tasks, opportunities, and project
    records (lightweight CRM/PM behavior).
-4. Freeze the Stage 4 scheduler schema for a SQLite-backed common harness.
-5. Add the SQLite job/run store behind the current scheduler API.
-6. Add a one-way migration from `scheduler/jobs.json` and
-   `scheduler/runs.json`.
-7. Run scheduler parity tests against the current JSON behavior.
-8. Add basic health/usage diagnostics for scheduler runs.
+4. Lock Stage 4 VM runtime interfaces on top of the implemented local SQLite core.
+5. Keep compatibility exports bounded and removable.
+6. Run scheduler parity/regression tests against current SQLite behavior.
+7. Add basic health/usage diagnostics for scheduler runs.
 9. Update the Stage 4 readiness checklist after the SQLite harness is stable.
 10. Complete manual-review/review-sensitive migration tranche (`manual_review`, `review_sensitive`, `triage_inbox`).
 11. Finalize Graph backend root alignment and cross-user onboarding runbook updates.
 12. Normalize company handbook and reduce duplicated legacy strategy/SSOT copies.
+13. Add native Authorization Code + PKCE (S256) browser/loopback token lifecycle
+    for local M365 MCP (in-memory/secure local storage, refresh handling, and
+    explicit tenant policy checks).
 
 ## Update Rules
 

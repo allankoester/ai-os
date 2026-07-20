@@ -6,6 +6,8 @@ implementation status. The analysis behind it is
 
 Created: 2026-07-09 · Owner: Allan · Executor: Claude (Danny-side sessions)
 
+Legacy note (2026-07-20): this execution plan contains historical implementation steps and references that mention JSON scheduler/session files during rollout. Current canonical operational state for scheduler/private-board/chat-session-index domains is machine-local SQLite. Treat JSON references in phase logs as migration history, not current authority.
+
 ---
 
 ## Execution protocol (read this first in every session)

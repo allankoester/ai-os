@@ -30,6 +30,11 @@ const REGISTRY = [
     defaults: { command: 'npx', args: ['-y', '@upstash/context7-mcp'], env: {} },
   },
   {
+    id: 'm365-readonly', name: 'Microsoft 365 (Read-only, local)', kind: 'mcp',
+    description: 'Local MCP server for delegated Microsoft Graph read-only access (work-account-only OAuth/PKCE intent). No write/mutate tools and no generic Graph proxy endpoint.',
+    defaults: { command: 'node', args: ['mcp/m365/server.mjs'] },
+  },
+  {
     id: 'twenty', name: 'Twenty CRM', kind: 'mcp',
     description: 'Streamable HTTP MCP connection to the self-hosted Twenty CRM API endpoint.',
     defaults: {

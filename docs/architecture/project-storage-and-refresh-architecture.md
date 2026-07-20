@@ -1,10 +1,6 @@
 # Project storage and refresh architecture
 
-This diagram documents the current Stage 1/2 file-based architecture after enabling shared team Project Board storage under OneDrive.
-
-## Effective shared team board root
-
-`/Users/allan/Library/CloudStorage/OneDrive-SharedLibraries-SMAPAS/SteadyMade.ai - General/AI_OS/apps/steadymade-ai-os/project-board/team`
+This diagram documents the implemented local-core storage model.
 
 ## Diagram
 
@@ -14,45 +10,49 @@ flowchart LR
     UI[Interface UI\nKnowledge · Artifacts · Automations · Projects]
     API[interface/server.mjs]
     Board[board/service.mjs + board/storage.mjs]
-    Scheduler[scheduler.mjs\nlocal jobs/runs/logs]
-    PrivateBoard[~/.steadymade-ai-os/board-private\nprojects tasks activity audit]
-    PrivateArtifacts[repo artifacts/project-board/private]
-    KnowledgeLocal[knowledge/ + knowledge/personal]
+    Scheduler[scheduler.mjs]
+    Chat[chat/server.mjs]
+    RuntimeDB[(machine-local SQLite\nboard/scheduler/chat-index/events)]
+    Usage[runs/usage.jsonl\ncanonical append stream]
+    ChatHistory[chat/history/*.jsonl\ncanonical transcripts]
+    WorkspaceFiles[knowledge/**, memory/**, runs/*.md\nworkspace file authority]
   end
 
-  subgraph SharedOneDrive[Shared OneDrive AI_OS]
-    TeamBoard[/AI_OS/apps/steadymade-ai-os/project-board/team\nprojects tasks activity audit]
-    TeamArtifacts[/AI_OS/apps/steadymade-ai-os/project-board/team/artifacts/project-board/team]
-    SharedKnowledge[/AI_OS/knowledge/company + inbox + team]
+  subgraph ExternalAuthorities[External authorities (optional)]
+    Graph[OneDrive/Graph\nshared knowledge authority]
+    CRM[Twenty CRM\nCRM domain authority]
+    TeamSvc[Team board service\nDEFERRED]
   end
 
   UI --> API
   API --> Board
   API --> Scheduler
-  API --> KnowledgeLocal
-  API --> SharedKnowledge
+  API --> Chat
 
-  Board --> PrivateBoard
-  Board --> TeamBoard
+  Board --> RuntimeDB
+  Scheduler --> RuntimeDB
+  Chat --> RuntimeDB
 
-  Board --> PrivateArtifacts
-  Board --> TeamArtifacts
+  Scheduler --> Usage
+  Chat --> Usage
+  Chat --> ChatHistory
 
-  Scheduler --> PrivateArtifacts
-  Scheduler --> TeamArtifacts
+  API --> WorkspaceFiles
+  API --> Graph
+  API --> CRM
 ```
 
-## Storage intent
+## Storage intent (current)
 
-- Projects/tasks with `visibility=private` stay on local machine roots.
-- Projects/tasks with `visibility=team` persist in the shared OneDrive team root.
-- Private task artifacts remain local under `artifacts/project-board/private/...`.
-- Team task artifacts persist under the shared team root artifact branch.
-- Scheduler state remains local (`scheduler/jobs.json`, `scheduler/runs.json`, `scheduler/logs/*`) to avoid duplicate distributed execution.
+- Private/local board operational state is SQLite canonical in the machine-local runtime root.
+- Scheduler operational state is SQLite canonical; `scheduler/logs/*` remains file logs.
+- Chat session metadata/search index is SQLite canonical.
+- Chat transcripts remain canonical JSONL in `chat/history/*.jsonl`.
+- Usage telemetry stream remains canonical JSONL in `runs/usage.jsonl`; SQLite usage tables are derived projections.
+- Team board canonical authority is deferred to a separate team service and is not provided by local shared-drive JSON.
 
-## UI refresh behavior
+## Refresh behavior
 
-- Knowledge, Artifacts, Automations, and Projects all refresh once when their view opens.
-- Each of those views exposes a manual `Refresh` button in the header area.
-- Refresh paths include stale-response guards so late responses do not overwrite current view state.
-- Knowledge `.md` files now default to Preview mode for normal open; new docs can still open in Edit.
+- Knowledge, Artifacts, Automations, and Projects refresh on view open.
+- Each view provides a manual `Refresh` action.
+- Stale-response guards prevent late responses from overwriting current state.

@@ -13,7 +13,7 @@ node interface/server.mjs
 
 The server binds to `127.0.0.1` by default (local machine only).
 
-No dependencies, no build step. Requires Node 18+.
+No dependencies, no build step. Requires Node 22+.
 
 ## Knowledge backends (dev vs prod)
 
@@ -96,9 +96,12 @@ changed remotely, writes return HTTP `409`.
 | Doc status / market scope | Sidecar file `interface/meta.json` (real docs stay untouched) |
 | Access rules, workflows, departments | Static model in `public/data.js`, mirrors `CLAUDE.md` |
 | Scheduler | **Real execution** — cron + one-time jobs (date/time picker) run `claude -p` headless, optional workflow/agent targeting (API `/api/scheduler`) |
+| Scheduler storage authority | SQLite canonical operational state (machine-local runtime root); JSON files are legacy compatibility inputs/exports only |
+| Board storage authority | SQLite canonical operational state (local/private board domains) |
+| Chat storage authority | `chat/history/*.jsonl` canonical transcripts + SQLite canonical session metadata/search index |
 | Skill Hub | Live — search/filter over `skills/company` + `skills/personal`, activation via `.skill-profile` → `.claude/skills/` symlinks (API `/api/skills`) |
 | Marketplace | Live — browses ComposioHQ/awesome-claude-skills, installs GitHub skills into `skills/personal/` (API `/api/marketplace`) |
-| Plugins | Real for MCP/permissions — writes `.mcp.json` and `.claude/settings.local.json`; external tools are config-only (API `/api/plugins`) |
+| Plugins | Real for MCP/permissions — writes `.mcp.json` and `.claude/settings.local.json`; includes built-in local `m365-readonly` MCP (read-only delegated Graph); external tools are config-only (API `/api/plugins`) |
 | Profile editors | Real — Settings edits `knowledge/personal/user-profile.md`, `CLAUDE.local.md`, `CLAUDE.md` on disk |
 | "Ask Nora / Mara / Atlas", "Run test task" | Prototype — copies a task brief to the clipboard; interactive chat execution pending |
 
@@ -115,6 +118,12 @@ Guardrails are configured in two places:
 
 Agent-specific rules always inherit the global maximum. They cannot exceed
 global permissions, and a globally denied folder stays denied for every agent.
+
+Boundary note:
+
+- There is no unified agent gateway in this app.
+- Interface guardrail files and agent-specific entries are routing/policy metadata plus interface/API enforcement inputs.
+- Invocation-time enforcement is runtime-specific (Claude runtime rules, interface file API checks, scheduler restrictions, MCP-local controls).
 
 Use **Apply Secure Baseline** in Settings after onboarding a machine.
 
@@ -141,3 +150,12 @@ interface/
 - `app.js` → the `data-ask` and `test-task` handlers currently copy task briefs;
   replace with calls to a Claude runtime / Agent SDK.
 - `server.mjs` → add a `/api/task` endpoint that forwards briefs to an agent runner.
+
+## Microsoft 365 MCP (local read-only)
+
+- Built-in plugin id: `m365-readonly`
+- Command path: `node mcp/m365/server.mjs` (repo-local, no `npx -y`)
+- Auth intent: OAuth Authorization Code + PKCE (S256), work-account tenant only
+- Tool scope: read-only mail/tasks/files/sharepoint listing/read
+
+Setup guide: `docs/guide-m365-mcp-readonly-setup.md`

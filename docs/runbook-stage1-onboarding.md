@@ -5,7 +5,7 @@ Reproducible setup for one user on one machine. Target time: under 15 minutes.
 ## Prerequisites
 
 - macOS / Linux / Windows with WSL
-- Node.js 18+ (`node --version`)
+- Node.js 22+ (`node --version`)
 - Claude Code (CLI, desktop app or IDE extension), signed in
 
 ### User type matrix
@@ -117,6 +117,7 @@ per `templates/task-brief.md`, and does not mark anything approved.
 ## Daily operating rules
 
 - Company knowledge → `knowledge/company/<domain>/`, personal → `knowledge/personal/`, unsorted → `knowledge/inbox/`.
+- Operational board/scheduler/chat-session index authority is machine-local SQLite; chat transcripts remain canonical JSONL in `chat/history/*.jsonl`.
 - External artifacts require the approval checklist (`templates/approval-checklist.md`).
 - Significant runs get a run log in `runs/`.
 - Back up before larger reorganizations: `scripts/backup.sh backup`.

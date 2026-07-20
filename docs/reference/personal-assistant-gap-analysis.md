@@ -4,6 +4,8 @@ Status: reference / informative (per `docs/reference/README.md` rules — active
 Date: 2026-07-09
 Author: analysis run requested by Allan (investigation of personal-assistant functions)
 
+Legacy scope note (2026-07-20): this analysis describes pre-cutover gaps at the time of investigation. It is intentionally historical. Current runtime authority for scheduler/private-board/chat-session-index domains is machine-local SQLite; JSON references in this document are legacy observations.
+
 ## Purpose
 
 The Steadymade AI-OS is a solid **company harness** (shared knowledge, agents,

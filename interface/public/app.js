@@ -76,6 +76,34 @@ const VIEW_TITLES = {
   settings: 'Settings',
 };
 
+function normalizeViewId(view) {
+  const raw = String(view || '').trim();
+  if (!raw) return null;
+  const normalized = raw === 'workflows' || raw === 'scheduler' ? 'flows' : raw;
+  return VIEW_TITLES[normalized] ? normalized : null;
+}
+
+function parseDeepLinkFromUrl() {
+  const params = new URLSearchParams(window.location.search || '');
+  const view = normalizeViewId(params.get('view'));
+  const projectId = String(params.get('project_id') || '').trim() || null;
+  const tabRaw = String(params.get('tab') || '').trim().toLowerCase();
+  const projectTab = tabRaw === 'board' || tabRaw === 'list' || tabRaw === 'overview' ? tabRaw : null;
+  const taskId = String(params.get('task_id') || '').trim() || null;
+  const taskLayoutRaw = String(params.get('task_layout') || '').trim().toLowerCase();
+  const taskLayout = taskLayoutRaw === 'board' || taskLayoutRaw === 'list' ? taskLayoutRaw : null;
+  return {
+    view,
+    projectId,
+    projectTab,
+    taskId,
+    taskLayout,
+    taskOpened: false,
+  };
+}
+
+const deepLinkState = parseDeepLinkFromUrl();
+
 const agentById = (id) => AGENTS.find((a) => a.id === id);
 const deptById = (id) => DEPARTMENTS.find((d) => d.id === id);
 // an access entry covers the folder itself and every folder nested under it
@@ -213,9 +241,12 @@ async function boot() {
   }
   bindChrome();
   uiState.chatMode = loadStoredChatMode();
+  if (deepLinkState.taskLayout) projectState.taskLayout = deepLinkState.taskLayout;
+  if (deepLinkState.projectId) projectState.selectedProjectId = deepLinkState.projectId;
+  if (deepLinkState.projectTab) projectState.activeTab = deepLinkState.projectTab;
   await refreshProviderSettingsState();
   syncChatModeSwitch();
-  setView('command');
+  setView(deepLinkState.view || 'command');
   checkOnboarding(); // non-blocking: shows the onboarding guide if the workspace is not fully onboarded
 }
 
@@ -1550,9 +1581,49 @@ function paintKnDocs() {
           <span class="badge ${statusBadgeClass(docMeta(d.path).status)}">${docMeta(d.path).status.toUpperCase()}</span>
           <span>${timeAgo(d.mtime)}</span><span>${d.words}w</span>
         </div>
-      </button>`).join('') : `<div class="stat-note" style="padding:0 12px">${folder ? (state.kn.filter === 'review-needed' ? 'No review-needed docs in this folder.' : 'Empty folder.') : 'No documents at this level - open a subfolder.'}</div>`);
+      </button>`).join('') : `<div class="stat-note" style="padding:0 12px">${folder ? (state.kn.filter === 'review-needed' ? 'No review-needed docs in this folder.' : 'Empty folder.') : 'No documents at this level - open a subfolder.'}</div>`) +
+      (showNewDoc ? `<div class="kn-dropzone" id="kn-dropzone">
+        <svg class="kn-dropzone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 4v11m0 0l-4-4m4 4l4-4" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 17v2a2 2 0 002 2h10a2 2 0 002-2v-2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Drop a .md file here to add it to ${esc(headerLabel)}
+      </div>` : '');
     $('[data-new-doc]', el)?.addEventListener('click', () => openNewDocDrawer(state.kn.folder));
     $$('.kn-doc-btn[data-path]', el).forEach((b) => b.addEventListener('click', () => loadDoc(b.dataset.path)));
+    bindKnDropzone($('#kn-dropzone'), state.kn.folder);
+  }
+}
+
+function bindKnDropzone(zone, folder) {
+  if (!zone || !folder) return;
+  const setOver = (on) => zone.classList.toggle('drag-over', on);
+  zone.addEventListener('dragover', (e) => { e.preventDefault(); setOver(true); });
+  zone.addEventListener('dragenter', (e) => { e.preventDefault(); setOver(true); });
+  zone.addEventListener('dragleave', () => setOver(false));
+  zone.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    setOver(false);
+    const files = [...(e.dataTransfer?.files || [])];
+    if (!files.length) return;
+    for (const file of files) await handleDroppedFile(file, folder);
+  });
+}
+
+async function handleDroppedFile(file, folder) {
+  if (!/\.md$/i.test(file.name)) {
+    toast('ONLY .MD FILES CAN BE DROPPED HERE: ' + file.name.toUpperCase(), true);
+    return;
+  }
+  const relPath = `knowledge/${folder}/${file.name}`;
+  const existing = findDocEntry(relPath);
+  if (existing && !confirm(`"${file.name}" already exists in ${folder}. Overwrite it?`)) return;
+  try {
+    const content = await file.text();
+    await putFileGuarded(relPath, content);
+    try { state.system = await apiJson('/api/system'); } catch { /* keep stale model */ }
+    paintKnFolders();
+    paintKnDocs();
+    toast((existing ? 'REPLACED ' : 'ADDED ') + file.name.toUpperCase());
+  } catch (e) {
+    if (!/cancelled/.test(e.message)) toast(e.message.toUpperCase(), true);
   }
 }
 
@@ -1642,6 +1713,7 @@ function paintKnEditor() {
     paintKnEditor();
   });
   $('#btn-save').addEventListener('click', saveDoc);
+
   const ta = $('#kn-text');
   if (ta) ta.addEventListener('input', () => {
     state.kn.content = ta.value;
@@ -1796,6 +1868,7 @@ function workflowCardHtml(w) {
         ${w.builtin ? '' : '<span class="badge badge-gray">CUSTOM</span>'}
         ${w.overridden ? '<span class="badge badge-apricot">EDITED</span>' : ''}
         <span style="margin-left:auto;display:flex;gap:6px">
+          <button class="chip chip-accent" data-wf-schedule="${esc(w.id)}">SCHEDULE</button>
           <button class="chip" data-wf-edit="${esc(w.id)}">EDIT</button>
           ${w.overridden ? `<button class="chip" data-wf-reset="${esc(w.id)}">RESET</button>` : ''}
           <button class="chip" data-wf-del="${esc(w.id)}" style="color:var(--apricot-deep)">DELETE</button>
@@ -1824,6 +1897,10 @@ function workflowCardHtml(w) {
 
 function bindWorkflowCardHandlers(scope) {
   $$('[data-agent]', scope).forEach((b) => b.addEventListener('click', () => { setView('map'); selectMapAgent(b.dataset.agent); }));
+  $$('[data-wf-schedule]', scope).forEach((b) => b.addEventListener('click', () => {
+    const w = FLOWS.find((x) => x.id === b.dataset.wfSchedule);
+    if (w) openJobDrawer(null, { name: w.name, workflow: w.id, prompt: 'Run the ' + w.name + ' workflow.' });
+  }));
   $$('[data-wf-edit]', scope).forEach((b) => b.addEventListener('click', () => openWorkflowDrawer(FLOWS.find((w) => w.id === b.dataset.wfEdit))));
   $$('[data-wf-reset]', scope).forEach((b) => b.addEventListener('click', async () => {
     delete flowsCfg.overrides[b.dataset.wfReset];
@@ -1850,20 +1927,46 @@ function bindWorkflowCardHandlers(scope) {
 }
 
 function jobRowHtml(j) {
-  return `<div class="list-row" style="cursor:default">
+  const clock = '<svg class="job-clock" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const nextLabel = j.enabled ? (j.nextRun ? 'next ' + fmtWhen(j.nextRun) : 'next —') : 'paused';
+  const lastLabel = j.lastRun ? 'last ' + esc(j.lastRun.status) : 'never ran';
+  return `<div class="list-row job-row" style="cursor:default">
       <span class="badge ${j.enabled ? 'badge-green' : 'badge-gray'}">${j.enabled ? 'ON' : j.scheduleType === 'once' && j.lastRun ? 'DONE' : 'OFF'}</span>
-      <span class="list-title">${esc(j.name)}${j.running ? ' <span class="badge badge-apricot">RUNNING</span>' : ''}</span>
-      <span class="list-meta mono-label">${j.scheduleType === 'once' ? 'once · ' + fmtWhen(j.runAt) : esc(j.schedule)}</span>
-      <span class="list-meta">${esc(j.workflow || '')}${j.workflow ? ' · ' : ''}${esc(j.agent || 'danny (main)')}</span>
-      <span class="list-meta">next: ${j.nextRun ? fmtWhen(j.nextRun) : j.enabled ? '—' : 'paused'}</span>
-      <span class="list-meta">${j.lastRun ? 'last: ' + esc(j.lastRun.status) : 'never ran'}</span>
-      <span style="display:flex;gap:6px">
+      <span class="job-main">
+        <span class="job-name">${esc(j.name)}${j.running ? ' <span class="badge badge-apricot">RUNNING</span>' : ''}</span>
+        <span class="job-target">${esc(j.workflow || '')}${j.workflow ? ' · ' : ''}${esc(j.agent || 'danny (main)')}</span>
+      </span>
+      <span class="job-sched ${j.enabled ? 'job-sched--on' : ''}">
+        <span class="job-sched-when">${clock}${esc(humanizeSchedule(j))}</span>
+        <span class="job-sched-next">${nextLabel} · ${lastLabel}</span>
+      </span>
+      <span class="job-actions">
         <button class="chip" data-run="${j.id}">RUN NOW</button>
         <button class="chip" data-edit="${j.id}">EDIT</button>
         <button class="chip" data-toggle="${j.id}">${j.enabled ? 'PAUSE' : 'ENABLE'}</button>
         <button class="chip" data-del="${j.id}" style="color:var(--apricot-deep)">DELETE</button>
       </span>
     </div>`;
+}
+
+function humanizeSchedule(j) {
+  if (!j) return '';
+  if (j.scheduleType === 'once') return 'Once · ' + fmtWhen(j.runAt);
+  const b = parseCronToBuilder(j.schedule);
+  const pad = (n) => String(n).padStart(2, '0');
+  if (b.freq === 'hourly') return 'Hourly · :' + pad(b.minute || 0);
+  if (b.freq === 'daily') return 'Daily · ' + b.time;
+  if (b.freq === 'weekly') {
+    const days = [...b.days].sort((a, c) => a - c);
+    let label;
+    if (days.length === 7) label = 'Every day';
+    else if (days.length === 5 && [1, 2, 3, 4, 5].every((d) => b.days.has(d))) label = 'Weekdays';
+    else if (days.length === 2 && b.days.has(0) && b.days.has(6)) label = 'Weekends';
+    else label = days.map((d) => DOW_NAMES[d]).join(', ');
+    return label + ' · ' + b.time;
+  }
+  if (b.freq === 'monthly') return 'Monthly · day ' + b.dom + ' · ' + b.time;
+  return 'Cron · ' + (j.schedule || '');
 }
 
 function bindJobHandlers(scope, jobs) {
@@ -3504,8 +3607,37 @@ function paintSettingsBody(el) {
   const teamBoardActive = boardActive.team || {};
   const sharedFolders = sharedActive.detectedSubfolders || sharedSaved.detectedSubfolders || {};
   const boardSafetyErrors = Array.isArray(appCfg.boardSafetyErrors) ? appCfg.boardSafetyErrors : [];
+  const ksStatusPill = (state) => {
+    const s = String(state || '');
+    if (s === 'exists') return '<span class="ks-status ks-status--ok">exists</span>';
+    if (s === 'missing') return '<span class="ks-status ks-status--missing">missing</span>';
+    return `<span class="ks-status ks-status--none">${esc(s || 'not configured')}</span>`;
+  };
   const ksDone = Boolean(workspace.knowledgeSpaces?.personalReady && workspace.knowledgeSpaces?.sharedReady);
   const userTypeDone = Boolean(onb?.userTypeDone);
+
+  const sys = state.system || {};
+  const requested = String(sys.requestedDeployment || 'local_machine_only');
+  const effective = String(sys.effectiveDeployment || 'local_machine_only');
+  const teamStatus = String(sys.teamCapability?.status || 'disabled');
+  const teamReason = String(sys.teamCapability?.reason || '');
+
+  let capLabel = '';
+  let capBadge = '';
+  if (requested === 'local_machine_only') {
+    capLabel = 'Single-user local machine (isolated)';
+    capBadge = '<span class="badge badge-gray">LOCAL</span>';
+  } else if (requested === 'team_server' && effective === 'team_server') {
+    capLabel = 'Team server (shared environment)';
+    capBadge = '<span class="badge badge-green">TEAM</span>';
+  } else if (requested === 'team_server' && effective === 'local_machine_only') {
+    capLabel = 'Requested team server, but operating locally';
+    capBadge = '<span class="badge badge-apricot">LOCAL EFFECTIVE</span>';
+  } else {
+    capLabel = String(effective);
+    capBadge = '<span class="badge badge-gray">UNKNOWN</span>';
+  }
+  const teamReasonText = teamReason ? `<span class="list-meta" style="margin-left:6px">Reason: ${esc(teamReason)}</span>` : '';
 
   const editable = {
     'user-profile': { title: 'Personal Profile', hint: 'Your persona profile — private, never committed.' },
@@ -3585,69 +3717,87 @@ function paintSettingsBody(el) {
 
     ${show('runtime') ? `
     <div class="card" data-section="runtime">
-      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-        <div style="flex:1;min-width:220px">
-          <div class="section-title" style="margin:0 0 4px">Runtime</div>
-          <div class="stat-note" style="white-space:normal">
-            Interface changes (guardrails enforcement, scheduler, skill hub) apply <strong>immediately</strong>.
-            Claude Code permission/MCP changes apply to <strong>new Claude sessions</strong> — scheduler jobs pick them
-            up automatically (each run is a fresh session); an open interactive Claude session must be restarted by you.
-          </div>
-        </div>
+      <div class="card-head">
+        <div class="section-title">Runtime & Capability</div>
         <button class="btn btn-primary btn-small" data-act="restart-app">Restart App + Chat</button>
+      </div>
+      <div class="kv-row"><span>Requested state</span><span>${requested === 'team_server' ? 'Team Server' : 'Local Machine Only'}</span></div>
+      <div class="kv-row"><span>Effective state</span><span>${capBadge} ${capLabel}</span></div>
+      <div class="kv-row"><span>Team capability</span><span>${teamStatus === 'enabled' ? '<span class="badge badge-green">ENABLED</span>' : `<span class="badge badge-gray">DISABLED</span>`}${teamReasonText}</span></div>
+      <div class="rt-signals" style="margin-top:14px">
+        <div class="rt-signal rt-signal--now">
+          <span class="badge badge-green">IMMEDIATE</span>
+          <div>Interface changes (guardrails enforcement, scheduler, skill hub) apply immediately across the system.</div>
+        </div>
+        <div class="rt-signal rt-signal--next">
+          <span class="badge badge-apricot">NEXT SESSION</span>
+          <div>Claude Code permission/MCP changes apply to <strong>new Claude sessions</strong> — scheduler jobs pick them up automatically (each run is a fresh session); an open interactive Claude session must be restarted by you.</div>
+        </div>
       </div>
     </div>` : ''}
 
     ${show('knowledge-spaces') ? `
     <div class="card" data-section="knowledge-spaces" ${ksDone ? '' : 'style="border-color:var(--apricot)"'}>
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
-        <div class="section-title" style="flex:1;margin:0">Knowledge Spaces</div>
+      <div class="card-head">
+        <div class="section-title">Knowledge Spaces</div>
         <span class="badge ${ksDone ? 'badge-green' : 'badge-apricot'}">${ksDone ? 'READY' : 'CHECK PATHS'}</span>
       </div>
-      <div class="form-field">
-        <label for="ks-personal-root">Personal knowledge root (maps to <code>knowledge/personal/…</code>)</label>
+      <div class="ks-space ks-space--personal">
+        <div class="ks-space-head">
+          <span class="ks-scope-tag">Personal</span>
+          <label for="ks-personal-root">Personal knowledge root (maps to <code>knowledge/personal/…</code>)</label>
+        </div>
         <div class="ks-path-edit-row">
           <input id="ks-personal-root" class="filter-input" type="text" value="${esc(appCfgSettings.personalKnowledgeRoot || '')}" placeholder="knowledge/personal" readonly>
           <button class="btn btn-ghost btn-small" type="button" data-ks-edit="ks-personal-root" data-ks-label="Personal knowledge root">Edit</button>
         </div>
+        <div class="ks-space-status">
+          <div class="ks-status-line"><span class="ks-status-label">Saved</span> <code>${esc(personalSaved.path || 'knowledge/personal')}</code> ${ksStatusPill(personalSaved.exists ? 'exists' : 'missing')}${personalSaved.isSymlink ? ' · symlink' : ''}</div>
+          <div class="ks-status-line"><span class="ks-status-label">Active</span> <code>${esc(personalActive.path || personalSaved.path || 'knowledge/personal')}</code> ${ksStatusPill(personalActive.exists ? 'exists' : 'missing')}${personalActive.isSymlink ? ' · symlink' : ''}</div>
+        </div>
       </div>
-      <div class="stat-note" style="white-space:normal;margin-bottom:8px">
-        Saved root: <code>${esc(personalSaved.path || 'knowledge/personal')}</code> · ${personalSaved.exists ? 'exists' : 'missing'}${personalSaved.isSymlink ? ' · symlink' : ''}<br>
-        Active runtime root: <code>${esc(personalActive.path || personalSaved.path || 'knowledge/personal')}</code> · ${personalActive.exists ? 'exists' : 'missing'}${personalActive.isSymlink ? ' · symlink' : ''}
-      </div>
-      <div class="form-field">
-        <label for="ks-shared-root">Shared company/team knowledge root (maps to <code>knowledge/company</code>, <code>knowledge/inbox</code>, <code>knowledge/team</code>)</label>
+      <div class="ks-space ks-space--shared">
+        <div class="ks-space-head">
+          <span class="ks-scope-tag">Shared</span>
+          <label for="ks-shared-root">Shared company/team knowledge root (maps to <code>knowledge/company</code>, <code>knowledge/inbox</code>, <code>knowledge/team</code>)</label>
+        </div>
         <div class="ks-path-edit-row">
           <input id="ks-shared-root" class="filter-input" type="text" value="${esc(appCfgSettings.sharedKnowledgeRoot || '')}" placeholder="knowledge" readonly>
           <button class="btn btn-ghost btn-small" type="button" data-ks-edit="ks-shared-root" data-ks-label="Shared knowledge root">Edit</button>
         </div>
+        <div class="ks-space-status">
+          <div class="ks-status-line"><span class="ks-status-label">Saved</span> <code>${esc(sharedSaved.path || 'knowledge')}</code> ${ksStatusPill(sharedSaved.exists ? 'exists' : 'missing')}${sharedSaved.isSymlink ? ' · symlink' : ''}</div>
+          <div class="ks-status-line"><span class="ks-status-label">Active</span> <code>${esc(sharedActive.path || sharedSaved.path || 'knowledge')}</code> ${ksStatusPill(sharedActive.exists ? 'exists' : 'missing')}${sharedActive.isSymlink ? ' · symlink' : ''}</div>
+          <div class="ks-subfolders">Subfolders: <span class="${sharedFolders.company ? 'ks-sub-ok' : 'ks-sub-no'}">company ${sharedFolders.company ? '✓' : '—'}</span> · <span class="${sharedFolders.inbox ? 'ks-sub-ok' : 'ks-sub-no'}">inbox ${sharedFolders.inbox ? '✓' : '—'}</span> · <span class="${sharedFolders.team ? 'ks-sub-ok' : 'ks-sub-no'}">team ${sharedFolders.team ? '✓' : '—'}</span></div>
+        </div>
       </div>
-      <div class="stat-note" style="white-space:normal;margin-bottom:8px">
-        Saved root: <code>${esc(sharedSaved.path || 'knowledge')}</code> · ${sharedSaved.exists ? 'exists' : 'missing'}${sharedSaved.isSymlink ? ' · symlink' : ''}<br>
-        Active runtime root: <code>${esc(sharedActive.path || sharedSaved.path || 'knowledge')}</code> · ${sharedActive.exists ? 'exists' : 'missing'}${sharedActive.isSymlink ? ' · symlink' : ''}<br>
-        Shared subfolders detected: company ${sharedFolders.company ? '✓' : '—'} · inbox ${sharedFolders.inbox ? '✓' : '—'} · team ${sharedFolders.team ? '✓' : '—'}
-      </div>
-      <div class="form-field">
-        <label for="ks-private-board-root">Private board root (Project Board private scope storage)</label>
+      <div class="ks-space ks-space--personal">
+        <div class="ks-space-head">
+          <span class="ks-scope-tag">Private</span>
+          <label for="ks-private-board-root">Private board root (Project Board private scope storage)</label>
+        </div>
         <div class="ks-path-edit-row">
           <input id="ks-private-board-root" class="filter-input" type="text" value="${esc(appCfgSettings.privateBoardRoot || '')}" placeholder="(default local runtime private board root)" readonly>
           <button class="btn btn-ghost btn-small" type="button" data-ks-edit="ks-private-board-root" data-ks-label="Private board root">Edit</button>
         </div>
+        <div class="ks-space-status">
+          <div class="ks-status-line"><span class="ks-status-label">Saved</span> <code>${esc(privateBoardSaved.path || '(default local runtime private board root)')}</code> ${ksStatusPill(privateBoardSaved.exists ? 'exists' : 'missing')}${privateBoardSaved.isSymlink ? ' · symlink' : ''}</div>
+          <div class="ks-status-line"><span class="ks-status-label">Active</span> <code>${esc(privateBoardActive.path || privateBoardSaved.path || '(default local runtime private board root)')}</code> ${ksStatusPill(privateBoardActive.exists ? 'exists' : 'missing')}${privateBoardActive.isSymlink ? ' · symlink' : ''}</div>
+        </div>
       </div>
-      <div class="stat-note" style="white-space:normal;margin-bottom:8px">
-        Saved root: <code>${esc(privateBoardSaved.path || '(default local runtime private board root)')}</code> · ${privateBoardSaved.exists ? 'exists' : 'missing'}${privateBoardSaved.isSymlink ? ' · symlink' : ''}<br>
-        Active runtime root: <code>${esc(privateBoardActive.path || privateBoardSaved.path || '(default local runtime private board root)')}</code> · ${privateBoardActive.exists ? 'exists' : 'missing'}${privateBoardActive.isSymlink ? ' · symlink' : ''}
-      </div>
-      <div class="form-field">
-        <label for="ks-team-board-root">Team board root (Project Board team scope storage)</label>
+      <div class="ks-space ks-space--shared">
+        <div class="ks-space-head">
+          <span class="ks-scope-tag">Team</span>
+          <label for="ks-team-board-root">Team board root (Project Board team scope storage)</label>
+        </div>
         <div class="ks-path-edit-row">
           <input id="ks-team-board-root" class="filter-input" type="text" value="${esc(appCfgSettings.teamBoardRoot || '')}" placeholder="/absolute/path/to/team-board" readonly>
           <button class="btn btn-ghost btn-small" type="button" data-ks-edit="ks-team-board-root" data-ks-label="Team board root">Edit</button>
         </div>
-      </div>
-      <div class="stat-note" style="white-space:normal;margin-bottom:8px">
-        Saved root: <code>${esc(teamBoardSaved.path || 'not configured')}</code> · ${teamBoardSaved.path ? (teamBoardSaved.exists ? 'exists' : 'missing') : 'not configured'}${teamBoardSaved.isSymlink ? ' · symlink' : ''}<br>
-        Active runtime root: <code>${esc(teamBoardActive.path || teamBoardSaved.path || 'not configured')}</code> · ${teamBoardActive.path ? (teamBoardActive.exists ? 'exists' : 'missing') : 'not configured'}${teamBoardActive.isSymlink ? ' · symlink' : ''}
+        <div class="ks-space-status">
+          <div class="ks-status-line"><span class="ks-status-label">Saved</span> <code>${esc(teamBoardSaved.path || 'not configured')}</code> ${ksStatusPill(teamBoardSaved.path ? (teamBoardSaved.exists ? 'exists' : 'missing') : 'not configured')}${teamBoardSaved.isSymlink ? ' · symlink' : ''}</div>
+          <div class="ks-status-line"><span class="ks-status-label">Active</span> <code>${esc(teamBoardActive.path || teamBoardSaved.path || 'not configured')}</code> ${ksStatusPill(teamBoardActive.path ? (teamBoardActive.exists ? 'exists' : 'missing') : 'not configured')}${teamBoardActive.isSymlink ? ' · symlink' : ''}</div>
+        </div>
       </div>
       ${boardSafetyErrors.length ? `<div class="stat-note" style="color:var(--apricot-deep);white-space:normal;margin-bottom:8px">Board root checks: ${boardSafetyErrors.map((msg) => esc(msg)).join(' · ')}</div>` : ''}
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -4412,15 +4562,18 @@ const projectState = {
   tasks: [],
   activity: [],
   audit: [],
+  dashboard: null,
   streamLoading: false,
   streamError: null,
   selectedProjectId: null,
   selectedTaskId: null,
   projectQuery: '',
   taskQuery: '',
+  filters: { status: '', priority: '', work_type: '', sprint: '', assignee_id: '', is_blocked: false, is_overdue: false },
+  visibleColumns: [...TASK_STATUS_OPTIONS],
   taskLayout: 'board',
   showSidebar: true,
-  showDetail: true,
+  showDetail: false,
 };
 
 function loadPjPrefs() {
@@ -4429,7 +4582,13 @@ function loadPjPrefs() {
     if (typeof raw.taskLayout === 'string') projectState.taskLayout = raw.taskLayout === 'list' ? 'list' : 'board';
     if (typeof raw.showSidebar === 'boolean') projectState.showSidebar = raw.showSidebar;
     if (typeof raw.showDetail === 'boolean') projectState.showDetail = raw.showDetail;
+    if (Array.isArray(raw.visibleColumns)) {
+      const sanitized = TASK_STATUS_OPTIONS.filter((status) => raw.visibleColumns.includes(status));
+      projectState.visibleColumns = sanitized.length ? sanitized : [...TASK_STATUS_OPTIONS];
+    }
+    if (typeof raw.filters === 'object' && raw.filters) projectState.filters = { ...projectState.filters, ...raw.filters };
   } catch {}
+  if (deepLinkState.taskLayout) projectState.taskLayout = deepLinkState.taskLayout;
 }
 
 function savePjPrefs() {
@@ -4438,6 +4597,8 @@ function savePjPrefs() {
       taskLayout: projectState.taskLayout,
       showSidebar: projectState.showSidebar,
       showDetail: projectState.showDetail,
+      visibleColumns: projectState.visibleColumns,
+      filters: projectState.filters,
     }));
   } catch {}
 }
@@ -4533,6 +4694,23 @@ function ensureProjectSelection() {
   projectState.selectedProjectId = projectState.projects[0]?.id || null;
 }
 
+function applyDeepLinkedProjectSelection() {
+  if (!deepLinkState.projectId) return;
+  if (!projectState.projects.some((p) => p.id === deepLinkState.projectId)) return;
+  projectState.selectedProjectId = deepLinkState.projectId;
+}
+
+function openDeepLinkedTaskDrawerIfReady() {
+  if (!deepLinkState.taskId || deepLinkState.taskOpened) return;
+  if (state.view !== 'projects') return;
+  const task = projectState.tasks.find((t) => t.id === deepLinkState.taskId);
+  if (!task) return;
+  if (projectState.selectedProjectId && task.project_id !== projectState.selectedProjectId) return;
+  deepLinkState.taskOpened = true;
+  projectState.selectedTaskId = task.id;
+  openTaskDrawer(task.id);
+}
+
 function assigneeLabel(task) {
   if (task.assignee_type === 'human') return task.human_assignee_label || task.assignee_id || 'Human';
   if (task.assignee_type === 'unassigned' || !task.assignee_id) return 'Unassigned';
@@ -4540,7 +4718,8 @@ function assigneeLabel(task) {
   return a?.name || task.assignee_id;
 }
 
-function boardArtifactHref(taskId, attemptId, artifactPath) {
+function boardArtifactHref(taskId, attemptId, artifactPath, artifactId = null) {
+  if (artifactId) return `/api/board/artifacts/${encodeURIComponent(artifactId)}`;
   return `/api/board/artifacts/${encodeURIComponent(taskId)}/${encodeURIComponent(attemptId)}/${artifactPath.split('/').map((seg) => encodeURIComponent(seg)).join('/')}`;
 }
 
@@ -4548,10 +4727,36 @@ function extractAttemptArtifactEntries(task) {
   const attempts = Array.isArray(task?.execution?.attempts) ? [...task.execution.attempts] : [];
   attempts.sort((a, b) => String(b.requested_at || '').localeCompare(String(a.requested_at || '')));
   const out = [];
+  const seen = new Set();
   for (const attempt of attempts) {
     const attemptId = String(attempt?.attempt_id || '').trim();
     if (!attemptId) continue;
     const root = String(attempt?.output_root || '').trim();
+    const attemptArtifacts = Array.isArray(attempt?.artifacts) ? attempt.artifacts : [];
+    for (const artifact of attemptArtifacts) {
+      const fullPath = String(artifact?.path || '').trim();
+      if (!fullPath) continue;
+      const artifactId = String(artifact?.artifact_id || '').trim() || null;
+      let relPath = '';
+      if (root && fullPath.startsWith(root + '/')) {
+        relPath = fullPath.slice(root.length + 1);
+      } else {
+        const marker = `/${attemptId}/`;
+        const idx = fullPath.indexOf(marker);
+        if (idx >= 0) relPath = fullPath.slice(idx + marker.length);
+      }
+      if (!relPath) continue;
+      const dedupeKey = `${attemptId}:${relPath}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      out.push({
+        key: `${attemptId}:${artifactId || relPath}`,
+        attemptId,
+        artifactId,
+        relPath,
+        name: relPath.split('/').pop() || relPath,
+      });
+    }
     for (const rawPath of (attempt?.artifact_paths || [])) {
       const fullPath = String(rawPath || '').trim();
       if (!fullPath) continue;
@@ -4564,9 +4769,13 @@ function extractAttemptArtifactEntries(task) {
         if (idx >= 0) relPath = fullPath.slice(idx + marker.length);
       }
       if (!relPath) continue;
+      const dedupeKey = `${attemptId}:${relPath}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
       out.push({
         key: `${attemptId}:${relPath}`,
         attemptId,
+        artifactId: null,
         relPath,
         name: relPath.split('/').pop() || relPath,
       });
@@ -4594,17 +4803,23 @@ async function loadProjectStreams(projectId) {
   projectState.streamError = null;
   paintProjects();
   try {
-    const [activity, audit] = await Promise.all([
+    const [activity, audit, dashboard] = await Promise.allSettled([
       boardApi(`/api/projects/${encodeURIComponent(projectId)}/activity`),
       boardApi(`/api/projects/${encodeURIComponent(projectId)}/audit`),
+      boardApi(`/api/projects/${encodeURIComponent(projectId)}/dashboard`),
     ]);
     if (projectState.selectedProjectId !== projectId) return;
-    projectState.activity = Array.isArray(activity) ? activity : [];
-    projectState.audit = Array.isArray(audit) ? audit : [];
+    projectState.activity = activity.status === 'fulfilled' && Array.isArray(activity.value) ? activity.value : [];
+    projectState.audit = audit.status === 'fulfilled' && Array.isArray(audit.value) ? audit.value : [];
+    projectState.dashboard = dashboard.status === 'fulfilled' ? dashboard.value : null;
+    if (activity.status === 'rejected' && audit.status === 'rejected') {
+      throw activity.reason || audit.reason;
+    }
   } catch (e) {
     projectState.streamError = e;
     projectState.activity = [];
     projectState.audit = [];
+    projectState.dashboard = null;
   } finally {
     projectState.streamLoading = false;
     paintProjects();
@@ -4626,6 +4841,7 @@ async function loadProjectTasks(projectId) {
     projectState.error = e;
   } finally {
     paintProjects();
+    openDeepLinkedTaskDrawerIfReady();
   }
 }
 
@@ -4644,6 +4860,7 @@ async function refreshProjectsView() {
     const projects = await fetchBoardListAll('/api/projects', { limit: 200 });
     if (!isCurrentViewRefreshSeq('projects', seq)) return;
     projectState.projects = projects;
+    applyDeepLinkedProjectSelection();
     ensureProjectSelection();
     const selectedId = projectState.selectedProjectId;
     const tasks = selectedId
@@ -4651,6 +4868,7 @@ async function refreshProjectsView() {
       : [];
     if (!isCurrentViewRefreshSeq('projects', seq)) return;
     projectState.tasks = tasks;
+    openDeepLinkedTaskDrawerIfReady();
     ensureProjectSelection();
     if (projectState.selectedProjectId) loadProjectStreams(projectState.selectedProjectId);
   } catch (e) {
@@ -4803,6 +5021,40 @@ function makeTaskPrefill(payload) {
   };
 }
 
+const WORK_TYPE_VALUES = new Set(['feature', 'bug', 'tech_debt', 'spike']);
+
+function normalizeWorkType(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const normalized = raw.toLowerCase().replace(/[\s-]+/g, '_');
+  return WORK_TYPE_VALUES.has(normalized) ? normalized : null;
+}
+
+function normalizeCompletionPercent(value, fallback = 0) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return clamp(Math.round(Number(fallback) || 0), 0, 100);
+  return clamp(Math.round(parsed), 0, 100);
+}
+
+function dateToLocalEndISO(ymd) {
+  if (!ymd) return null;
+  const d = new Date();
+  const parts = ymd.split('-');
+  d.setFullYear(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+  d.setHours(23, 59, 59, 999);
+  return d.toISOString();
+}
+
+function isoToLocalDateInput(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.valueOf())) return '';
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 function openTaskCreateDrawer(projectId, { prefill = null } = {}) {
   const meta = projectState.metadata || normalizeMetadata({});
   const defaults = meta.defaults || { assignee_type: 'agent', assignee_id: 'danny' };
@@ -4818,31 +5070,58 @@ function openTaskCreateDrawer(projectId, { prefill = null } = {}) {
     </div>
     <div class="drawer-body">
       ${prefill?.conversationId ? `<div class="stat-note" style="margin-bottom:8px">From chat conversation ${esc(prefill.conversationId.slice(0, 10))}…</div>` : ''}
-      <div class="form-field"><label>Project</label>
-        <select id="task-new-project">${projectState.projects.map((p) => `<option value="${esc(p.id)}" ${p.id === selectedProjectId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
+      <div class="drawer-grid-2">
+        <div class="form-field"><label>Project</label>
+          <select id="task-new-project">${projectState.projects.map((p) => `<option value="${esc(p.id)}" ${p.id === selectedProjectId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
+        </div>
+        <div class="form-field"><label>Workflow</label>
+          <select id="task-new-workflow"><option value="">(none)</option>${meta.workflows.map((w) => `<option value="${esc(w)}">${esc(w)}</option>`).join('')}</select>
+        </div>
       </div>
       <div class="form-field"><label>Title</label><input id="task-new-title" value="${esc(prefill?.title || '')}" placeholder="Task title"></div>
       <div class="form-field"><label>Description</label><textarea id="task-new-desc" rows="6">${esc(prefill?.description || '')}</textarea></div>
-      <div class="form-field"><label>Workflow</label>
-        <select id="task-new-workflow"><option value="">(none)</option>${meta.workflows.map((w) => `<option value="${esc(w)}">${esc(w)}</option>`).join('')}</select>
+      
+      <div class="drawer-grid-2">
+        <div class="form-field"><label>Status</label>
+          <select id="task-new-status">${TASK_STATUS_OPTIONS.map((s) => `<option value="${esc(s)}" ${s === 'todo' ? 'selected' : ''}>${esc(statusLabel(s))}</option>`).join('')}</select>
+        </div>
+        <div class="form-field"><label>Priority</label>
+          <select id="task-new-priority">${PRIORITY_OPTIONS.map((p) => `<option value="${esc(p)}" ${p === 'medium' ? 'selected' : ''}>${esc(statusLabel(p))}</option>`).join('')}</select>
+        </div>
       </div>
-      <div class="form-field"><label>Status</label>
-        <select id="task-new-status">${TASK_STATUS_OPTIONS.map((s) => `<option value="${esc(s)}" ${s === 'todo' ? 'selected' : ''}>${esc(statusLabel(s))}</option>`).join('')}</select>
+
+      <div class="drawer-grid-2">
+        <div class="form-field"><label>Work Type</label><input id="task-new-work-type" placeholder="e.g. feature, bug, doc"></div>
+        <div class="form-field"><label>Story Points</label><input id="task-new-points" type="number" step="0.5"></div>
       </div>
-      <div class="form-field"><label>Priority</label>
-        <select id="task-new-priority">${PRIORITY_OPTIONS.map((p) => `<option value="${esc(p)}" ${p === 'medium' ? 'selected' : ''}>${esc(statusLabel(p))}</option>`).join('')}</select>
+      
+      <div class="drawer-grid-2">
+        <div class="form-field"><label>Sprint</label><input id="task-new-sprint" placeholder="e.g. Sprint 24"></div>
+        <div class="form-field"><label>Completion %</label><input id="task-new-completion" type="number" min="0" max="100"></div>
       </div>
-      <div class="form-field"><label>Assignee Type</label>
-        <select id="task-new-assignee-type">
-          <option value="agent" ${assigneeType === 'agent' ? 'selected' : ''}>Agent</option>
-          <option value="human" ${assigneeType === 'human' ? 'selected' : ''}>Human</option>
-          <option value="unassigned" ${assigneeType === 'unassigned' ? 'selected' : ''}>Unassigned</option>
-        </select>
+
+      <div class="drawer-grid-2">
+        <div class="form-field"><label>Due Date</label><input type="date" id="task-new-due"></div>
+        <div class="form-field"><label>Dependencies</label><input id="task-new-dependencies" placeholder="Comma-separated task IDs"></div>
       </div>
-      <div class="form-field" id="task-assignee-agent-wrap"><label>Assignee</label>
-        <select id="task-new-assignee-agent">${meta.agents.map((a) => `<option value="${esc(a.id)}" ${a.id === agentDefault ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>
+      <div class="form-field"><label>Component Tags</label><input id="task-new-tags" placeholder="Comma-separated"></div>
+      
+      <div class="drawer-grid-2">
+        <div class="form-field"><label>Assignee Type</label>
+          <select id="task-new-assignee-type">
+            <option value="agent" ${assigneeType === 'agent' ? 'selected' : ''}>Agent</option>
+            <option value="human" ${assigneeType === 'human' ? 'selected' : ''}>Human</option>
+            <option value="unassigned" ${assigneeType === 'unassigned' ? 'selected' : ''}>Unassigned</option>
+          </select>
+        </div>
+        <div class="form-field" id="task-assignee-agent-wrap"><label>Assignee</label>
+          <select id="task-new-assignee-agent">${meta.agents.map((a) => `<option value="${esc(a.id)}" ${a.id === agentDefault ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>
+        </div>
+        <div class="form-field hidden" id="task-assignee-human-wrap"><label>Human assignee name</label><input id="task-new-assignee-human-label" placeholder="Full name"></div>
       </div>
-      <div class="form-field hidden" id="task-assignee-human-wrap"><label>Human assignee name</label><input id="task-new-assignee-human-label" placeholder="Full name"></div>
+      
+      <div class="form-field"><label>External Links</label><textarea id="task-new-links" rows="2" placeholder="Label|URL"></textarea></div>
+      <div class="form-field"><label>Custom Fields</label><textarea id="task-new-custom" rows="2" placeholder="key=value"></textarea></div>
       <div class="drawer-actions"><button id="task-new-save" class="btn btn-primary">Create task</button></div>
     </div>
   `);
@@ -4865,6 +5144,28 @@ function openTaskCreateDrawer(projectId, { prefill = null } = {}) {
     let humanAssigneeLabel = null;
     if (type === 'agent') assigneeId = $('#task-new-assignee-agent', drawer)?.value || defaults.assignee_id || 'danny';
     if (type === 'human') humanAssigneeLabel = $('#task-new-assignee-human-label', drawer)?.value.trim() || null;
+    
+    const tags = $('#task-new-tags', drawer)?.value.split(',').map(s => s.trim()).filter(Boolean) || [];
+    const deps = $('#task-new-dependencies', drawer)?.value.split(',').map(s => s.trim()).filter(Boolean) || [];
+    const linksRaw = $('#task-new-links', drawer)?.value.trim();
+    const links = linksRaw ? linksRaw.split('\n').map(l => { const [label, url] = l.split('|'); return { label: label?.trim() || '', url: url?.trim() || '' }; }).filter(l => l.url) : [];
+    const customRaw = $('#task-new-custom', drawer)?.value.trim();
+    const customFields = {};
+    if (customRaw) {
+      customRaw.split('\n').forEach(line => {
+        const [k, ...vArr] = line.split('=');
+        if (k) {
+          const v = vArr.join('=').trim();
+          let parsed = v;
+          if (v === 'true') parsed = true;
+          else if (v === 'false') parsed = false;
+          else if (v === 'null') parsed = null;
+          else if (!isNaN(Number(v)) && v !== '') parsed = Number(v);
+          customFields[k.trim()] = parsed;
+        }
+      });
+    }
+
     try {
       const task = await boardApi('/api/tasks', {
         method: 'POST',
@@ -4878,6 +5179,15 @@ function openTaskCreateDrawer(projectId, { prefill = null } = {}) {
           assignee_type: type,
           assignee_id: type === 'unassigned' ? null : assigneeId,
           human_assignee_label: type === 'human' ? humanAssigneeLabel : null,
+          work_type: normalizeWorkType($('#task-new-work-type', drawer)?.value),
+          sprint: $('#task-new-sprint', drawer)?.value.trim() || null,
+          story_points: $('#task-new-points', drawer)?.value ? Number($('#task-new-points', drawer).value) : null,
+          completion_percent: normalizeCompletionPercent($('#task-new-completion', drawer)?.value, 0),
+          due_at: dateToLocalEndISO($('#task-new-due', drawer)?.value),
+          component_tags: tags,
+          dependencies: deps,
+          external_links: links,
+          custom_fields: customFields,
         },
       });
       closeDrawer();
@@ -5031,35 +5341,55 @@ function openTaskDrawer(taskId) {
     </div>
     <div class="drawer-body">
       <div class="form-field"><label>Title</label><input id="task-edit-title" value="${esc(task.title)}" placeholder="Task title"></div>
-      
       <div class="form-field"><label>Instruction</label><textarea id="task-edit-desc" rows="4">${esc(task.description || '')}</textarea></div>
       
-      <div class="form-field"><label>Status</label>
-        <select id="task-edit-status">
-          ${TASK_STATUS_OPTIONS.map((s) => `<option value="${esc(s)}" ${s === task.status ? 'selected' : ''}>${esc(statusLabel(s))}</option>`).join('')}
-        </select>
+      <div class="drawer-grid-2">
+        <div class="form-field"><label>Status</label>
+          <select id="task-edit-status">
+            ${TASK_STATUS_OPTIONS.map((s) => `<option value="${esc(s)}" ${s === task.status ? 'selected' : ''}>${esc(statusLabel(s))}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-field"><label>Priority</label>
+          <select id="task-edit-priority">${PRIORITY_OPTIONS.map((p) => `<option value="${esc(p)}" ${p === task.priority ? 'selected' : ''}>${esc(statusLabel(p))}</option>`).join('')}</select>
+        </div>
+      </div>
+
+      <div class="drawer-grid-2">
+        <div class="form-field"><label>Work Type</label><input id="task-edit-work-type" value="${esc(task.work_type || '')}" placeholder="e.g. feature, bug, doc"></div>
+        <div class="form-field"><label>Story Points</label><input id="task-edit-points" type="number" step="0.5" value="${task.story_points ?? ''}"></div>
       </div>
       
-      <div class="form-field"><label>Priority</label>
-        <select id="task-edit-priority">${PRIORITY_OPTIONS.map((p) => `<option value="${esc(p)}" ${p === task.priority ? 'selected' : ''}>${esc(statusLabel(p))}</option>`).join('')}</select>
+      <div class="drawer-grid-2">
+        <div class="form-field"><label>Sprint</label><input id="task-edit-sprint" value="${esc(task.sprint || '')}" placeholder="e.g. Sprint 24"></div>
+        <div class="form-field"><label>Completion %</label><input id="task-edit-completion" type="number" min="0" max="100" value="${task.completion_percent ?? 0}"></div>
       </div>
 
       <div class="form-field"><label>Workflow</label>
         <select id="task-edit-workflow"><option value="">(none)</option>${meta.workflows.map((w) => `<option value="${esc(w)}" ${w === task.workflow_id ? 'selected' : ''}>${esc(w)}</option>`).join('')}</select>
       </div>
 
-      <div class="form-field"><label>Assignee Type</label>
-        <select id="task-edit-assignee-type">
-          <option value="agent" ${task.assignee_type === 'agent' ? 'selected' : ''}>Agent</option>
-          <option value="human" ${task.assignee_type === 'human' ? 'selected' : ''}>Human</option>
-          <option value="unassigned" ${task.assignee_type === 'unassigned' ? 'selected' : ''}>Unassigned</option>
-        </select>
+      <div class="drawer-grid-2">
+        <div class="form-field"><label>Due Date</label><input type="date" id="task-edit-due" value="${esc(isoToLocalDateInput(task.due_at))}"></div>
+        <div class="form-field"><label>Dependencies</label><input id="task-edit-dependencies" value="${esc((task.dependencies || []).join(', '))}" placeholder="Comma-separated task IDs"></div>
       </div>
-      <div class="form-field ${task.assignee_type !== 'agent' ? 'hidden' : ''}" id="task-edit-assignee-agent-wrap"><label>Assignee Agent</label>
-        <select id="task-edit-assignee-agent">${meta.agents.map((a) => `<option value="${esc(a.id)}" ${a.id === task.assignee_id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>
-      </div>
-      <div class="form-field ${task.assignee_type !== 'human' ? 'hidden' : ''}" id="task-edit-assignee-human-wrap"><label>Human Assignee Label</label>
-        <input id="task-edit-assignee-human-label" value="${esc(task.human_assignee_label || '')}" placeholder="Optional display name">
+      <div class="form-field"><label>Component Tags</label><input id="task-edit-tags" value="${esc((task.component_tags || []).join(', '))}" placeholder="Comma-separated"></div>
+      <div class="form-field"><label>External Links</label><textarea id="task-edit-links" rows="2" placeholder="Label|URL">${esc((task.external_links || []).map(l => l.label + '|' + l.url).join('\\n'))}</textarea></div>
+      <div class="form-field"><label>Custom Fields</label><textarea id="task-edit-custom" rows="2" placeholder="key=value">${esc(Object.entries(task.custom_fields || {}).map(([k, v]) => k + '=' + v).join('\\n'))}</textarea></div>
+
+      <div class="drawer-grid-2">
+        <div class="form-field"><label>Assignee Type</label>
+          <select id="task-edit-assignee-type">
+            <option value="agent" ${task.assignee_type === 'agent' ? 'selected' : ''}>Agent</option>
+            <option value="human" ${task.assignee_type === 'human' ? 'selected' : ''}>Human</option>
+            <option value="unassigned" ${task.assignee_type === 'unassigned' ? 'selected' : ''}>Unassigned</option>
+          </select>
+        </div>
+        <div class="form-field ${task.assignee_type !== 'agent' ? 'hidden' : ''}" id="task-edit-assignee-agent-wrap"><label>Assignee Agent</label>
+          <select id="task-edit-assignee-agent">${meta.agents.map((a) => `<option value="${esc(a.id)}" ${a.id === task.assignee_id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>
+        </div>
+        <div class="form-field ${task.assignee_type !== 'human' ? 'hidden' : ''}" id="task-edit-assignee-human-wrap"><label>Human Assignee Label</label>
+          <input id="task-edit-assignee-human-label" value="${esc(task.human_assignee_label || '')}" placeholder="Optional display name">
+        </div>
       </div>
 
       <div class="drawer-section">
@@ -5083,7 +5413,7 @@ function openTaskDrawer(taskId) {
         </div>
         <div>${execStateBadge(task.execution?.state || 'none')}</div>
         ${artifactEntries.length ? `<div style="margin-top:10px;display:flex;flex-direction:column;gap:6px">
-          ${artifactEntries.slice(0, 12).map((entry) => `<a class="chip" data-task-artifact="${esc(entry.key)}" style="text-decoration:none;display:inline-flex;justify-content:space-between;gap:8px" href="${esc(boardArtifactHref(task.id, entry.attemptId, entry.relPath))}" target="_blank" rel="noopener noreferrer"><span>${esc(entry.name)}</span><span class="mono-label">${esc(entry.attemptId.slice(0, 8))}</span></a>`).join('')}
+          ${artifactEntries.slice(0, 12).map((entry) => `<a class="chip" data-task-artifact="${esc(entry.key)}" style="text-decoration:none;display:inline-flex;justify-content:space-between;gap:8px" href="${esc(boardArtifactHref(task.id, entry.attemptId, entry.relPath, entry.artifactId))}" target="_blank" rel="noopener noreferrer"><span>${esc(entry.name)}</span><span class="mono-label">${esc(entry.attemptId.slice(0, 8))}</span></a>`).join('')}
           ${artifactEntries.length > 12 ? `<span class="stat-note">+${artifactEntries.length - 12} more artifacts on older attempts.</span>` : ''}
         </div>` : '<div class="stat-note" style="margin-top:10px">No linked artifacts yet.</div>'}
       </div>
@@ -5133,11 +5463,50 @@ function openTaskDrawer(taskId) {
       hLabel = $('#task-edit-assignee-human-label', drawer)?.value.trim() || null;
     }
 
+    const wt = normalizeWorkType($('#task-edit-work-type', drawer)?.value);
+    const tags = $('#task-edit-tags', drawer)?.value.split(',').map(s => s.trim()).filter(Boolean) || [];
+    const sp = $('#task-edit-sprint', drawer)?.value.trim() || null;
+    const pts = $('#task-edit-points', drawer)?.value ? Number($('#task-edit-points', drawer).value) : null;
+    const comp = normalizeCompletionPercent($('#task-edit-completion', drawer)?.value, task.completion_percent ?? 0);
+    const deps = $('#task-edit-dependencies', drawer)?.value.split(',').map(s => s.trim()).filter(Boolean) || [];
+    const linksRaw = $('#task-edit-links', drawer)?.value.trim();
+    const links = linksRaw ? linksRaw.split('\n').map(l => { const [label, url] = l.split('|'); return { label: label?.trim() || '', url: url?.trim() || '' }; }).filter(l => l.url) : [];
+    const customRaw = $('#task-edit-custom', drawer)?.value.trim();
+    const customFields = {};
+    if (customRaw) {
+      customRaw.split('\n').forEach(line => {
+        const [k, ...vArr] = line.split('=');
+        if (k) {
+          const v = vArr.join('=').trim();
+          let parsed = v;
+          if (v === 'true') parsed = true;
+          else if (v === 'false') parsed = false;
+          else if (v === 'null') parsed = null;
+          else if (!isNaN(Number(v)) && v !== '') parsed = Number(v);
+          customFields[k.trim()] = parsed;
+        }
+      });
+    }
+
     if (t && t !== task.title) ops.push({ op: 'set_title', value: t });
     if (d !== (task.description || '')) ops.push({ op: 'set_description', value: d });
     if (s && s !== task.status) ops.push({ op: 'set_status', value: s });
     if (p && p !== task.priority) ops.push({ op: 'set_priority', value: p });
     if (w !== task.workflow_id) ops.push({ op: 'set_workflow_id', value: w });
+    
+    if (wt !== task.work_type) ops.push({ op: 'set_work_type', value: wt });
+    if (sp !== task.sprint) ops.push({ op: 'set_sprint', value: sp });
+    if (pts !== task.story_points) ops.push({ op: 'set_story_points', value: pts });
+    if (comp !== normalizeCompletionPercent(task.completion_percent, 0)) ops.push({ op: 'set_completion_percent', value: comp });
+    
+    // Arrays and Objects
+    if (JSON.stringify(tags) !== JSON.stringify(task.component_tags || [])) ops.push({ op: 'set_component_tags', value: tags });
+    if (JSON.stringify(deps) !== JSON.stringify(task.dependencies || [])) ops.push({ op: 'set_dependencies', value: deps });
+    if (JSON.stringify(links) !== JSON.stringify(task.external_links || [])) ops.push({ op: 'set_external_links', value: links });
+    if (JSON.stringify(customFields) !== JSON.stringify(task.custom_fields || {})) ops.push({ op: 'set_custom_fields', value: customFields });
+    
+    const newDueYmd = $('#task-edit-due', drawer)?.value || '';
+    if (isoToLocalDateInput(task.due_at) !== newDueYmd) ops.push({ op: 'set_due_at', value: dateToLocalEndISO(newDueYmd) });
     
     if (aType !== task.assignee_type || aId !== task.assignee_id || hLabel !== task.human_assignee_label) {
       ops.push({ op: 'set_assignee', value: { assignee_type: aType, assignee_id: aId, human_assignee_label: hLabel } });
@@ -5233,89 +5602,420 @@ function paintProjects() {
     return;
   }
 
+  if (!projectState.activeTab) projectState.activeTab = 'board';
+  if (typeof projectState.showFilters === 'undefined') projectState.showFilters = false;
+
+  const isOverview = projectState.activeTab === 'overview';
+  const isList = projectState.activeTab === 'list';
+  const isBoard = projectState.activeTab === 'board';
+
   const qProject = projectState.projectQuery.toLowerCase();
   const qTask = projectState.taskQuery.toLowerCase();
+  const f = projectState.filters;
+  const activeFilters = [];
+  if (f.status) activeFilters.push({ key: 'status', label: `Status: ${statusLabel(f.status)}` });
+  if (f.priority) activeFilters.push({ key: 'priority', label: `Priority: ${statusLabel(f.priority)}` });
+  if (f.work_type) activeFilters.push({ key: 'work_type', label: `Type: ${f.work_type}` });
+  if (f.sprint) activeFilters.push({ key: 'sprint', label: `Sprint: ${f.sprint}` });
+  if (f.assignee_id) {
+    const assigneeName = projectState.metadata?.agents?.find(a => a.id === f.assignee_id)?.name || f.assignee_id;
+    activeFilters.push({ key: 'assignee_id', label: `Assignee: ${assigneeName}` });
+  }
+  if (f.is_blocked) activeFilters.push({ key: 'is_blocked', label: 'Blocked' });
+  if (f.is_overdue) activeFilters.push({ key: 'is_overdue', label: 'Overdue' });
+
   const projectsVisible = projectState.projects.filter((p) => !qProject || `${p.name} ${p.description || ''}`.toLowerCase().includes(qProject));
   const proj = selectedProject();
   const allTasks = projectState.tasks.filter((t) => t.project_id === proj?.id);
-  const tasksVisible = allTasks.filter((t) => !qTask || `${t.title} ${t.description || ''}`.toLowerCase().includes(qTask));
+  const tasksVisible = allTasks.filter((t) => {
+    if (qTask && !`${t.title} ${t.description || ''}`.toLowerCase().includes(qTask)) return false;
+    if (f.status && t.status !== f.status) return false;
+    if (f.priority && t.priority !== f.priority) return false;
+    if (f.work_type && (t.work_type || '').toLowerCase() !== f.work_type.toLowerCase()) return false;
+    if (f.sprint && (t.sprint || '').toLowerCase() !== f.sprint.toLowerCase()) return false;
+    if (f.assignee_id && t.assignee_id !== f.assignee_id) return false;
+    if (f.is_blocked && !(t.dependencies?.length > 0)) return false;
+    if (f.is_overdue && (!t.due_at || Date.parse(t.due_at) >= Date.now())) return false;
+    return true;
+  });
   const counts = proj ? projectTaskCounts(proj.id) : { total: 0, by: {} };
 
   const getAssigneeAvatar = (t) => (assigneeLabel(t)[0] || 'U').toUpperCase();
-  const boardCols = TASK_STATUS_OPTIONS.map((status) => {
+  const boardCols = TASK_STATUS_OPTIONS.filter((s) => projectState.visibleColumns.includes(s)).map((status) => {
     const items = tasksVisible.filter((t) => t.status === status);
     return `<div class="pj-col" data-status="${esc(status)}">
-      <div class="pj-col-head">${esc(statusLabel(status))} <span>${items.length}</span></div>
+      <div class="pj-col-head" aria-label="${items.length} tasks in ${esc(statusLabel(status))}">${esc(statusLabel(status))} <span>${items.length}</span></div>
       <div class="pj-col-body">
-        ${items.length ? items.map((t) => `<div class="pj-task-card" draggable="true" data-task-id="${esc(t.id)}" data-open-task="${esc(t.id)}">
-          <div class="pj-task-title">${esc(t.title)}</div>
-          <div class="pj-task-meta">${execStateBadge(t.execution?.state || 'none')} <span class="badge badge-gray">${esc(statusLabel(t.priority))}</span></div>
-          <div class="pj-task-foot">
-            <span class="pj-task-assignee"><span class="pj-task-avatar">${esc(getAssigneeAvatar(t))}</span>${esc(assigneeLabel(t))}</span>
-            <span style="display:flex;align-items:center;gap:4px"><button class="task-move-btn" data-move-task="${esc(t.id)}" title="Move to..." onclick="event.stopPropagation()">⋮</button></span>
+        ${items.length ? items.map((t) => {
+          const isBlocked = t.dependencies?.length > 0;
+          return `<div class="pj-task-card ${isBlocked ? 'is-blocked' : ''}" tabindex="0" role="button" aria-label="${esc(t.title)} (${esc(statusLabel(status))})" draggable="true" data-task-id="${esc(t.id)}" data-open-task="${esc(t.id)}">
+          <div class="pj-task-header">
+            <div class="pj-task-title">${esc(t.title)}</div>
+            ${isBlocked ? `<div class="pj-task-blocked-badge" title="Blocked by dependencies">Blocked</div>` : ''}
           </div>
-        </div>`).join('') : '<div class="pj-empty">Drop tasks here</div>'}
+          <div class="pj-task-planning">
+            ${t.due_at ? `<span class="pj-tag tag-due ${Date.parse(t.due_at) < Date.now() ? 'is-overdue' : ''}">${esc(new Date(t.due_at).toLocaleDateString(undefined, {month:'short', day:'numeric'}))}</span>` : ''}
+            ${t.work_type ? `<span class="pj-tag tag-type">${esc(t.work_type)}</span>` : ''}
+            <span class="pj-tag tag-prio">${esc(statusLabel(t.priority))}</span>
+            ${t.sprint ? `<span class="pj-tag tag-sprint">${esc(t.sprint)}</span>` : ''}
+            ${t.story_points ? `<span class="pj-tag tag-points">${esc(t.story_points)}pt</span>` : ''}
+            ${t.completion_percent ? `<span class="pj-tag tag-comp">${esc(t.completion_percent)}%</span>` : ''}
+          </div>
+          <div class="pj-task-execution">
+            <div class="pj-task-tags">
+              ${(t.component_tags || []).map(tag => `<span class="pj-tag tag-comp-name">${esc(tag)}</span>`).join('')}
+            </div>
+            <div class="pj-task-owners">
+              <span class="pj-task-assignee"><span class="pj-task-avatar">${esc(getAssigneeAvatar(t))}</span>${esc(assigneeLabel(t))}</span>
+              <span class="pj-task-exec-state">${execStateBadge(t.execution?.state || 'none')}</span>
+              <button class="task-move-btn" tabindex="0" data-move-task="${esc(t.id)}" aria-label="Move task" onclick="event.stopPropagation()">⋮</button>
+            </div>
+          </div>
+        </div>`;
+        }).join('') : '<div class="pj-col-empty-zone">Drop tasks here</div>'}
       </div>
     </div>`;
   }).join('');
 
-  const listRows = tasksVisible.length ? tasksVisible.map((t) => `<button class="list-row" data-open-task="${esc(t.id)}">
+  const listRows = tasksVisible.length ? tasksVisible.map((t) => `<button class="list-row" tabindex="0" data-open-task="${esc(t.id)}">
       <span class="badge badge-gray">${esc(statusLabel(t.status))}</span>
+      ${t.work_type ? `<span class="badge badge-dark">${esc(t.work_type)}</span>` : ''}
       <span class="list-title">${esc(t.title)}</span>
       <span class="list-meta">${esc(statusLabel(t.priority))}</span>
       <span class="list-meta">${esc(assigneeLabel(t))}</span>
       <span class="list-meta">${esc(t.execution?.state || 'none')}</span>
-      <span class="list-meta">${t.due_at ? timeAgo(Date.parse(t.due_at)) : 'no due'}</span>
+      <span class="list-meta ${t.due_at && Date.parse(t.due_at) < Date.now() ? 'text-overdue' : ''}">${t.due_at ? esc(new Date(t.due_at).toLocaleDateString(undefined, {month:'short', day:'numeric'})) : 'no due'}</span>
     </button>`).join('') : '<div class="pj-empty">No tasks in this project.</div>';
 
   const streamRows = (rows) => rows.length
     ? rows.slice(0, 8).map((r) => `<div class="pj-stream-row"><span>${esc(r.action || r.entity_type || 'event')}</span><span>${esc(r.actor_id || 'unknown')} · ${timeAgo(Date.parse(r.timestamp || Date.now()))}</span></div>`).join('')
     : '<div class="pj-empty" style="padding:8px 0">No entries yet.</div>';
 
-  el.innerHTML = `<div class="view-pad" style="display:flex;flex-direction:column;height:100%">
-    <div class="card pj-toolbar" style="flex-shrink:0">
-      <input id="pj-project-q" class="filter-input" type="text" placeholder="Search projects…" value="${esc(projectState.projectQuery)}">
-      <input id="pj-task-q" class="filter-input" type="text" placeholder="Search tasks…" value="${esc(projectState.taskQuery)}">
-      <span class="filter-tabs">
-        <button class="filter-tab ${projectState.taskLayout === 'board' ? 'active' : ''}" data-pj-layout="board">Board</button>
-        <button class="filter-tab ${projectState.taskLayout === 'list' ? 'active' : ''}" data-pj-layout="list">List</button>
-      </span>
-      <button class="btn btn-ghost btn-small" data-pj-toggle-sidebar>${projectState.showSidebar ? 'Hide Projects' : 'Show Projects'}</button>
-      <button class="btn btn-ghost btn-small" data-pj-toggle-detail>${projectState.showDetail ? 'Hide Details' : 'Show Details'}</button>
-      <button class="btn btn-primary btn-small" data-pj-new-project>New Project</button>
-      <button class="btn btn-small" data-pj-new-task ${proj ? '' : 'disabled'}>New Task</button>
-      <button class="btn btn-ghost btn-small" data-pj-refresh>${projectState.loading ? 'Refreshing…' : 'Refresh'}</button>
-    </div>
+  let dashHtml = '';
+  if (proj && projectState.dashboard) {
+    const rawDashboard = projectState.dashboard || {};
+    const dashboard = {
+      total_tasks: rawDashboard.total_tasks ?? rawDashboard.TOTAL_TASKS ?? 0,
+      by_status: rawDashboard.by_status ?? rawDashboard.BY_STATUS ?? null,
+      by_priority: rawDashboard.by_priority ?? rawDashboard.BY_PRIORITY ?? null,
+      by_work_type: rawDashboard.by_work_type ?? rawDashboard.BY_WORK_TYPE ?? null,
+      blocked_count: rawDashboard.blocked_count ?? rawDashboard.BLOCKED_COUNT ?? 0,
+      overdue_count: rawDashboard.overdue_count ?? rawDashboard.OVERDUE_COUNT ?? 0,
+      avg_completion_percent: rawDashboard.avg_completion_percent ?? rawDashboard.AVG_COMPLETION_PERCENT ?? 0,
+      sprint_breakdown: rawDashboard.sprint_breakdown ?? rawDashboard.SPRINT_BREAKDOWN ?? null,
+    };
+    const total = dashboard.total_tasks;
+    
+    const colors = { done: 'var(--green-light)', in_progress: '#6fb6e8', todo: 'var(--border)', backlog: 'var(--muted)', blocked: 'var(--apricot-deep)', needs_review: '#f5c04e' };
+    let chunks = '';
+    let labels = '';
+    if (dashboard.by_status) {
+      for (const [k, v] of Object.entries(dashboard.by_status)) {
+        if (v > 0) {
+          const pct = (v / total) * 100;
+          const bg = colors[k] || 'var(--muted)';
+          chunks += `<div class="seg-chunk clickable" tabindex="0" role="button" data-dash-filter="status:${esc(k)}" style="width:${pct}%; background:${bg}" title="${esc(k)}: ${v}"></div>`;
+          labels += `<span class="clickable" tabindex="0" role="button" data-dash-filter="status:${esc(k)}" style="display:inline-flex;align-items:center;padding:2px;border-radius:4px;"><i style="background:${bg}"></i>${esc(statusLabel(k))} ${v}</span>`;
+        }
+      }
+    }
+    const statusBar = `<div class="seg-bar">${chunks}</div><div class="seg-labels">${labels}</div>`;
+    const renderDashList = (data, filterKey) => data ? `<div class="dash-list">${Object.entries(data).map(([k,v]) => `<div class="clickable" tabindex="0" role="button" data-dash-filter="${filterKey}:${esc(k)}"><span>${esc(statusLabel(k))}</span><strong>${v}</strong></div>`).join('')}</div>` : '<div class="stat-note">None</div>';
+
+    dashHtml = `<div class="pj-dashboard">
+      <div class="pj-dash-grid">
+        <div class="pj-dash-card dash-span-2">
+          <div class="pj-dash-label">Status Distribution</div>
+          ${total > 0 ? statusBar : '<div class="stat-note">No tasks</div>'}
+        </div>
+        <div class="pj-dash-card">
+          <div class="pj-dash-label">Avg Completion</div>
+          <div class="dash-progress-wrap"><div class="dash-progress-bar" style="width:${dashboard.avg_completion_percent || 0}%"></div></div>
+          <div class="dash-progress-text">${dashboard.avg_completion_percent || 0}%</div>
+        </div>
+        <div class="pj-dash-card clickable ${dashboard.blocked_count ? 'warn' : ''}" tabindex="0" role="button" data-dash-filter="is_blocked:true">
+          <div class="pj-dash-label">Blocked</div>
+          <div class="pj-dash-value">${dashboard.blocked_count || 0}</div>
+        </div>
+        <div class="pj-dash-card clickable ${dashboard.overdue_count ? 'warn' : ''}" tabindex="0" role="button" data-dash-filter="is_overdue:true">
+          <div class="pj-dash-label">Overdue</div>
+          <div class="pj-dash-value">${dashboard.overdue_count || 0}</div>
+        </div>
+        <div class="pj-dash-card">
+          <div class="pj-dash-label">Priority</div>
+          ${renderDashList(dashboard.by_priority, 'priority')}
+        </div>
+        <div class="pj-dash-card">
+          <div class="pj-dash-label">Work Type</div>
+          ${renderDashList(dashboard.by_work_type, 'work_type')}
+        </div>
+      </div>
+    </div>`;
+  }
+
+  const sys = state.system || {};
+  const requested = String(sys.requestedDeployment || 'local_machine_only');
+  const teamStatus = String(sys.teamCapability?.status || 'disabled');
+  const teamReason = String(sys.teamCapability?.reason || 'Team capability is currently unconfigured or unavailable.');
+  const isTeamDisabled = requested === 'team_server' && teamStatus === 'disabled';
+
+  const projectOptionsHtml = projectsVisible.map((p) => `<option value="${esc(p.id)}" ${projectState.selectedProjectId === p.id ? 'selected' : ''}>${p.visibility === 'private' ? '🔒 ' : (p.visibility === 'team' ? '👥 ' : '')}${esc(p.name)}</option>`).join('');
+  const mobileProjectSwitcher = `<select id="pj-mobile-switcher" class="filter-input pj-mobile-switcher" aria-label="Select project"><option value="">-- Select Project --</option>${projectOptionsHtml}</select>`;
+
+  const focusedId = document.activeElement?.id;
+
+  el.innerHTML = `<div style="display:flex;flex-direction:column;height:100%;padding:0;">
     <div class="projects-layout ${!projectState.showSidebar ? 'no-sidebar' : ''}">
-      ${projectState.showSidebar ? `<div class="card pj-projects-col"><div class="section-title">Projects</div>${projectsVisible.length ? projectsVisible.map((p) => {
-        const c = projectTaskCounts(p.id);
-        const icon = p.visibility === 'private' ? '🔒 ' : (p.visibility === 'team' ? '👥 ' : '');
-        return `<button class="pj-project-row ${projectState.selectedProjectId === p.id ? 'active' : ''}" data-pj-project="${esc(p.id)}"><span class="pj-project-name">${icon}${esc(p.name)}</span><span class="pj-project-meta">${esc(p.status)} · ${c.total} tasks</span></button>`;
-      }).join('') : '<div class="pj-empty">No projects found.</div>'}</div>` : ''}
-      <div class="pj-main-col">
-        ${proj ? `${projectState.showDetail ? `<div class="card" style="flex-shrink:0"><div class="pj-detail-head"><div><div class="section-title" style="margin-bottom:6px">Project Detail</div><div class="pj-project-title">${proj.visibility === 'private' ? '🔒 ' : (proj.visibility === 'team' ? '👥 ' : '')}${esc(proj.name)}</div><div class="stat-note" style="margin-top:4px;white-space:normal">${esc(proj.description || 'No description.')}</div></div><div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><span class="badge badge-gray">${esc(statusLabel(proj.status))}</span><button class="chip" data-pj-edit-project>Edit</button></div></div><div class="pj-kpis">${TASK_STATUS_OPTIONS.map((s) => `<span>${esc(statusLabel(s))}: <strong>${counts.by[s] || 0}</strong></span>`).join('')}</div><div class="pj-stream-grid"><div><div class="section-title">Activity</div>${projectState.streamLoading ? '<div class="pj-empty">Loading activity…</div>' : streamRows(projectState.activity)}</div><div><div class="section-title">Audit</div>${projectState.streamLoading ? '<div class="pj-empty">Loading audit…</div>' : streamRows(projectState.audit)}</div></div>${projectState.streamError ? `<div class="stat-note" style="margin-top:8px;color:var(--apricot-deep)">${esc(projectState.streamError.message || 'Could not load activity/audit.')}</div>` : ''}</div>` : ''}<div class="card pj-board-card"><div class="pj-task-head" style="flex-shrink:0"><div class="section-title" style="margin:0">Tasks (${tasksVisible.length})</div></div>${projectState.taskLayout === 'board' ? `<div class="pj-board">${boardCols}</div>` : `<div style="flex:1;overflow-y:auto">${listRows}</div>`}</div>` : '<div class="card">Select a project to view tasks.</div>'}
+      ${projectState.showSidebar ? `
+      <div class="pj-sidebar">
+        <div class="pj-sidebar-header">
+          <div class="section-title" style="margin:0">Projects</div>
+          <button class="btn btn-primary btn-small" data-pj-new-project>New</button>
+        </div>
+        <div class="pj-sidebar-search">
+          <input id="pj-project-q" class="filter-input" style="width:100%;" placeholder="Search projects…" value="${esc(projectState.projectQuery)}">
+        </div>
+        <div class="pj-project-list">
+          ${projectsVisible.length ? projectsVisible.map(p => {
+            const c = projectTaskCounts(p.id);
+            const icon = p.visibility === 'private' ? '🔒 ' : (p.visibility === 'team' ? '👥 ' : '');
+            return `<button class="pj-project-row ${projectState.selectedProjectId === p.id ? 'active' : ''}" data-pj-project="${esc(p.id)}"><span class="pj-project-name">${icon}${esc(p.name)}</span><span class="pj-project-meta">${esc(p.status)} · ${c.total} tasks</span></button>`;
+          }).join('') : '<div class="pj-empty">No projects found.</div>'}
+        </div>
+      </div>` : ''}
+
+      <div class="pj-main-area">
+        ${isTeamDisabled ? `<div class="view-pad" style="padding-bottom:0;"><div class="card" style="border-color:var(--apricot);">
+          <div class="section-title" style="margin:0 0 4px">Team Board Unavailable</div>
+          <div class="stat-note" style="white-space:normal">Your user profile requests a team server, but team capabilities are currently disabled (${esc(teamReason)}). You are operating in single-user mode. Team projects cannot be accessed or written to. Private/local projects remain fully available and isolated to your machine.</div>
+        </div></div>` : ''}
+        
+        <div class="pj-workspace-header">
+          <div class="pj-workspace-top">
+            <div class="pj-title-area" style="flex:1;">
+              ${mobileProjectSwitcher}
+              <div class="pj-desktop-title-row" style="display:flex;align-items:center;gap:12px;">
+                <h2 class="pj-desktop-title">${proj ? (proj.visibility === 'private' ? '🔒 ' : (proj.visibility === 'team' ? '👥 ' : '')) + esc(proj.name) : 'Projects'}</h2>
+                ${proj ? `<span class="badge badge-gray">${esc(statusLabel(proj.status))}</span>` : ''}
+              </div>
+            </div>
+            <div class="pj-actions" style="display:flex;gap:8px;align-items:flex-start;">
+              ${!projectState.showSidebar ? `<button class="btn btn-ghost btn-small pj-desktop-only" data-pj-toggle-sidebar>Show Projects</button>` : `<button class="btn btn-ghost btn-small pj-desktop-only" data-pj-toggle-sidebar>Hide Projects</button>`}
+              ${proj ? `<button data-pj-edit-project class="btn btn-ghost btn-small">Edit</button>
+              <button data-pj-new-task class="btn btn-primary btn-small">New Task</button>` : `<button class="btn btn-primary btn-small" data-pj-new-project>New Project</button>`}
+            </div>
+          </div>
+          
+          ${proj ? `
+          <div class="pj-tabs">
+            <button class="pj-tab ${isBoard ? 'active' : ''}" data-pj-tab="board">Board</button>
+            <button class="pj-tab ${isList ? 'active' : ''}" data-pj-tab="list">List</button>
+            <button class="pj-tab ${isOverview ? 'active' : ''}" data-pj-tab="overview">Overview</button>
+          </div>
+          ` : ''}
+        </div>
+
+        <div class="pj-workspace-content">
+          ${!proj ? '<div class="pj-empty" style="text-align:center;margin-top:40px;">Select a project from the sidebar or create a new one.</div>' : ''}
+
+          ${proj && (isBoard || isList) ? `
+            <div class="pj-sub-toolbar">
+              <div class="search-wrap" style="width:240px; margin:0;">
+                <input id="pj-task-q" placeholder="Search tasks…" value="${esc(projectState.taskQuery)}">
+              </div>
+              <button class="btn btn-ghost btn-small" data-pj-toggle-filters>Filters ${activeFilters.length ? `(${activeFilters.length})` : ''}</button>
+              ${isBoard ? `<div style="position:relative;">
+                <button class="btn btn-ghost btn-small" data-pj-toggle-view-options>View Options ⏷</button>
+                ${projectState.showViewOptions ? `
+                <div class="pj-popover">
+                  <div class="section-title">Visible Columns</div>
+                  ${TASK_STATUS_OPTIONS.map(s => `
+                    <label class="form-check">
+                      <input type="checkbox" data-pj-col-toggle="${esc(s)}" ${projectState.visibleColumns.includes(s) ? 'checked' : ''} ${projectState.visibleColumns.length === 1 && projectState.visibleColumns.includes(s) ? 'disabled' : ''}>
+                      <span>${esc(statusLabel(s))}</span>
+                    </label>
+                  `).join('')}
+                </div>
+                ` : ''}
+              </div>` : ''}
+              <button class="btn btn-ghost btn-small" data-pj-refresh>${projectState.loading ? 'Refreshing…' : 'Refresh'}</button>
+            </div>
+            
+            ${activeFilters.length && !projectState.showFilters ? `
+            <div class="pj-filter-chips">
+              <span class="mono-label" style="margin-right:4px;">Active Filters:</span>
+              ${activeFilters.map(f => `<button class="pj-filter-chip" data-pj-clear-filter="${esc(f.key)}" title="Remove">${esc(f.label)} ✕</button>`).join('')}
+              <button class="btn btn-ghost btn-small" data-pj-clear-all-filters style="margin-left:4px;">Clear All</button>
+            </div>` : ''}
+
+            ${projectState.showFilters ? `
+            <div class="pj-filters-panel" style="flex-direction:column;">
+              <div class="drawer-grid-2" style="width:100%;">
+                <div class="form-field"><label>Status</label>
+                  <select id="pj-filter-status" class="filter-input"><option value="">Any</option>${TASK_STATUS_OPTIONS.map(s => `<option value="${esc(s)}" ${f.status === s ? 'selected' : ''}>${esc(statusLabel(s))}</option>`).join('')}</select>
+                </div>
+                <div class="form-field"><label>Priority</label>
+                  <select id="pj-filter-priority" class="filter-input"><option value="">Any</option>${PRIORITY_OPTIONS.map(p => `<option value="${esc(p)}" ${f.priority === p ? 'selected' : ''}>${esc(statusLabel(p))}</option>`).join('')}</select>
+                </div>
+                <div class="form-field"><label>Assignee</label>
+                  <select id="pj-filter-assignee" class="filter-input"><option value="">Any</option>${(projectState.metadata?.agents || []).map(a => `<option value="${esc(a.id)}" ${f.assignee_id === a.id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>
+                </div>
+                <div class="form-field"><label>Work Type</label><input id="pj-filter-work-type" class="filter-input" placeholder="e.g. feature" value="${esc(f.work_type)}"></div>
+                <div class="form-field"><label>Sprint</label><input id="pj-filter-sprint" class="filter-input" placeholder="e.g. Sprint 24" value="${esc(f.sprint)}"></div>
+                <div class="form-field" style="display:flex; gap:16px; align-items:center;">
+                  <label class="form-check" style="margin-top:16px;"><input type="checkbox" id="pj-filter-blocked" ${f.is_blocked ? 'checked' : ''}> <span>Blocked Only</span></label>
+                  <label class="form-check" style="margin-top:16px;"><input type="checkbox" id="pj-filter-overdue" ${f.is_overdue ? 'checked' : ''}> <span>Overdue Only</span></label>
+                </div>
+              </div>
+              <div style="display:flex;justify-content:flex-end;margin-top:8px;">
+                <button class="btn btn-ghost btn-small" data-pj-clear-all-filters>Clear All Filters</button>
+              </div>
+            </div>` : ''}
+
+            <div class="pj-tasks-container">
+              ${isBoard ? `<div class="pj-board">${boardCols}</div>` : `<div class="pj-list">${listRows}</div>`}
+            </div>
+          ` : ''}
+
+          ${proj && isOverview ? `
+            <div class="pj-overview-content" style="display:flex;flex-direction:column;gap:24px;">
+              <div style="max-width:800px;line-height:1.6;color:var(--body);">${esc(proj.description || 'No description provided.')}</div>
+              ${dashHtml}
+              <div class="pj-stream-grid">
+                <div><div class="section-title">Activity</div>${projectState.streamLoading ? '<div class="pj-empty">Loading activity…</div>' : streamRows(projectState.activity)}</div>
+                <div><div class="section-title">Audit</div>${projectState.streamLoading ? '<div class="pj-empty">Loading audit…</div>' : streamRows(projectState.audit)}</div>
+              </div>
+              ${projectState.streamError ? `<div class="stat-note" style="color:var(--apricot-deep)">${esc(projectState.streamError.message)}</div>` : ''}
+            </div>
+          ` : ''}
+        </div>
       </div>
     </div>
   </div>`;
 
+  if (focusedId) {
+    const elToFocus = document.getElementById(focusedId);
+    if (elToFocus) {
+      elToFocus.focus();
+      if (elToFocus.setSelectionRange && elToFocus.value) {
+        const len = elToFocus.value.length;
+        elToFocus.setSelectionRange(len, len);
+      }
+    }
+  }
+
   $('#pj-project-q', el)?.addEventListener('input', (e) => { projectState.projectQuery = e.target.value; paintProjects(); });
   $('#pj-task-q', el)?.addEventListener('input', (e) => { projectState.taskQuery = e.target.value; paintProjects(); });
+  $('#pj-filter-status', el)?.addEventListener('change', (e) => { projectState.filters.status = e.target.value; savePjPrefs(); paintProjects(); });
+  $('#pj-filter-priority', el)?.addEventListener('change', (e) => { projectState.filters.priority = e.target.value; savePjPrefs(); paintProjects(); });
+  $('#pj-filter-assignee', el)?.addEventListener('change', (e) => { projectState.filters.assignee_id = e.target.value; savePjPrefs(); paintProjects(); });
+  $('#pj-filter-work-type', el)?.addEventListener('input', (e) => { projectState.filters.work_type = e.target.value; savePjPrefs(); paintProjects(); });
+  $('#pj-filter-sprint', el)?.addEventListener('input', (e) => { projectState.filters.sprint = e.target.value; savePjPrefs(); paintProjects(); });
+  $('#pj-filter-blocked', el)?.addEventListener('change', (e) => { projectState.filters.is_blocked = e.target.checked; savePjPrefs(); paintProjects(); });
+  $('#pj-filter-overdue', el)?.addEventListener('change', (e) => { projectState.filters.is_overdue = e.target.checked; savePjPrefs(); paintProjects(); });
+  
+  $$('[data-pj-clear-filter]', el).forEach(btn => btn.addEventListener('click', (e) => {
+    const key = e.currentTarget.dataset.pjClearFilter;
+    if (key === 'is_blocked' || key === 'is_overdue') projectState.filters[key] = false;
+    else projectState.filters[key] = '';
+    savePjPrefs(); paintProjects();
+  }));
+  
+  $$('[data-pj-clear-all-filters]', el).forEach(btn => btn.addEventListener('click', () => {
+    projectState.filters = { status: '', priority: '', work_type: '', sprint: '', assignee_id: '', is_blocked: false, is_overdue: false };
+    savePjPrefs(); paintProjects();
+  }));
+
+  $$('[data-dash-filter]', el).forEach(elem => {
+    elem.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const [key, val] = e.currentTarget.dataset.dashFilter.split(':');
+      projectState.filters[key] = (val === 'true' ? true : (val === 'false' ? false : val));
+      projectState.activeTab = 'board';
+      projectState.showFilters = true;
+      savePjPrefs();
+      paintProjects();
+    });
+    elem.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault(); e.stopPropagation();
+        const [key, val] = e.currentTarget.dataset.dashFilter.split(':');
+        projectState.filters[key] = (val === 'true' ? true : (val === 'false' ? false : val));
+        projectState.activeTab = 'board';
+        projectState.showFilters = true;
+        savePjPrefs();
+        paintProjects();
+      }
+    });
+  });
+
+  $('[data-pj-toggle-view-options]', el)?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    projectState.showViewOptions = !projectState.showViewOptions;
+    paintProjects();
+  });
+  
+  $$('[data-pj-col-toggle]', el).forEach(cb => cb.addEventListener('change', (e) => {
+    const s = e.currentTarget.dataset.pjColToggle;
+    if (e.currentTarget.checked) {
+      if (!projectState.visibleColumns.includes(s)) projectState.visibleColumns.push(s);
+    } else {
+      projectState.visibleColumns = projectState.visibleColumns.filter(c => c !== s);
+    }
+    savePjPrefs(); paintProjects();
+  }));
+
+  // close popover on outside click or escape
+  if (projectState.showViewOptions) {
+    const closePopover = (e) => {
+      if (e.type === 'keydown' && e.key !== 'Escape') return;
+      if (e.type === 'click' && (e.target.closest('.pj-popover') || e.target.closest('[data-pj-toggle-view-options]'))) return;
+      projectState.showViewOptions = false;
+      document.removeEventListener('click', closePopover);
+      document.removeEventListener('keydown', closePopover);
+      paintProjects();
+    };
+    document.addEventListener('click', closePopover);
+    document.addEventListener('keydown', closePopover);
+  }
+
   $('[data-pj-toggle-sidebar]', el)?.addEventListener('click', () => { projectState.showSidebar = !projectState.showSidebar; savePjPrefs(); paintProjects(); });
-  $('[data-pj-toggle-detail]', el)?.addEventListener('click', () => { projectState.showDetail = !projectState.showDetail; savePjPrefs(); paintProjects(); });
-  $$('[data-pj-layout]', el).forEach((b) => b.addEventListener('click', () => { projectState.taskLayout = b.dataset.pjLayout; savePjPrefs(); paintProjects(); }));
+  $('[data-pj-toggle-filters]', el)?.addEventListener('click', () => { projectState.showFilters = !projectState.showFilters; paintProjects(); });
+  $$('[data-pj-tab]', el).forEach((b) => b.addEventListener('click', () => { projectState.activeTab = b.dataset.pjTab; paintProjects(); }));
+  
   $$('[data-pj-project]', el).forEach((b) => b.addEventListener('click', () => {
     projectState.selectedProjectId = b.dataset.pjProject;
     paintProjects();
     loadProjectTasks(projectState.selectedProjectId);
     loadProjectStreams(projectState.selectedProjectId);
   }));
-  $$('[data-open-task]', el).forEach((b) => b.addEventListener('click', () => openTaskDrawer(b.dataset.openTask)));
+  
+  $('#pj-mobile-switcher', el)?.addEventListener('change', (e) => {
+    projectState.selectedProjectId = e.target.value;
+    paintProjects();
+    if (projectState.selectedProjectId) {
+      loadProjectTasks(projectState.selectedProjectId);
+      loadProjectStreams(projectState.selectedProjectId);
+    }
+  });
+
+  $$('[data-open-task]', el).forEach((b) => {
+    b.addEventListener('click', () => openTaskDrawer(b.dataset.openTask));
+    b.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        e.stopPropagation();
+        openTaskDrawer(b.dataset.openTask);
+      }
+    });
+  });
+  
   $('[data-pj-new-project]', el)?.addEventListener('click', openProjectCreateDrawer);
   $('[data-pj-edit-project]', el)?.addEventListener('click', () => { const p = selectedProject(); if (p) openProjectEditDrawer(p); });
   $('[data-pj-new-task]', el)?.addEventListener('click', () => openTaskCreateDrawer(projectState.selectedProjectId));
   $('[data-pj-refresh]', el)?.addEventListener('click', () => refreshProjectsView());
 
-  if (projectState.taskLayout === 'board') {
+  if (isBoard) {
     let draggedTaskId = null;
     $$('.pj-task-card', el).forEach((card) => {
       card.addEventListener('dragstart', (e) => {
@@ -5355,7 +6055,9 @@ function paintProjects() {
   }
 
   $$('[data-move-task]', el).forEach((btn) => {
-    btn.addEventListener('click', () => {
+    const handler = (e) => {
+      e.stopPropagation();
+      e.preventDefault();
       const task = projectState.tasks.find((t) => t.id === btn.dataset.moveTask);
       if (!task) return;
       let statuses = TASK_STATUS_OPTIONS.filter((s) => s !== task.status);
@@ -5369,6 +6071,12 @@ function paintProjects() {
         closeDrawer();
         await moveTaskToStatus(task, mBtn.dataset.moveTo);
       }));
+    };
+    btn.addEventListener('click', handler);
+    btn.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        handler(e);
+      }
     });
   });
 }

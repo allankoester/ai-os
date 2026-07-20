@@ -9,6 +9,7 @@ import {
   REVIEW_DECISIONS,
   REVIEW_STATES,
   TASK_STATUSES,
+  WORK_TYPES,
 } from './constants.mjs';
 import { boardError } from './errors.mjs';
 
@@ -45,6 +46,45 @@ function normalizeIsoDateOrNull(value, field) {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) throw boardError(422, 'validation_error', `${field} must be a valid ISO date-time`);
   return d.toISOString();
+}
+
+function ensureIntegerInRange(value, field, min, max) {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < min || n > max) {
+    throw boardError(422, 'validation_error', `${field} must be an integer in range ${min}..${max}`);
+  }
+  return n;
+}
+
+function normalizeNullableString(value, field, max) {
+  if (value === null || value === undefined || value === '') return null;
+  return ensureLength(String(value).trim(), field, 1, max);
+}
+
+function ensureHttpUrl(value, field) {
+  const raw = String(value ?? '').trim();
+  if (!raw) throw boardError(422, 'validation_error', `${field} is required`);
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw boardError(422, 'validation_error', `${field} must be a valid URL`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw boardError(422, 'validation_error', `${field} must use http/https`);
+  }
+  return parsed.toString();
+}
+
+function dedupeStrings(values) {
+  const out = [];
+  const seen = new Set();
+  for (const value of values) {
+    if (seen.has(value)) continue;
+    seen.add(value);
+    out.push(value);
+  }
+  return out;
 }
 
 export function sanitizeReview(input, existing = null) {
@@ -224,11 +264,19 @@ export function validateTaskCreate(body) {
     description: ensureLength(body?.description || '', 'description', 0, LIMITS.descriptionMax),
     status: ensureEnum(body?.status || 'backlog', TASK_STATUSES, 'status'),
     priority: ensureEnum(body?.priority || 'medium', PRIORITIES, 'priority'),
+    work_type: sanitizeWorkType(body?.work_type),
     assignee_type: assigneeType,
     assignee_id: body?.assignee_id ? ensureId(body.assignee_id, 'assignee_id') : null,
     human_assignee_label: sanitizeHumanAssigneeLabel(body?.human_assignee_label),
     workflow_id: body?.workflow_id ? ensureId(body.workflow_id, 'workflow_id') : null,
     subtasks: sanitizeSubtasks(body?.subtasks),
+    component_tags: sanitizeComponentTags(body?.component_tags),
+    sprint: sanitizeSprint(body?.sprint),
+    story_points: sanitizeStoryPoints(body?.story_points),
+    completion_percent: sanitizeCompletionPercent(body?.completion_percent),
+    dependencies: sanitizeDependencies(body?.dependencies),
+    external_links: sanitizeExternalLinks(body?.external_links),
+    custom_fields: sanitizeCustomFields(body?.custom_fields),
     due_at: normalizeIsoDateOrNull(body?.due_at, 'due_at'),
     linked_paths: [],
     linked_runs: [],
@@ -259,6 +307,79 @@ export function validateTaskCreate(body) {
     created_at: now,
     updated_at: now,
   };
+}
+
+export function sanitizeWorkType(value) {
+  return ensureEnum(value || 'feature', WORK_TYPES, 'work_type');
+}
+
+export function sanitizeComponentTags(value) {
+  if (value === null || value === undefined) return [];
+  if (!Array.isArray(value)) throw boardError(422, 'validation_error', 'component_tags must be an array');
+  if (value.length > LIMITS.componentTagsMax) {
+    throw boardError(422, 'validation_error', `component_tags max ${LIMITS.componentTagsMax}`);
+  }
+  const normalized = value
+    .map((item) => ensureLength(String(item ?? '').trim(), 'component_tags[]', 1, LIMITS.componentTagMaxLength));
+  return dedupeStrings(normalized);
+}
+
+export function sanitizeSprint(value) {
+  return normalizeNullableString(value, 'sprint', LIMITS.sprintMax);
+}
+
+export function sanitizeStoryPoints(value) {
+  if (value === null || value === undefined || value === '') return null;
+  return ensureIntegerInRange(value, 'story_points', LIMITS.storyPointsMin, LIMITS.storyPointsMax);
+}
+
+export function sanitizeCompletionPercent(value) {
+  if (value === null || value === undefined || value === '') return 0;
+  return ensureIntegerInRange(value, 'completion_percent', LIMITS.completionPercentMin, LIMITS.completionPercentMax);
+}
+
+export function sanitizeDependencies(value) {
+  if (value === null || value === undefined) return [];
+  if (!Array.isArray(value)) throw boardError(422, 'validation_error', 'dependencies must be an array');
+  if (value.length > LIMITS.dependenciesMax) {
+    throw boardError(422, 'validation_error', `dependencies max ${LIMITS.dependenciesMax}`);
+  }
+  const ids = value.map((v) => ensureId(v, 'dependency_id'));
+  return dedupeStrings(ids);
+}
+
+export function sanitizeExternalLinks(value) {
+  if (value === null || value === undefined) return [];
+  if (!Array.isArray(value)) throw boardError(422, 'validation_error', 'external_links must be an array');
+  if (value.length > LIMITS.externalLinksMax) {
+    throw boardError(422, 'validation_error', `external_links max ${LIMITS.externalLinksMax}`);
+  }
+  return value.map((item) => ({
+    label: ensureLength(String(item?.label ?? '').trim(), 'external_links[].label', 1, LIMITS.externalLinkLabelMax),
+    url: ensureHttpUrl(item?.url, 'external_links[].url'),
+  }));
+}
+
+export function sanitizeCustomFields(value) {
+  if (value === null || value === undefined) return {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw boardError(422, 'validation_error', 'custom_fields must be an object');
+  }
+  const entries = Object.entries(value);
+  if (entries.length > LIMITS.customFieldsMax) {
+    throw boardError(422, 'validation_error', `custom_fields max ${LIMITS.customFieldsMax}`);
+  }
+  const out = {};
+  for (const [key, raw] of entries) {
+    const normalizedKey = ensureLength(String(key ?? '').trim(), 'custom_fields key', 1, LIMITS.customFieldKeyMax);
+    const t = typeof raw;
+    const isValid = raw === null || t === 'string' || t === 'number' || t === 'boolean';
+    if (!isValid || (t === 'number' && !Number.isFinite(raw))) {
+      throw boardError(422, 'validation_error', `custom_fields.${normalizedKey} must be string|number|boolean|null`);
+    }
+    out[normalizedKey] = raw;
+  }
+  return out;
 }
 
 export function sanitizeHumanAssigneeLabel(value) {

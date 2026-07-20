@@ -1,0 +1,13 @@
+[
+  {
+    "id": "run_sched_minimal",
+    "jobId": "job_sched_minimal",
+    "jobName": "Daily Digest",
+    "trigger": "manual",
+    "startedAt": 1761990100000,
+    "endedAt": 1761990109000,
+    "status": "ok",
+    "exitCode": 0,
+    "summary": "Completed successfully"
+  }
+]

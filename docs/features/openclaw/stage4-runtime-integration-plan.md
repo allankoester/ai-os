@@ -12,7 +12,9 @@ in `docs/status-and-roadmap.md`.
 
 - Stage 1/2 run in the local Steadymade runtime.
 - Scheduler is active today via `interface/scheduler.mjs`.
-- Scheduler state currently persists in JSON files under `scheduler/`.
+- Scheduler operational state is SQLite canonical in machine-local runtime storage.
+- Private board operational state is SQLite canonical in machine-local runtime storage.
+- Chat session metadata/search index is SQLite canonical; chat transcripts remain canonical JSONL.
 - Execution path uses `claude -p` in the project root.
 
 ## Stage 4 Design Objective
@@ -25,7 +27,7 @@ unchanged.
 
 ### Core direction
 
-Move from JSON scheduler persistence to one common SQLite-backed harness.
+Extend the implemented local SQLite core into VM/runtime-harness operation.
 
 ### Why
 
@@ -41,7 +43,7 @@ Move from JSON scheduler persistence to one common SQLite-backed harness.
 2. idempotent scheduler tick behavior
 3. overlap prevention, timeout, and kill controls
 4. durable run logs and history retention
-5. migration utility from `scheduler/*.json`
+5. compatibility/rollback utilities for legacy JSON inputs where present
 
 ## OpenClaw Best-Practice Inputs
 
@@ -93,13 +95,12 @@ This document defines the subsequent Stage 4 runtime execution layer.
 
 Exit: schema approved and migration dry-run successful.
 
-### Phase 1: local SQLite harness
+### Phase 1: local SQLite core hardening (already implemented baseline)
 
-- replace JSON persistence in scheduler with SQLite
-- keep existing behavior and controls parity
+- keep behavior and controls parity under SQLite canonical stores
 - ensure restart-safe lifecycle transitions
 
-Exit: local reliability parity or better than current JSON model.
+Exit: maintained local reliability and parity under SQLite baseline.
 
 ### Phase 2: operations hardening
 

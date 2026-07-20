@@ -7,7 +7,7 @@ known initial local state.
 
 | Requirement | single-user | team-user | collaborator |
 |---|---:|---:|---:|
-| Node.js >= 18 | required | required | required |
+| Node.js >= 22 | required | required | required |
 | `npm ci` | required | required | required |
 | git | optional | optional | required |
 
@@ -114,6 +114,7 @@ node scripts/start.mjs --check-only
 - runtime dependencies used by chat runtime are installed (`node_modules`)
 - ports `4011` (interface) and `4012` (chat)
 - machine-local onboarding user type is set
+- machine-local runtime root for SQLite operational stores is available/writable
 - git is required only for `collaborator`
 - selected provider local readiness (binary/config only)
 

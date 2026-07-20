@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "fixtures": [
+    {
+      "path": "scheduler/valid/jobs.json",
+      "format": "json",
+      "expectation": "valid",
+      "schema": "schedulerJobs"
+    },
+    {
+      "path": "scheduler/valid/runs.json",
+      "format": "json",
+      "expectation": "valid",
+      "schema": "schedulerRuns"
+    },
+    {
+      "path": "scheduler/malformed/jobs-malformed.json",
+      "format": "json",
+      "expectation": "malformed-json"
+    },
+    {
+      "path": "board/private/valid/projects/proj_private_minimal.json",
+      "format": "json",
+      "expectation": "valid",
+      "schema": "boardProject"
+    },
+    {
+      "path": "board/private/valid/tasks/task_private_minimal.json",
+      "format": "json",
+      "expectation": "valid",
+      "schema": "boardTask"
+    },
+    {
+      "path": "board/private/malformed/tasks/task-private-malformed-shape.json",
+      "format": "json",
+      "expectation": "malformed-shape",
+      "schema": "boardTask"
+    },
+    {
+      "path": "chat/valid/sessions.json",
+      "format": "json",
+      "expectation": "valid",
+      "schema": "chatSessions"
+    },
+    {
+      "path": "chat/valid/history/conv_chat_minimal.jsonl",
+      "format": "jsonl",
+      "expectation": "valid",
+      "schema": "chatHistory"
+    },
+    {
+      "path": "chat/malformed/sessions-malformed-shape.json",
+      "format": "json",
+      "expectation": "malformed-shape",
+      "schema": "chatSessions"
+    },
+    {
+      "path": "usage/valid/usage.jsonl",
+      "format": "jsonl",
+      "expectation": "valid",
+      "schema": "usageRecords"
+    },
+    {
+      "path": "usage/malformed/usage-malformed.jsonl",
+      "format": "jsonl",
+      "expectation": "malformed-jsonl"
+    }
+  ]
+}
