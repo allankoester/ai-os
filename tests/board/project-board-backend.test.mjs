@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import fsp from 'node:fs/promises';
 import { spawn } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 
 import { createBoardStorage } from '../../interface/board/storage.mjs';
 import { createBoardService } from '../../interface/board/service.mjs';
@@ -12,6 +13,64 @@ import { validateLinkedPaths } from '../../interface/board/validators.mjs';
 const HUMAN_ACTOR = { id: 'user_alpha', isHuman: true, isInternal: false };
 const REVIEWER_ACTOR = { id: 'reviewer_alpha', isHuman: true, isInternal: false };
 const INTERNAL_ACTOR = { id: 'internal_callback', isHuman: false, isInternal: true };
+
+const SYNC_PATH_HINTS = [
+  'onedrive',
+  'dropbox',
+  'google drive',
+  'icloud drive',
+  'nextcloud',
+  'syncthing',
+  'synologydrive',
+  'box',
+  'sharepoint',
+];
+
+let testTempSeq = 0;
+
+function pathLooksSyncLike(absPath) {
+  const lower = String(absPath || '').toLowerCase();
+  return SYNC_PATH_HINTS.some((hint) => lower.includes(hint));
+}
+
+async function createDeterministicTempDir(label, { requireNonSyncLike = false } = {}) {
+  // Keep test paths deterministic and numeric-only to avoid accidental sync-hint
+  // substrings (for example "box") from random temp suffixes.
+  const candidateParents = [
+    os.tmpdir(),
+    '/private/tmp',
+    '/tmp',
+  ];
+
+  for (const candidateParent of candidateParents) {
+    const parent = path.resolve(candidateParent);
+    if (requireNonSyncLike && pathLooksSyncLike(parent)) continue;
+
+    const base = path.join(parent, 'steadymade-ai-os-tests', label);
+    if (requireNonSyncLike && pathLooksSyncLike(base)) continue;
+
+    try {
+      await fsp.mkdir(base, { recursive: true });
+    } catch {
+      continue;
+    }
+
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      testTempSeq += 1;
+      const suffix = `${Date.now()}-${process.pid}-${testTempSeq}`;
+      const dir = path.join(base, suffix);
+      if (requireNonSyncLike && pathLooksSyncLike(dir)) continue;
+      try {
+        await fsp.mkdir(dir, { recursive: false });
+        return await fsp.realpath(dir);
+      } catch {
+        // try next deterministic suffix or parent candidate
+      }
+    }
+  }
+
+  throw new Error(`failed to allocate deterministic temp directory for ${label}`);
+}
 
 function boardGuardrailsAllowAll() {
   return {
@@ -55,14 +114,15 @@ function createFakeScheduler(options = {}) {
   };
 }
 
-async function createHarness({ schedulerOptions, runtimeMode = 'claude-subscription', runtimeEnvVault = {}, boardRoots = null } = {}) {
-  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'board-backend-tests-'));
-  const rootDir = await fsp.realpath(tempDir);
+async function createHarness({ schedulerOptions, runtimeMode = 'claude-subscription', runtimeEnvVault = {}, boardRoots = null, deploymentState = null } = {}) {
+  const rootDir = await createDeterministicTempDir('board-backend-tests', { requireNonSyncLike: true });
+  const runtimeRoot = await createDeterministicTempDir('board-storage-kernel-runtime', { requireNonSyncLike: true });
   const scheduler = createFakeScheduler(schedulerOptions);
   if (boardRoots?.privateRoot) await fsp.mkdir(boardRoots.privateRoot, { recursive: true });
   if (boardRoots?.teamRoot) await fsp.mkdir(boardRoots.teamRoot, { recursive: true });
   const storage = createBoardStorage({
     rootDir,
+    runtimeRootOverride: runtimeRoot,
     ...(boardRoots ? {
       resolveRoots: () => ({
         privateRoot: boardRoots.privateRoot,
@@ -77,6 +137,7 @@ async function createHarness({ schedulerOptions, runtimeMode = 'claude-subscript
     guardrails: boardGuardrailsAllowAll(),
     scheduler,
     storage,
+    ...(deploymentState ? { resolveDeploymentState: async () => deploymentState } : {}),
     getRuntimeSettingsRaw: async () => ({ runtimeMode, envVault: runtimeEnvVault }),
     listCanonicalAgentIds: async () => new Set(['agent_alpha', 'danny']),
     listCanonicalWorkflowIds: async () => new Set(['workflow_alpha', 'workflow_beta']),
@@ -109,6 +170,7 @@ async function createHarness({ schedulerOptions, runtimeMode = 'claude-subscript
       privateRoot: boardRoots?.privateRoot || path.join(rootDir, 'project-board'),
       teamRoot: boardRoots?.teamRoot || null,
     },
+    runtimeRoot,
     createProjectAndTask,
   };
 }
@@ -133,6 +195,32 @@ function resolveAttemptOutputRootAbs(rootDir, outputRoot, boardRoots = {}) {
 function isPathWithin(parentAbs, targetAbs) {
   const rel = path.relative(parentAbs, targetAbs);
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+async function createCompletedAttemptWithArtifact(h, { task, fileName = 'result.txt', content = 'ok' }) {
+  const runResult = await h.service.runTask(task.id, {
+    version: task.version,
+    idempotency_key: `idem_${task.id}_${Date.now()}`,
+  }, HUMAN_ACTOR);
+  const outputRoot = resolveAttemptOutputRootAbs(h.rootDir, runResult.task.execution.output_root, h.boardRoots);
+  await fsp.mkdir(outputRoot, { recursive: true });
+  await fsp.writeFile(path.join(outputRoot, fileName), content, 'utf8');
+  await h.service.executionCallback({
+    task_id: task.id,
+    attempt_id: runResult.task.execution.attempt_id,
+    state: 'started',
+    scheduler_job_id: 'job_1',
+    scheduler_run_id: 'run_1',
+  }, INTERNAL_ACTOR);
+  const done = await h.service.executionCallback({
+    task_id: task.id,
+    attempt_id: runResult.task.execution.attempt_id,
+    state: 'succeeded',
+    scheduler_job_id: 'job_1',
+    scheduler_run_id: 'run_1',
+    result_summary: 'ok',
+  }, INTERNAL_ACTOR);
+  return { runResult, done, outputRoot };
 }
 
 async function expectBoardErrorStatus(promise, status) {
@@ -1005,12 +1093,20 @@ test('visibility filtering and cross-scope denial are enforced', async () => {
   }
 });
 
-test('team scope create fails when team root is not configured', async () => {
+test('team scope mutations fail closed with TEAM_CAPABILITY_UNAVAILABLE when team capability is disabled', async () => {
   const privateRoot = path.join(os.tmpdir(), `board-private-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const h = await createHarness({
     boardRoots: {
       privateRoot,
       teamRoot: null,
+    },
+    deploymentState: {
+      requestedDeployment: 'team-server',
+      effectiveDeployment: 'local-only',
+      teamCapability: {
+        status: 'disabled',
+        reason: 'TEAM_ROOT_UNCONFIGURED',
+      },
     },
   });
   try {
@@ -1020,11 +1116,52 @@ test('team scope create fails when team root is not configured', async () => {
         name: 'Team Missing Root',
         visibility: 'team',
       }, HUMAN_ACTOR),
-      (err) => err?.status === 503,
+      (err) => err?.status === 503 && err?.code === 'TEAM_CAPABILITY_UNAVAILABLE',
     );
+
+    const privateProject = await h.service.createProject({
+      id: 'proj_private_ok_when_team_disabled',
+      name: 'Private stays available',
+      visibility: 'private',
+    }, HUMAN_ACTOR);
+    assert.equal(privateProject.visibility, 'private');
+
+    const privateTask = await h.service.createTask({
+      id: 'task_private_ok_when_team_disabled',
+      project_id: privateProject.id,
+      title: 'Private task works',
+      assignee_type: 'agent',
+      assignee_id: 'agent_alpha',
+      workflow_id: 'workflow_alpha',
+    }, HUMAN_ACTOR);
+    assert.equal(privateTask.visibility, 'private');
   } finally {
     await cleanupRoot(h.rootDir);
     await fsp.rm(privateRoot, { recursive: true, force: true });
+  }
+});
+
+test('metadata visibility options hide team in local-only deployment state', async () => {
+  const privateRoot = path.join(os.tmpdir(), `board-private-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const teamRoot = path.join(os.tmpdir(), `board-team-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const h = await createHarness({
+    boardRoots: { privateRoot, teamRoot },
+    deploymentState: {
+      requestedDeployment: 'local-only',
+      effectiveDeployment: 'local-only',
+      teamCapability: {
+        status: 'disabled',
+        reason: 'USER_TYPE_LOCAL_ONLY',
+      },
+    },
+  });
+  try {
+    const metadata = await h.service.getMetadata();
+    assert.deepEqual(metadata.visibility_options, ['private']);
+  } finally {
+    await cleanupRoot(h.rootDir);
+    await fsp.rm(privateRoot, { recursive: true, force: true });
+    await fsp.rm(teamRoot, { recursive: true, force: true });
   }
 });
 
@@ -1275,6 +1412,258 @@ test('artifact authorization enforces private scope ownership', async () => {
   }
 });
 
+test('opaque artifact ID lookup works and legacy resolver maps through catalog', async () => {
+  const h = await createHarness();
+  try {
+    const { task } = await h.createProjectAndTask();
+    const { done } = await createCompletedAttemptWithArtifact(h, { task, fileName: 'opaque.txt', content: 'opaque ok' });
+    const refreshed = await h.service.getTask(task.id, HUMAN_ACTOR);
+    const attempt = refreshed.execution.attempts.find((a) => a.attempt_id === done.execution.attempt_id);
+    assert.ok(attempt);
+    assert.ok(Array.isArray(attempt.artifacts));
+    assert.equal(attempt.artifacts.length, 1);
+    const artifactId = attempt.artifacts[0].artifact_id;
+    assert.ok(artifactId);
+
+    const byId = await h.service.readArtifactById({ artifactId, actor: HUMAN_ACTOR });
+    assert.ok(byId.abs.endsWith('opaque.txt'));
+    assert.equal(byId.artifact_id, artifactId);
+
+    const viaLegacy = await h.service.readTaskArtifact({
+      taskId: task.id,
+      attemptId: done.execution.attempt_id,
+      artifactPath: 'opaque.txt',
+      actor: HUMAN_ACTOR,
+    });
+    assert.equal(viaLegacy.artifact_id, artifactId);
+  } finally {
+    await cleanupRoot(h.rootDir);
+  }
+});
+
+test('opaque artifact read revalidates hash and quarantines post-catalog replacement', async () => {
+  const h = await createHarness();
+  try {
+    const { task } = await h.createProjectAndTask();
+    const { done, outputRoot } = await createCompletedAttemptWithArtifact(h, { task, fileName: 'replace.txt', content: 'v1' });
+    const refreshed = await h.service.getTask(task.id, HUMAN_ACTOR);
+    const attempt = refreshed.execution.attempts.find((a) => a.attempt_id === done.execution.attempt_id);
+    const artifactId = attempt.artifacts[0].artifact_id;
+    const artifactAbs = path.join(outputRoot, 'replace.txt');
+
+    await fsp.writeFile(artifactAbs, 'tampered', 'utf8');
+
+    await assert.rejects(
+      h.service.readArtifactById({ artifactId, actor: HUMAN_ACTOR }),
+      (err) => err?.status === 409 && err?.code === 'artifact_integrity_mismatch',
+    );
+
+    const stillAtOriginalPath = await fsp.stat(artifactAbs).then(() => true).catch(() => false);
+    assert.equal(stillAtOriginalPath, false);
+
+    const quarantineDir = path.join(h.boardRoots.privateRoot, 'artifacts', 'project-board', 'quarantine');
+    const quarantinedEntries = await fsp.readdir(quarantineDir).catch(() => []);
+    assert.ok(quarantinedEntries.length >= 1);
+  } finally {
+    await cleanupRoot(h.rootDir);
+  }
+});
+
+test('artifact traversal is rejected and symlink artifacts are not cataloged', async () => {
+  const h = await createHarness();
+  try {
+    const { task } = await h.createProjectAndTask();
+    const run = await h.service.runTask(task.id, {
+      version: task.version,
+      idempotency_key: 'idem_symlink_reject',
+    }, HUMAN_ACTOR);
+    const outputRoot = resolveAttemptOutputRootAbs(h.rootDir, run.task.execution.output_root, h.boardRoots);
+    await fsp.mkdir(outputRoot, { recursive: true });
+    await fsp.writeFile(path.join(outputRoot, 'real.txt'), 'real', 'utf8');
+    await fsp.symlink(path.join(outputRoot, 'real.txt'), path.join(outputRoot, 'link.txt'));
+
+    await h.service.executionCallback({
+      task_id: task.id,
+      attempt_id: run.task.execution.attempt_id,
+      state: 'started',
+      scheduler_job_id: 'job_1',
+      scheduler_run_id: 'run_1',
+    }, INTERNAL_ACTOR);
+    const done = await h.service.executionCallback({
+      task_id: task.id,
+      attempt_id: run.task.execution.attempt_id,
+      state: 'succeeded',
+      scheduler_job_id: 'job_1',
+      scheduler_run_id: 'run_1',
+      result_summary: 'ok',
+    }, INTERNAL_ACTOR);
+
+    const refreshed = await h.service.getTask(task.id, HUMAN_ACTOR);
+    const attempt = refreshed.execution.attempts.find((a) => a.attempt_id === done.execution.attempt_id);
+    assert.equal(attempt.artifacts.length, 1);
+    assert.ok(attempt.artifacts[0].path.endsWith('real.txt'));
+
+    await assert.rejects(
+      h.service.readTaskArtifact({
+        taskId: task.id,
+        attemptId: done.execution.attempt_id,
+        artifactPath: '../secrets.txt',
+        actor: HUMAN_ACTOR,
+      }),
+      (err) => err?.status === 422,
+    );
+  } finally {
+    await cleanupRoot(h.rootDir);
+  }
+});
+
+test('opaque artifact read denies cross-owner and writes audit rows without path leakage', async () => {
+  const h = await createHarness();
+  const otherActor = { id: 'user_beta', isHuman: true, isInternal: false };
+  try {
+    const { task } = await h.createProjectAndTask();
+    const { done } = await createCompletedAttemptWithArtifact(h, { task, fileName: 'audit.txt', content: 'audit ok' });
+    const refreshed = await h.service.getTask(task.id, HUMAN_ACTOR);
+    const attempt = refreshed.execution.attempts.find((a) => a.attempt_id === done.execution.attempt_id);
+    const artifactId = attempt.artifacts[0].artifact_id;
+
+    await assert.rejects(
+      h.service.readArtifactById({ artifactId, actor: otherActor }),
+      (err) => err?.status === 403,
+    );
+
+    const db = new DatabaseSync(h.storage.getPrivateDbPath());
+    try {
+      const rows = db.prepare('SELECT operation, result, artifact_reference FROM board_artifact_access_audit ORDER BY id DESC LIMIT 5').all();
+      assert.ok(rows.some((r) => r.operation === 'read' && r.result === 'denied'));
+      assert.ok(rows.every((r) => !String(r.artifact_reference || '').includes(h.rootDir)));
+    } finally {
+      db.close();
+    }
+  } finally {
+    await cleanupRoot(h.rootDir);
+  }
+});
+
+test('artifact policy rejects disallowed types and oversized payloads', async () => {
+  const prevTypes = process.env.BOARD_ARTIFACT_ALLOWED_CONTENT_TYPES;
+  const prevMax = process.env.BOARD_ARTIFACT_MAX_BYTES;
+  process.env.BOARD_ARTIFACT_ALLOWED_CONTENT_TYPES = 'text/plain';
+  process.env.BOARD_ARTIFACT_MAX_BYTES = '8';
+  const h = await createHarness();
+  try {
+    const { task } = await h.createProjectAndTask();
+
+    const runType = await h.service.runTask(task.id, {
+      version: task.version,
+      idempotency_key: 'idem_type_reject',
+    }, HUMAN_ACTOR);
+    const outputType = resolveAttemptOutputRootAbs(h.rootDir, runType.task.execution.output_root, h.boardRoots);
+    await fsp.mkdir(outputType, { recursive: true });
+    await fsp.writeFile(path.join(outputType, 'result.json'), '{"ok":true}', 'utf8');
+    await h.service.executionCallback({
+      task_id: task.id,
+      attempt_id: runType.task.execution.attempt_id,
+      state: 'started',
+      scheduler_job_id: 'job_1',
+      scheduler_run_id: 'run_1',
+    }, INTERNAL_ACTOR);
+    await assert.rejects(
+      h.service.executionCallback({
+        task_id: task.id,
+        attempt_id: runType.task.execution.attempt_id,
+        state: 'succeeded',
+        scheduler_job_id: 'job_1',
+        scheduler_run_id: 'run_1',
+        result_summary: 'nope',
+      }, INTERNAL_ACTOR),
+      (err) => err?.status === 422 && err?.code === 'artifact_type_rejected',
+    );
+    await fsp.unlink(path.join(outputType, 'result.json')).catch(() => {});
+    await h.service.executionCallback({
+      task_id: task.id,
+      attempt_id: runType.task.execution.attempt_id,
+      state: 'failed',
+      scheduler_job_id: 'job_1',
+      scheduler_run_id: 'run_1',
+      failure_summary: 'policy rejected type',
+    }, INTERNAL_ACTOR);
+
+    const taskAfterType = await h.service.getTask(task.id, HUMAN_ACTOR);
+    const runSize = await h.service.retryTask(task.id, {
+      version: taskAfterType.version,
+      idempotency_key: 'idem_size_reject',
+    }, HUMAN_ACTOR);
+    const outputSize = resolveAttemptOutputRootAbs(h.rootDir, runSize.task.execution.output_root, h.boardRoots);
+    await fsp.mkdir(outputSize, { recursive: true });
+    await fsp.writeFile(path.join(outputSize, 'big.txt'), '0123456789abcdef', 'utf8');
+    await h.service.executionCallback({
+      task_id: task.id,
+      attempt_id: runSize.task.execution.attempt_id,
+      state: 'started',
+      scheduler_job_id: 'job_2',
+      scheduler_run_id: 'run_2',
+    }, INTERNAL_ACTOR);
+    await assert.rejects(
+      h.service.executionCallback({
+        task_id: task.id,
+        attempt_id: runSize.task.execution.attempt_id,
+        state: 'succeeded',
+        scheduler_job_id: 'job_2',
+        scheduler_run_id: 'run_2',
+        result_summary: 'too big',
+      }, INTERNAL_ACTOR),
+      (err) => err?.status === 422 && err?.code === 'artifact_size_rejected',
+    );
+    await fsp.unlink(path.join(outputSize, 'big.txt')).catch(() => {});
+    await h.service.executionCallback({
+      task_id: task.id,
+      attempt_id: runSize.task.execution.attempt_id,
+      state: 'failed',
+      scheduler_job_id: 'job_2',
+      scheduler_run_id: 'run_2',
+      failure_summary: 'policy rejected size',
+    }, INTERNAL_ACTOR);
+  } finally {
+    if (prevTypes === undefined) delete process.env.BOARD_ARTIFACT_ALLOWED_CONTENT_TYPES;
+    else process.env.BOARD_ARTIFACT_ALLOWED_CONTENT_TYPES = prevTypes;
+    if (prevMax === undefined) delete process.env.BOARD_ARTIFACT_MAX_BYTES;
+    else process.env.BOARD_ARTIFACT_MAX_BYTES = prevMax;
+    await cleanupRoot(h.rootDir);
+  }
+});
+
+test('artifact delete applies retention semantics and marks catalog row deleted', async () => {
+  const h = await createHarness();
+  try {
+    const { task } = await h.createProjectAndTask();
+    const { done, outputRoot } = await createCompletedAttemptWithArtifact(h, { task, fileName: 'delete.txt', content: 'delete me' });
+    const refreshed = await h.service.getTask(task.id, HUMAN_ACTOR);
+    const attempt = refreshed.execution.attempts.find((a) => a.attempt_id === done.execution.attempt_id);
+    const artifactId = attempt.artifacts[0].artifact_id;
+    const artifactAbs = path.join(outputRoot, 'delete.txt');
+    assert.equal(await fsp.stat(artifactAbs).then(() => true).catch(() => false), true);
+
+    const deleted = await h.service.deleteArtifactById({ artifactId, actor: HUMAN_ACTOR, reason: 'retention_cleanup' });
+    assert.equal(deleted.deleted, true);
+    assert.equal(deleted.retention_class, 'task_attempt');
+    assert.equal(deleted.deletion.guarantee, 'best_effort');
+    assert.equal(await fsp.stat(artifactAbs).then(() => true).catch(() => false), false);
+
+    const db = new DatabaseSync(h.storage.getPrivateDbPath());
+    try {
+      const row = db.prepare('SELECT deleted_at, deleted_reason, retention_class FROM board_task_execution_artifacts WHERE artifact_id = ?').get(artifactId);
+      assert.ok(row.deleted_at);
+      assert.equal(row.deleted_reason, 'retention_cleanup');
+      assert.equal(row.retention_class, 'task_attempt');
+    } finally {
+      db.close();
+    }
+  } finally {
+    await cleanupRoot(h.rootDir);
+  }
+});
+
 test('runtime mode dispatch snapshots include opencode and anthropic-api', async () => {
   const opencodeHarness = await createHarness({ runtimeMode: 'opencode' });
   const anthropicHarness = await createHarness({ runtimeMode: 'anthropic-api' });
@@ -1408,6 +1797,213 @@ test('task patch supports workflow/subtasks and human assignee label', async () 
       { id: 'st_1', text: 'Prep brief', completed: false, order: 1 },
       { id: 'st_2', text: 'Review output', completed: true, order: 2 },
     ]);
+  } finally {
+    await cleanupRoot(h.rootDir);
+  }
+});
+
+test('enhanced task management fields persist and read in private SQLite + team JSON scope', async () => {
+  const privateRoot = path.join(os.tmpdir(), `board-private-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const teamRoot = path.join(os.tmpdir(), `board-team-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const h = await createHarness({ boardRoots: { privateRoot, teamRoot } });
+  try {
+    const privateProject = await h.service.createProject({ id: 'proj_enhanced_priv', name: 'Enhanced Private' }, HUMAN_ACTOR);
+    const privateTask = await h.service.createTask({
+      id: 'task_enhanced_priv',
+      project_id: privateProject.id,
+      title: 'Enhanced Private Task',
+      assignee_type: 'agent',
+      assignee_id: 'agent_alpha',
+      workflow_id: 'workflow_alpha',
+      work_type: 'tech_debt',
+      component_tags: ['api', 'worker'],
+      sprint: 'Sprint 12',
+      story_points: 8,
+      completion_percent: 35,
+      dependencies: ['task_alpha'],
+      external_links: [{ label: 'Spec', url: 'https://example.com/spec' }],
+      custom_fields: { env: 'staging', gated: true, budget: 123 },
+    }, HUMAN_ACTOR);
+
+    const privateRead = await h.service.getTask(privateTask.id, HUMAN_ACTOR);
+    assert.equal(privateRead.work_type, 'tech_debt');
+    assert.deepEqual(privateRead.component_tags, ['api', 'worker']);
+    assert.equal(privateRead.sprint, 'Sprint 12');
+    assert.equal(privateRead.story_points, 8);
+    assert.equal(privateRead.completion_percent, 35);
+    assert.deepEqual(privateRead.dependencies, ['task_alpha']);
+    assert.deepEqual(privateRead.external_links, [{ label: 'Spec', url: 'https://example.com/spec' }]);
+    assert.deepEqual(privateRead.custom_fields, { env: 'staging', gated: true, budget: 123 });
+
+    const db = new DatabaseSync(h.storage.getPrivateDbPath());
+    try {
+      const row = db.prepare('SELECT work_type, sprint, story_points, completion_percent FROM board_tasks WHERE scope = ? AND id = ?').get('private', privateTask.id);
+      assert.equal(row.work_type, 'tech_debt');
+      assert.equal(row.sprint, 'Sprint 12');
+      assert.equal(Number(row.story_points), 8);
+      assert.equal(Number(row.completion_percent), 35);
+    } finally {
+      db.close();
+    }
+
+    const teamProject = await h.service.createProject({ id: 'proj_enhanced_team', name: 'Enhanced Team', visibility: 'team' }, HUMAN_ACTOR);
+    const teamTask = await h.service.createTask({
+      id: 'task_enhanced_team',
+      project_id: teamProject.id,
+      title: 'Enhanced Team Task',
+      assignee_type: 'human',
+      human_assignee_label: 'Team Owner',
+      work_type: 'spike',
+      component_tags: ['frontend'],
+      sprint: 'Sprint Team',
+      story_points: 3,
+      completion_percent: 10,
+      dependencies: ['task_alpha'],
+      external_links: [{ label: 'Ticket', url: 'https://example.com/ticket/123' }],
+      custom_fields: { flagged: false },
+    }, HUMAN_ACTOR);
+    const teamStored = await h.storage.readTask('team', teamTask.id);
+    assert.equal(teamStored.work_type, 'spike');
+    assert.deepEqual(teamStored.component_tags, ['frontend']);
+    assert.equal(teamStored.sprint, 'Sprint Team');
+    assert.equal(teamStored.story_points, 3);
+    assert.equal(teamStored.completion_percent, 10);
+    assert.deepEqual(teamStored.dependencies, ['task_alpha']);
+    assert.deepEqual(teamStored.external_links, [{ label: 'Ticket', url: 'https://example.com/ticket/123' }]);
+    assert.deepEqual(teamStored.custom_fields, { flagged: false });
+  } finally {
+    await cleanupRoot(h.rootDir);
+    await fsp.rm(privateRoot, { recursive: true, force: true });
+    await fsp.rm(teamRoot, { recursive: true, force: true });
+  }
+});
+
+test('enhanced patch ops validate ranges, ids, urls and custom field values', async () => {
+  const h = await createHarness();
+  try {
+    const { task } = await h.createProjectAndTask();
+    const updated = await h.service.patchTask(task.id, {
+      version: task.version,
+      ops: [
+        { op: 'set_work_type', value: 'bug' },
+        { op: 'set_component_tags', value: ['api', 'db'] },
+        { op: 'set_sprint', value: 'Sprint Z' },
+        { op: 'set_story_points', value: 13 },
+        { op: 'set_completion_percent', value: 55 },
+        { op: 'set_dependencies', value: ['task_alpha'] },
+        { op: 'set_external_links', value: [{ label: 'Runbook', url: 'https://example.com/runbook' }] },
+        { op: 'set_custom_fields', value: { complexity: 5, requires_qa: true, note: 'ready' } },
+      ],
+    }, HUMAN_ACTOR);
+    assert.equal(updated.work_type, 'bug');
+    assert.equal(updated.story_points, 13);
+    assert.equal(updated.completion_percent, 55);
+
+    await assert.rejects(
+      h.service.patchTask(task.id, {
+        version: updated.version,
+        ops: [{ op: 'set_completion_percent', value: 101 }],
+      }, HUMAN_ACTOR),
+      (err) => err?.status === 422,
+    );
+
+    await assert.rejects(
+      h.service.patchTask(task.id, {
+        version: updated.version,
+        ops: [{ op: 'set_dependencies', value: ['BAD-ID'] }],
+      }, HUMAN_ACTOR),
+      (err) => err?.status === 422,
+    );
+
+    await assert.rejects(
+      h.service.patchTask(task.id, {
+        version: updated.version,
+        ops: [{ op: 'set_external_links', value: [{ label: 'Bad', url: 'ftp://example.com/nope' }] }],
+      }, HUMAN_ACTOR),
+      (err) => err?.status === 422,
+    );
+
+    await assert.rejects(
+      h.service.patchTask(task.id, {
+        version: updated.version,
+        ops: [{ op: 'set_custom_fields', value: { nested: { a: 1 } } }],
+      }, HUMAN_ACTOR),
+      (err) => err?.status === 422,
+    );
+  } finally {
+    await cleanupRoot(h.rootDir);
+  }
+});
+
+test('project dashboard aggregates task tracking metrics', async () => {
+  const h = await createHarness();
+  try {
+    const project = await h.service.createProject({ id: 'proj_dashboard', name: 'Dashboard Project' }, HUMAN_ACTOR);
+    const past = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const future = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+    await h.service.createTask({
+      id: 'task_dash_001',
+      project_id: project.id,
+      title: 'Done Feature',
+      status: 'done',
+      priority: 'high',
+      work_type: 'feature',
+      completion_percent: 100,
+      sprint: 'S1',
+      due_at: past,
+    }, HUMAN_ACTOR);
+    await h.service.createTask({
+      id: 'task_dash_002',
+      project_id: project.id,
+      title: 'In Progress Bug',
+      status: 'in_progress',
+      priority: 'medium',
+      work_type: 'bug',
+      completion_percent: 50,
+      sprint: 'S1',
+      due_at: past,
+    }, HUMAN_ACTOR);
+    await h.service.createTask({
+      id: 'task_dash_003',
+      project_id: project.id,
+      title: 'Blocked Debt',
+      status: 'blocked',
+      priority: 'low',
+      work_type: 'tech_debt',
+      completion_percent: 20,
+      sprint: 'S2',
+    }, HUMAN_ACTOR);
+    await h.service.createTask({
+      id: 'task_dash_004',
+      project_id: project.id,
+      title: 'Todo Spike',
+      status: 'todo',
+      priority: 'high',
+      work_type: 'spike',
+      completion_percent: 0,
+      due_at: future,
+    }, HUMAN_ACTOR);
+
+    const dashboard = await h.service.getProjectDashboard(project.id, HUMAN_ACTOR);
+    assert.equal(dashboard.total_tasks, 4);
+    assert.equal(dashboard.by_status.done, 1);
+    assert.equal(dashboard.by_status.in_progress, 1);
+    assert.equal(dashboard.by_status.blocked, 1);
+    assert.equal(dashboard.by_status.todo, 1);
+    assert.equal(dashboard.by_priority.high, 2);
+    assert.equal(dashboard.by_priority.medium, 1);
+    assert.equal(dashboard.by_priority.low, 1);
+    assert.equal(dashboard.by_work_type.feature, 1);
+    assert.equal(dashboard.by_work_type.bug, 1);
+    assert.equal(dashboard.by_work_type.tech_debt, 1);
+    assert.equal(dashboard.by_work_type.spike, 1);
+    assert.equal(dashboard.blocked_count, 1);
+    assert.equal(dashboard.overdue_count, 1);
+    assert.equal(dashboard.in_progress_count, 1);
+    assert.equal(dashboard.done_count, 1);
+    assert.equal(dashboard.avg_completion_percent, 43);
+    assert.deepEqual(dashboard.sprint_breakdown, { S1: 2, S2: 1 });
   } finally {
     await cleanupRoot(h.rootDir);
   }
@@ -1630,13 +2226,93 @@ test('historical attempt artifacts remain readable after visibility migration', 
   }
 });
 
-test('legacy private fallback includes tasks when primary root has none', async () => {
+test('private board cutover imports current+legacy sources with authority marker and reconciliation ledger', async () => {
   const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'board-legacy-tasks-'));
   const rootDir = await fsp.realpath(tempDir);
   const privateRoot = path.join(os.tmpdir(), `board-private-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   try {
+    await fsp.mkdir(path.join(rootDir, 'project-board', 'projects'), { recursive: true });
+    await fsp.mkdir(path.join(rootDir, 'project-board', 'tasks'), { recursive: true });
+    await fsp.writeFile(path.join(rootDir, 'project-board', 'projects', 'legacy_project.json'), JSON.stringify({
+      id: 'legacy_project',
+      name: 'Legacy Project',
+      visibility: 'private',
+      owner_id: HUMAN_ACTOR.id,
+      status: 'active',
+      description: '',
+      review: { state: 'none', required: false, reviewers: [], decision: null, decided_at: null, decided_by: null },
+      blocked: { is_blocked: false, reason: '', since: null },
+      linked_paths: [],
+      linked_runs: [],
+      tags: [],
+      version: 1,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }), 'utf8');
+    await fsp.writeFile(path.join(rootDir, 'project-board', 'tasks', 'legacy_task.json'), JSON.stringify({
+      id: 'legacy_task',
+      project_id: 'legacy_project',
+      title: 'Legacy Task',
+      description: '',
+      status: 'todo',
+      priority: 'medium',
+      assignee_type: 'unassigned',
+      assignee_id: null,
+      human_assignee_label: null,
+      workflow_id: null,
+      subtasks: [],
+      due_at: null,
+      linked_paths: [],
+      linked_runs: [],
+      review: { state: 'none', required: false, reviewers: [], decision: null, decided_at: null, decided_by: null },
+      blocked: { is_blocked: false, reason: '', since: null },
+      execution: {
+        attempt_id: null,
+        state: 'none',
+        trigger: null,
+        idempotency_key: null,
+        requested_at: null,
+        requested_by: null,
+        runtime_mode: null,
+        agent_id: null,
+        workflow_id: null,
+        scheduler_job_id: null,
+        scheduler_run_id: null,
+        output_root: null,
+        started_at: null,
+        completed_at: null,
+        result_summary: null,
+        failure_summary: null,
+        artifact_paths: [],
+        execution_updates: [],
+        attempts: [],
+      },
+      version: 1,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }), 'utf8');
+
+    await fsp.mkdir(path.join(privateRoot, 'projects'), { recursive: true });
+    await fsp.writeFile(path.join(privateRoot, 'projects', 'current_project.json'), JSON.stringify({
+      id: 'current_project',
+      name: 'Current Project',
+      visibility: 'private',
+      owner_id: HUMAN_ACTOR.id,
+      status: 'active',
+      description: '',
+      review: { state: 'none', required: false, reviewers: [], decision: null, decided_at: null, decided_by: null },
+      blocked: { is_blocked: false, reason: '', since: null },
+      linked_paths: [],
+      linked_runs: [],
+      tags: [],
+      version: 1,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }), 'utf8');
+
     const storage = createBoardStorage({
       rootDir,
+      runtimeRootOverride: await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), 'board-storage-kernel-'))),
       resolveRoots: () => ({
         privateRoot,
         teamRoot: null,
@@ -1644,14 +2320,25 @@ test('legacy private fallback includes tasks when primary root has none', async 
         personalKnowledgeRoot: path.join(rootDir, 'knowledge', 'personal'),
       }),
     });
-    await fsp.mkdir(path.join(rootDir, 'project-board', 'tasks'), { recursive: true });
-    await fsp.writeFile(path.join(rootDir, 'project-board', 'tasks', 'legacy_task.json'), JSON.stringify({
-      id: 'legacy_task',
-      project_id: 'legacy_project',
-      title: 'Legacy Task',
-      version: 1,
-    }), 'utf8');
 
+    const authority = storage.getPrivateAuthorityState();
+    assert.equal(authority.mode, 'sqlite_active');
+    assert.equal(authority.marker, 'board.sqlite.authority.v1');
+
+    const db = new DatabaseSync(storage.getPrivateDbPath());
+    try {
+      const ledger = db.prepare('SELECT source_name, status, reconciled FROM board_import_ledger ORDER BY id ASC').all();
+      assert.ok(ledger.some((row) => row.source_name === 'private/entities' && row.status === 'imported' && Number(row.reconciled) === 1));
+      assert.ok(ledger.some((row) => row.source_name === 'private/events' && row.status === 'imported' && Number(row.reconciled) === 1));
+    } finally {
+      db.close();
+    }
+
+    await fsp.writeFile(path.join(privateRoot, 'projects', 'stale_after_cutover.json'), JSON.stringify({ id: 'stale_after_cutover' }), 'utf8');
+    const projects = await storage.listProjects('private');
+    assert.ok(projects.some((p) => p.id === 'legacy_project'));
+    assert.ok(projects.some((p) => p.id === 'current_project'));
+    assert.equal(projects.some((p) => p.id === 'stale_after_cutover'), false);
     const tasks = await storage.listTasks('private');
     assert.ok(tasks.some((t) => t.id === 'legacy_task'));
   } finally {
@@ -1660,62 +2347,415 @@ test('legacy private fallback includes tasks when primary root has none', async 
   }
 });
 
-test('legacy private fallback project can be deleted via service deleteProject', async () => {
+test('pre-change private board SQLite schema migrates transactionally with migration ledger + quick_check', async () => {
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'board-prechange-schema-'));
+  const rootDir = await fsp.realpath(tempDir);
+  const runtimeRoot = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), 'board-storage-kernel-')));
+  const dbDir = path.join(runtimeRoot, 'db');
+  await fsp.mkdir(dbDir, { recursive: true });
+  const legacyDbPath = path.join(dbDir, 'interface-board-private.sqlite');
+  const legacyDb = new DatabaseSync(legacyDbPath);
+  try {
+    legacyDb.exec(`
+      CREATE TABLE IF NOT EXISTS board_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        authority_mode TEXT NOT NULL DEFAULT 'legacy_pending',
+        authority_marker TEXT,
+        authority_activated_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT OR REPLACE INTO board_state (id, authority_mode, authority_marker, authority_activated_at, created_at, updated_at)
+      VALUES (1, 'legacy_pending', NULL, NULL, '2024-01-01T00:00:00.000Z', '2024-01-01T00:00:00.000Z');
+
+      CREATE TABLE IF NOT EXISTS board_projects (
+        scope TEXT NOT NULL,
+        id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        status TEXT NOT NULL,
+        visibility TEXT NOT NULL,
+        owner_id TEXT NOT NULL,
+        description TEXT NOT NULL,
+        tags_json TEXT NOT NULL,
+        review_json TEXT NOT NULL,
+        blocked_json TEXT NOT NULL,
+        linked_paths_json TEXT NOT NULL,
+        linked_runs_json TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (scope, id)
+      );
+
+      CREATE TABLE IF NOT EXISTS board_tasks (
+        scope TEXT NOT NULL,
+        id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL,
+        status TEXT NOT NULL,
+        priority TEXT NOT NULL,
+        assignee_type TEXT NOT NULL,
+        assignee_id TEXT,
+        subtasks_json TEXT NOT NULL,
+        due_at TEXT,
+        review_json TEXT NOT NULL,
+        blocked_json TEXT NOT NULL,
+        visibility TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (scope, id)
+      );
+
+      CREATE TABLE IF NOT EXISTS board_task_execution_artifacts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        scope TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        attempt_id TEXT,
+        path TEXT NOT NULL,
+        position INTEGER NOT NULL,
+        created_at TEXT NOT NULL
+      );
+    `);
+  } finally {
+    legacyDb.close();
+  }
+
+  try {
+    const storage = createBoardStorage({ rootDir, runtimeRootOverride: runtimeRoot });
+    const db = new DatabaseSync(storage.getPrivateDbPath());
+    try {
+      const migrationRows = db.prepare('SELECT version, name FROM board_schema_migrations ORDER BY version ASC').all();
+      assert.ok(migrationRows.length >= 3);
+      assert.ok(migrationRows.some((row) => Number(row.version) === 4102));
+      assert.ok(migrationRows.some((row) => Number(row.version) === 4103));
+
+      const artifactColumns = db.prepare('PRAGMA table_info(board_task_execution_artifacts)').all();
+      const artifactColumnNames = new Set(artifactColumns.map((row) => row.name));
+      assert.ok(artifactColumnNames.has('artifact_id'));
+      assert.ok(artifactColumnNames.has('storage_ref'));
+      assert.ok(artifactColumnNames.has('hash_sha256'));
+
+      const idxRows = db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'board_task_execution_artifacts'").all();
+      const idx = new Set(idxRows.map((row) => row.name));
+      assert.ok(idx.has('idx_board_exec_artifacts_artifact_id'));
+      assert.ok(idx.has('idx_board_exec_artifacts_ref'));
+    } finally {
+      db.close();
+    }
+
+    const health = storage.getPrivateDbQuickCheck();
+    assert.equal(health.ok, true);
+  } finally {
+    await fsp.rm(rootDir, { recursive: true, force: true });
+    await fsp.rm(runtimeRoot, { recursive: true, force: true });
+  }
+});
+
+test('project/task state and lifecycle event commit atomically in private SQLite', async () => {
   const privateRoot = path.join(os.tmpdir(), `board-private-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const h = await createHarness({ boardRoots: { privateRoot, teamRoot: null } });
   try {
-    await fsp.mkdir(path.join(h.rootDir, 'project-board', 'projects'), { recursive: true });
-    await fsp.mkdir(path.join(h.rootDir, 'project-board', 'tasks'), { recursive: true });
-    await fsp.writeFile(path.join(h.rootDir, 'project-board', 'projects', 'legacy_project.json'), JSON.stringify({
-      id: 'legacy_project',
-      name: 'Legacy Project',
-      visibility: 'private',
-      owner_id: HUMAN_ACTOR.id,
-      status: 'active',
-      description: '',
-      version: 1,
-    }), 'utf8');
-    await fsp.writeFile(path.join(h.rootDir, 'project-board', 'tasks', 'legacy_task.json'), JSON.stringify({
-      id: 'legacy_task',
-      project_id: 'legacy_project',
-      title: 'Legacy Task',
-      status: 'todo',
-      priority: 'medium',
-      assignee_type: 'unassigned',
-      assignee_id: null,
-      version: 1,
-    }), 'utf8');
+    const project = await h.service.createProject({ id: 'proj_atomic_evt', name: 'Atomic Event' }, HUMAN_ACTOR);
+    const duplicateEventId = 'evt_atomic_duplicate';
+    await h.storage.writeProject('private', project.id, {
+      ...project,
+      name: 'Atomic Event V2',
+      version: project.version + 1,
+      updated_at: new Date().toISOString(),
+      updated_by: HUMAN_ACTOR.id,
+    }, {
+      expectedVersion: project.version,
+      event: {
+        event_id: duplicateEventId,
+        timestamp: new Date().toISOString(),
+        entity_type: 'project',
+        entity_id: project.id,
+        project_id: project.id,
+        action: 'patch_project',
+        actor_id: HUMAN_ACTOR.id,
+        old_version: project.version,
+        new_version: project.version + 1,
+        result: 'ok',
+      },
+    });
 
-    const projectsBefore = await h.service.listProjects({}, HUMAN_ACTOR);
-    assert.ok(projectsBefore.items.some((p) => p.id === 'legacy_project'));
+    const version2 = await h.service.getProject(project.id, HUMAN_ACTOR);
+    await assert.rejects(
+      h.storage.writeProject('private', project.id, {
+        ...version2,
+        name: 'Should Rollback',
+        version: version2.version + 1,
+        updated_at: new Date().toISOString(),
+        updated_by: HUMAN_ACTOR.id,
+      }, {
+        expectedVersion: version2.version,
+        event: {
+          event_id: duplicateEventId,
+          timestamp: new Date().toISOString(),
+          entity_type: 'project',
+          entity_id: project.id,
+          project_id: project.id,
+          action: 'patch_project',
+          actor_id: HUMAN_ACTOR.id,
+          old_version: version2.version,
+          new_version: version2.version + 1,
+          result: 'ok',
+        },
+      }),
+      /UNIQUE constraint failed/,
+    );
 
-    const deleted = await h.service.deleteProject('legacy_project', { version: 1, confirm: true }, HUMAN_ACTOR);
-    assert.equal(deleted.deleted, true);
-    assert.equal(deleted.cascade_deleted_tasks, 1);
-
-    const projectsAfter = await h.service.listProjects({}, HUMAN_ACTOR);
-    assert.ok(!projectsAfter.items.some((p) => p.id === 'legacy_project'));
-    const tasksAfter = await h.service.listTasks({ project_id: 'legacy_project' }, HUMAN_ACTOR);
-    assert.equal(tasksAfter.items.length, 0);
+    const afterFailure = await h.service.getProject(project.id, HUMAN_ACTOR);
+    assert.equal(afterFailure.version, version2.version);
+    assert.equal(afterFailure.name, version2.name);
   } finally {
     await cleanupRoot(h.rootDir);
     await fsp.rm(privateRoot, { recursive: true, force: true });
   }
 });
 
-test('malformed task entity fails closed as storage corruption on direct read', async () => {
+test('malformed legacy private entity aborts cutover safely with diagnostic (no authority activation)', async () => {
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'board-malformed-cutover-'));
+  const rootDir = await fsp.realpath(tempDir);
   const privateRoot = path.join(os.tmpdir(), `board-private-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-  const h = await createHarness({ boardRoots: { privateRoot, teamRoot: null } });
   try {
-    const { task } = await h.createProjectAndTask();
-    await fsp.writeFile(path.join(privateRoot, 'tasks', `${task.id}.json`), '{not json', 'utf8');
+    await fsp.mkdir(path.join(rootDir, 'project-board', 'tasks'), { recursive: true });
+    await fsp.writeFile(path.join(rootDir, 'project-board', 'tasks', 'legacy_task.json'), '{ bad json', 'utf8');
+
+    const storage = createBoardStorage({
+      rootDir,
+      runtimeRootOverride: await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), 'board-storage-kernel-'))),
+      resolveRoots: () => ({
+        privateRoot,
+        teamRoot: null,
+        sharedKnowledgeRoot: path.join(rootDir, 'knowledge'),
+        personalKnowledgeRoot: path.join(rootDir, 'knowledge', 'personal'),
+      }),
+    });
+
     await assert.rejects(
-      h.service.getTask(task.id, HUMAN_ACTOR),
-      (err) => err?.status === 500 && err?.code === 'storage_corruption',
+      storage.listProjects('private'),
+      (err) => err?.code === 'board_authority_inactive',
     );
+
+    const service = createBoardService({
+      rootDir,
+      guardrails: boardGuardrailsAllowAll(),
+      scheduler: createFakeScheduler(),
+      storage,
+      getRuntimeSettingsRaw: async () => ({ runtimeMode: 'claude-subscription', envVault: {} }),
+      listCanonicalAgentIds: async () => new Set(['agent_alpha', 'danny']),
+      listCanonicalWorkflowIds: async () => new Set(['workflow_alpha']),
+      resolveDeploymentState: async () => ({
+        requestedDeployment: 'team-server',
+        effectiveDeployment: 'team-server',
+        teamCapability: { status: 'enabled', reason: null },
+      }),
+    });
+    await assert.rejects(
+      service.createProject({ id: 'blocked_after_malformed', name: 'Blocked' }, HUMAN_ACTOR),
+      (err) => err?.code === 'board_authority_inactive',
+    );
+
+    const dbPath = storage.getPrivateDbPath();
+    const db = new DatabaseSync(dbPath);
+    try {
+      const state = db.prepare('SELECT authority_mode, authority_marker FROM board_state WHERE id = 1').get();
+      assert.equal(state.authority_mode, 'legacy_pending');
+      assert.equal(state.authority_marker, null);
+      const ledger = db.prepare('SELECT source_name, status FROM board_import_ledger ORDER BY id ASC').all();
+      assert.ok(ledger.some((row) => row.source_name === 'private/entities' && row.status === 'failed'));
+    } finally {
+      db.close();
+    }
   } finally {
-    await cleanupRoot(h.rootDir);
+    await fsp.rm(rootDir, { recursive: true, force: true });
     await fsp.rm(privateRoot, { recursive: true, force: true });
+  }
+});
+
+test('team divergence fails closed on malformed JSON, ambiguous entity ids, and non-English copy markers', async () => {
+  const rootDir = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), 'board-team-divergence-')));
+  const runtimeRoot = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), 'board-storage-kernel-')));
+  const privateRoot = path.join(rootDir, 'private-board');
+  const teamRoot = path.join(rootDir, 'team-board');
+  await fsp.mkdir(path.join(teamRoot, 'projects'), { recursive: true });
+  await fsp.writeFile(path.join(teamRoot, 'projects', 'broken.json'), '{ malformed', 'utf8');
+  try {
+    const storageMalformed = createBoardStorage({
+      rootDir,
+      runtimeRootOverride: runtimeRoot,
+      resolveRoots: () => ({
+        privateRoot,
+        teamRoot,
+        sharedKnowledgeRoot: path.join(rootDir, 'knowledge'),
+        personalKnowledgeRoot: path.join(rootDir, 'knowledge', 'personal'),
+      }),
+    });
+    await assert.rejects(storageMalformed.listProjects('team'), (err) => err?.code === 'team_scope_read_only');
+  } finally {
+    await fsp.rm(path.join(teamRoot, 'projects', 'broken.json'), { force: true });
+  }
+
+  await fsp.writeFile(path.join(teamRoot, 'projects', 'alpha.json'), JSON.stringify({
+    id: 'beta',
+    name: 'Ambiguous',
+    visibility: 'team',
+    owner_id: HUMAN_ACTOR.id,
+    status: 'active',
+    description: '',
+    review: { state: 'none', required: false, reviewers: [], decision: null, decided_at: null, decided_by: null },
+    blocked: { is_blocked: false, reason: '', since: null },
+    linked_paths: [],
+    linked_runs: [],
+    tags: [],
+    version: 1,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  }), 'utf8');
+  try {
+    const storageAmbiguous = createBoardStorage({
+      rootDir,
+      runtimeRootOverride: runtimeRoot,
+      resolveRoots: () => ({
+        privateRoot,
+        teamRoot,
+        sharedKnowledgeRoot: path.join(rootDir, 'knowledge'),
+        personalKnowledgeRoot: path.join(rootDir, 'knowledge', 'personal'),
+      }),
+    });
+    await assert.rejects(storageAmbiguous.listProjects('team'), (err) => err?.code === 'team_scope_read_only');
+  } finally {
+    await fsp.rm(path.join(teamRoot, 'projects', 'alpha.json'), { force: true });
+  }
+
+  await fsp.writeFile(path.join(teamRoot, 'projects', 'proj_team (kopia).json'), '{}', 'utf8');
+  try {
+    const storageCopyMarker = createBoardStorage({
+      rootDir,
+      runtimeRootOverride: runtimeRoot,
+      resolveRoots: () => ({
+        privateRoot,
+        teamRoot,
+        sharedKnowledgeRoot: path.join(rootDir, 'knowledge'),
+        personalKnowledgeRoot: path.join(rootDir, 'knowledge', 'personal'),
+      }),
+    });
+    await assert.rejects(storageCopyMarker.listProjects('team'), (err) => err?.code === 'team_scope_read_only');
+  } finally {
+    await fsp.rm(rootDir, { recursive: true, force: true });
+    await fsp.rm(runtimeRoot, { recursive: true, force: true });
+  }
+});
+
+test('private board SQLite is anchored to storage-kernel runtime root and rejects unsafe runtime roots', async () => {
+  const rootDir = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), 'board-runtime-path-')));
+  const runtimeRoot = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), 'board-storage-kernel-')));
+  try {
+    const storage = createBoardStorage({ rootDir, runtimeRootOverride: runtimeRoot });
+    const dbPath = storage.getPrivateDbPath();
+    assert.equal(dbPath.startsWith(path.join(runtimeRoot, 'db') + path.sep), true);
+    assert.equal(dbPath.includes(path.join(rootDir, 'project-board')), false);
+
+    assert.throws(
+      () => createBoardStorage({ rootDir, runtimeRootOverride: path.join(rootDir, 'runtime-inside-workspace') }),
+      (err) => err?.code === 'unsafe_runtime_root' && Array.isArray(err?.issues) && err.issues.includes('runtime_root_inside_workspace'),
+    );
+
+    const syncLike = path.join(os.tmpdir(), `OneDrive-board-runtime-${Date.now()}`);
+    await fsp.mkdir(syncLike, { recursive: true });
+    assert.throws(
+      () => createBoardStorage({ rootDir, runtimeRootOverride: syncLike }),
+      (err) => err?.code === 'unsafe_runtime_root' && Array.isArray(err?.issues) && err.issues.includes('sync_like_path_detected'),
+    );
+    await fsp.rm(syncLike, { recursive: true, force: true });
+  } finally {
+    await fsp.rm(rootDir, { recursive: true, force: true });
+    await fsp.rm(runtimeRoot, { recursive: true, force: true });
+  }
+});
+
+test('team child path safety fails closed for symlinked projects/tasks/entity/audit paths', async () => {
+  const rootDir = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), 'board-team-safe-paths-')));
+  const runtimeRoot = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), 'board-storage-kernel-')));
+  const privateRoot = path.join(rootDir, 'private-board');
+  const teamRoot = path.join(rootDir, 'team-board');
+  const outsideRoot = path.join(rootDir, 'outside');
+  const mkStorage = () => createBoardStorage({
+    rootDir,
+    runtimeRootOverride: runtimeRoot,
+    resolveRoots: () => ({
+      privateRoot,
+      teamRoot,
+      sharedKnowledgeRoot: path.join(rootDir, 'knowledge'),
+      personalKnowledgeRoot: path.join(rootDir, 'knowledge', 'personal'),
+    }),
+  });
+
+  await fsp.mkdir(teamRoot, { recursive: true });
+  await fsp.mkdir(outsideRoot, { recursive: true });
+  try {
+    await fsp.mkdir(path.join(outsideRoot, 'projects-safe'), { recursive: true });
+    await fsp.symlink(path.join(outsideRoot, 'projects-safe'), path.join(teamRoot, 'projects'));
+    await assert.rejects(
+      mkStorage().listProjects('team'),
+      (err) => err?.code === 'team_scope_read_only',
+    );
+    await fsp.rm(path.join(teamRoot, 'projects'), { recursive: true, force: true });
+
+    await fsp.mkdir(path.join(outsideRoot, 'tasks-safe'), { recursive: true });
+    await fsp.symlink(path.join(outsideRoot, 'tasks-safe'), path.join(teamRoot, 'tasks'));
+    await assert.rejects(
+      mkStorage().listTasks('team'),
+      (err) => err?.code === 'team_scope_read_only',
+    );
+    await fsp.rm(path.join(teamRoot, 'tasks'), { recursive: true, force: true });
+
+    await fsp.mkdir(path.join(teamRoot, 'projects'), { recursive: true });
+    await fsp.writeFile(path.join(outsideRoot, 'proj_entity.json'), JSON.stringify({ id: 'proj_entity', name: 'Outside' }), 'utf8');
+    await fsp.symlink(path.join(outsideRoot, 'proj_entity.json'), path.join(teamRoot, 'projects', 'proj_entity.json'));
+    await assert.rejects(
+      mkStorage().readProject('team', 'proj_entity'),
+      (err) => err?.code === 'team_scope_read_only',
+    );
+    await fsp.rm(path.join(teamRoot, 'projects', 'proj_entity.json'), { force: true });
+
+    await fsp.mkdir(path.join(teamRoot, 'projects'), { recursive: true });
+    await fsp.mkdir(path.join(teamRoot, 'audit'), { recursive: true });
+    const day = new Date().toISOString().slice(0, 10);
+    const outsideAudit = path.join(outsideRoot, `${day}.jsonl`);
+    await fsp.writeFile(outsideAudit, 'outside-only\n', 'utf8');
+    await fsp.symlink(outsideAudit, path.join(teamRoot, 'audit', `${day}.jsonl`));
+
+    await assert.rejects(
+      mkStorage().writeProject('team', 'proj_team_safe', {
+        id: 'proj_team_safe',
+        name: 'Team Safe',
+        visibility: 'team',
+        owner_id: HUMAN_ACTOR.id,
+        version: 1,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }, {
+        event: {
+          event_id: 'evt_team_safe_paths',
+          timestamp: new Date().toISOString(),
+          entity_type: 'project',
+          entity_id: 'proj_team_safe',
+          project_id: 'proj_team_safe',
+          action: 'create_project',
+          actor_id: HUMAN_ACTOR.id,
+          result: 'ok',
+        },
+      }),
+      (err) => err?.code === 'team_scope_read_only',
+    );
+    assert.equal(await fsp.readFile(outsideAudit, 'utf8'), 'outside-only\n');
+  } finally {
+    await fsp.rm(rootDir, { recursive: true, force: true });
+    await fsp.rm(runtimeRoot, { recursive: true, force: true });
   }
 });
 
@@ -1758,6 +2798,50 @@ test('board GET endpoints require auth when API token is configured', async () =
       headers: { 'x-steadymade-token': 'token_for_get_tests' },
     });
     assert.equal(metadataWithToken.status, 200);
+  } finally {
+    server.kill('SIGTERM');
+    await new Promise((resolve) => server.once('exit', resolve));
+  }
+});
+
+test('system status API includes deployment and team capability diagnostics fields', async () => {
+  const port = 45620 + Math.floor(Math.random() * 300);
+  const server = spawn(process.execPath, ['interface/server.mjs'], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PORT: String(port),
+      HOST: '127.0.0.1',
+      STEADYMADE_INTERFACE_TOKEN: '',
+      BOARD_INTERNAL_TOKEN: 'board_secret_test_token',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  const waitUntilReady = async () => {
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}/api/system`);
+        if (response.ok) return;
+      } catch {
+        // startup race
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error('server did not start in time');
+  };
+
+  try {
+    await waitUntilReady();
+    const response = await fetch(`http://127.0.0.1:${port}/api/system`);
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.ok(['local-only', 'team-server'].includes(body.requestedDeployment));
+    assert.ok(['local-only', 'team-server'].includes(body.effectiveDeployment));
+    assert.ok(body.teamCapability && typeof body.teamCapability === 'object');
+    assert.ok(['enabled', 'disabled'].includes(body.teamCapability.status));
+    assert.ok(body.teamCapability.reason === null || typeof body.teamCapability.reason === 'string');
   } finally {
     server.kill('SIGTERM');
     await new Promise((resolve) => server.once('exit', resolve));

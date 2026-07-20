@@ -1,0 +1,32 @@
+{
+  "id": "task_private_minimal",
+  "project_id": "proj_private_minimal",
+  "title": "Private Minimal Task",
+  "description": "Representative private task fixture for migration tests.",
+  "visibility": "private",
+  "status": "todo",
+  "priority": "medium",
+  "version": 1,
+  "assignee_type": "agent",
+  "assignee_id": "danny",
+  "workflow_id": "workflow_alpha",
+  "execution": {
+    "state": "none",
+    "attempt_id": null,
+    "attempts": []
+  },
+  "review": {
+    "required": false,
+    "state": "none",
+    "reviewers": []
+  },
+  "blocked": {
+    "is_blocked": false,
+    "reason": null,
+    "since": null
+  },
+  "linked_runs": [],
+  "linked_paths": [],
+  "created_at": "2026-07-20T08:05:00.000Z",
+  "updated_at": "2026-07-20T08:05:00.000Z"
+}

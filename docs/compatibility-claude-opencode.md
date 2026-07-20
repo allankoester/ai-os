@@ -58,6 +58,9 @@ selection and model routing remain tool-specific.
 
 ## Permissions and guardrails
 
+There is **no unified agent gateway** shared by Claude Code and OpenCode in this repo.
+Enforcement remains runtime-specific.
+
 ### Claude Code
 
 - Runtime guardrails are materialized in `.claude/settings.local.json`.
@@ -73,6 +76,11 @@ selection and model routing remain tool-specific.
 Practical implication: instruction text can be shared, but permission enforcement
 is independent per runtime.
 
+Safe usage for governed actions:
+
+- Use the runtime that enforces the required policy layer (Claude runtime + interface/scheduler constraints) for sensitive operations.
+- Do not assume `.claude/settings.local.json` protections apply when running the same action in OpenCode.
+
 ## Agent/subagent instructions
 
 - Claude subagents are defined in `.claude/agents/*.md` and used natively by
@@ -81,9 +89,25 @@ is independent per runtime.
 - This project remains Claude-first: no app-local OpenCode agent files are
   required for normal operation.
 
+## Versioning boundary summary
+
+- Git-versioned authority: `CLAUDE.md`, `.claude/agents/`, `skills/company/`, docs/code.
+- Machine-local runtime state: `.skill-profile`, `.claude/skills/`, local plugin/guardrail state, generated local settings.
+
 ## Recommended operating mode for this app
 
 1. Use Claude Code as the primary runtime.
 2. Keep `CLAUDE.md` as single source of instruction truth for this app.
 3. Keep OpenCode optional for compatible reading of `CLAUDE.md` fallback,
    without introducing app-local `AGENTS.md`.
+
+## Local MCP integration note (Microsoft 365 read-only)
+
+- Built-in plugin id: `m365-readonly`
+- Materialized command: `node mcp/m365/server.mjs` (fixed local path)
+- Scope: delegated Microsoft Graph read-only tools only (no mutation tools, no
+  arbitrary Graph proxy)
+- Auth design target: OAuth Authorization Code + PKCE (S256), work-account
+  tenant only, no client secret for local public-client flow
+
+Setup details: `docs/guide-m365-mcp-readonly-setup.md`

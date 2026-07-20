@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_NAME="${M365_APP_NAME:-Steadymade AI OS MCP (Local Read-only)}"
+TENANT_ID="${M365_TENANT_ID:-}"
+INCLUDE_SITES_SCOPE="${M365_INCLUDE_SITES_READ_ALL:-1}"
+
+if ! command -v az >/dev/null 2>&1; then
+  echo "Azure CLI (az) is required." >&2
+  exit 1
+fi
+
+az account show >/dev/null
+
+if [[ -z "${TENANT_ID}" ]]; then
+  TENANT_ID="$(az account show --query tenantId -o tsv)"
+fi
+
+if [[ -z "${TENANT_ID}" ]]; then
+  echo "Unable to determine tenant id. Set M365_TENANT_ID." >&2
+  exit 1
+fi
+
+GRAPH_APP_ID="00000003-0000-0000-c000-000000000000"
+
+SCOPE_NAMES=(openid profile offline_access User.Read Mail.Read Tasks.Read Files.Read)
+if [[ "${INCLUDE_SITES_SCOPE}" == "1" ]]; then
+  SCOPE_NAMES+=(Sites.Read.All)
+fi
+
+echo "Resolving Microsoft Graph delegated scope IDs..."
+RESOURCE_ACCESS_ITEMS=()
+for scope in "${SCOPE_NAMES[@]}"; do
+  scope_id="$(az ad sp show --id "${GRAPH_APP_ID}" --query "oauth2PermissionScopes[?value=='${scope}' && isEnabled].id | [0]" -o tsv)"
+  if [[ -z "${scope_id}" ]]; then
+    echo "Failed to resolve scope id for ${scope}" >&2
+    exit 1
+  fi
+  RESOURCE_ACCESS_ITEMS+=("{\"id\":\"${scope_id}\",\"type\":\"Scope\"}")
+done
+
+RESOURCE_ACCESS_JSON="$(IFS=,; printf '%s' "${RESOURCE_ACCESS_ITEMS[*]}")"
+REQUIRED_RESOURCE_ACCESSES="[{\"resourceAppId\":\"${GRAPH_APP_ID}\",\"resourceAccess\":[${RESOURCE_ACCESS_JSON}]}]"
+
+APP_ID="$(az ad app list --display-name "${APP_NAME}" --query "[0].appId" -o tsv)"
+if [[ -z "${APP_ID}" ]]; then
+  echo "Creating app registration: ${APP_NAME}"
+  APP_ID="$(az ad app create \
+    --display-name "${APP_NAME}" \
+    --sign-in-audience "AzureADMyOrg" \
+    --is-fallback-public-client true \
+    --public-client-redirect-uris "http://localhost:53682" \
+    --required-resource-accesses "${REQUIRED_RESOURCE_ACCESSES}" \
+    --query appId -o tsv)"
+else
+  echo "Updating existing app registration: ${APP_NAME} (${APP_ID})"
+  az ad app update \
+    --id "${APP_ID}" \
+    --sign-in-audience "AzureADMyOrg" \
+    --is-fallback-public-client true \
+    --public-client-redirect-uris "http://localhost:53682" \
+    --required-resource-accesses "${REQUIRED_RESOURCE_ACCESSES}" >/dev/null
+fi
+
+echo
+echo "App registration ready."
+echo "  tenant id: ${TENANT_ID}"
+echo "  app id:    ${APP_ID}"
+echo
+echo "Next steps (manual):"
+echo "  1) Admin consent (if required by tenant):"
+echo "     https://login.microsoftonline.com/${TENANT_ID}/adminconsent?client_id=${APP_ID}"
+echo "  2) Configure local MCP env vars (non-secret):"
+echo "     M365_TENANT_ID=${TENANT_ID}"
+echo "     M365_CLIENT_ID=${APP_ID}"
+echo "     M365_SCOPES=openid profile offline_access User.Read Mail.Read Tasks.Read Files.Read$( [[ "${INCLUDE_SITES_SCOPE}" == "1" ]] && printf ' Sites.Read.All' )"
+echo "  3) Start MCP and run tool m365_auth_login (native browser PKCE flow)."

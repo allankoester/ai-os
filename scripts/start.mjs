@@ -7,6 +7,7 @@ import net from 'node:net';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { deriveUserTypePolicy, getAppSettingsFile, readAppSettings } from '../interface/app-settings.mjs';
+import { inspectRuntimeGate } from './start-runtime-gate.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PROVIDER_SETTINGS_FILE = path.join(ROOT, 'interface', 'provider-settings.json');
@@ -87,9 +88,9 @@ function checkLayout() {
   return ok;
 }
 
-function runValidate() {
+function runValidate(nodeExecutablePath) {
   logHeader('Repository validation');
-  const result = spawnSync(process.execPath, ['scripts/validate.mjs'], {
+  const result = spawnSync(nodeExecutablePath, ['scripts/validate.mjs'], {
     cwd: ROOT,
     stdio: 'inherit',
   });
@@ -135,6 +136,62 @@ function resolveBinary(command, fallback) {
   };
 }
 
+function validateNodeExecutable(executablePath) {
+  const inspected = spawnSync(executablePath, ['-p', 'JSON.stringify({versions:process.versions,release:process.release,execPath:process.execPath})'], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  if (inspected.status !== 0) {
+    return {
+      ok: false,
+      reason: `failed to execute ${executablePath} (exit ${inspected.status ?? 'unknown'})`,
+    };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(String(inspected.stdout || '').trim());
+  } catch {
+    return {
+      ok: false,
+      reason: `failed to inspect runtime for ${executablePath}`,
+    };
+  }
+  const runtimeGate = inspectRuntimeGate(parsed || {});
+  if (!runtimeGate.ok) {
+    return {
+      ok: false,
+      reason: `${executablePath} rejected: ${runtimeGate.message}`,
+    };
+  }
+  return { ok: true, reason: null };
+}
+
+function resolveValidatedNodeExecutable() {
+  const preferred = String(process.env.STEADYMADE_NODE_BIN || '').trim() || 'node';
+  const resolved = resolveBinary(preferred, 'node');
+  if (!resolved.resolvedPath) {
+    return {
+      ok: false,
+      executablePath: null,
+      reason: resolved.reason || 'node binary not found',
+    };
+  }
+  const validation = validateNodeExecutable(resolved.resolvedPath);
+  if (!validation.ok) {
+    return {
+      ok: false,
+      executablePath: null,
+      reason: validation.reason,
+    };
+  }
+  return {
+    ok: true,
+    executablePath: resolved.resolvedPath,
+    reason: null,
+  };
+}
+
 function preflightResultLine(entry) {
   const status = entry.status === 'pass' ? 'PASS' : (entry.status === 'warn' ? 'WARN' : 'FAIL');
   return `[${status}] ${entry.id}: ${entry.message}`;
@@ -144,14 +201,32 @@ async function runPreflightChecks() {
   const checks = [];
   const add = (id, status, message, options = {}) => checks.push({ id, status, message, blocking: options.blocking !== false, code: options.code });
 
-  const nodeMajor = Number((process.versions.node || '0').split('.')[0]);
-  add('node-version', nodeMajor >= 18 ? 'pass' : 'fail', nodeMajor >= 18 ? `Node ${process.versions.node} is supported` : `Node ${process.versions.node} is not supported (need >=18)`);
+  const runtimeGate = inspectRuntimeGate({
+    versions: process.versions,
+    release: process.release,
+    execPath: process.execPath,
+    env: process.env,
+  });
+  add('runtime-gate', runtimeGate.ok ? 'pass' : 'fail', runtimeGate.message);
+
+  const nodeExecutable = resolveValidatedNodeExecutable();
+  add(
+    'node-executable',
+    nodeExecutable.ok ? 'pass' : 'fail',
+    nodeExecutable.ok
+      ? `Validated Node executable: ${nodeExecutable.executablePath}`
+      : `Node executable validation failed: ${nodeExecutable.reason}`,
+  );
 
   const missingLayout = REQUIRED.filter((rel) => !exists(rel));
   add('required-layout', missingLayout.length ? 'fail' : 'pass', missingLayout.length ? `Missing required paths: ${missingLayout.join(', ')}` : 'Required project layout exists');
 
-  const validate = spawnSync(process.execPath, ['scripts/validate.mjs'], { cwd: ROOT, stdio: 'ignore' });
-  add('repository-validate', validate.status === 0 ? 'pass' : 'fail', validate.status === 0 ? 'scripts/validate.mjs passed' : 'scripts/validate.mjs failed');
+  if (nodeExecutable.ok) {
+    const validate = spawnSync(nodeExecutable.executablePath, ['scripts/validate.mjs'], { cwd: ROOT, stdio: 'ignore' });
+    add('repository-validate', validate.status === 0 ? 'pass' : 'fail', validate.status === 0 ? 'scripts/validate.mjs passed' : 'scripts/validate.mjs failed');
+  } else {
+    add('repository-validate', 'fail', 'scripts/validate.mjs skipped: no validated Node executable');
+  }
 
   const missingPackages = ['node-pty', 'ws', 'xterm', '@xterm/addon-fit']
     .filter((pkg) => !fs.existsSync(path.join(ROOT, 'node_modules', ...pkg.split('/'))));
@@ -203,6 +278,7 @@ async function runPreflightChecks() {
   return {
     checks,
     blockingFailures,
+    nodeExecutablePath: nodeExecutable.ok ? nodeExecutable.executablePath : null,
     exitCode: blockingFailures.length ? 1 : 0,
   };
 }
@@ -278,7 +354,7 @@ async function main() {
   if (env.CHAT_CLI_BRIDGE_ENABLED != null) console.log(`CLI bridge default: ${env.CHAT_CLI_BRIDGE_ENABLED}`);
   console.log(`URL: http://localhost:${port}`);
 
-  const child = spawn(process.execPath, ['interface/server.mjs'], {
+  const child = spawn(preflight.nodeExecutablePath, ['interface/server.mjs'], {
     cwd: ROOT,
     stdio: 'inherit',
     env,
@@ -290,7 +366,7 @@ async function main() {
     const chatFree = await isPortFree(chatPort);
     if (chatFree) {
       console.log(`Chat runtime: http://localhost:${chatPort}`);
-      chatChild = spawn(process.execPath, ['chat/server.mjs'], {
+      chatChild = spawn(preflight.nodeExecutablePath, ['chat/server.mjs'], {
         cwd: ROOT,
         stdio: 'inherit',
         env,

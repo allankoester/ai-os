@@ -39,6 +39,15 @@ import { timingSafeEqual } from 'node:crypto';
 import { createBoardStorage } from './board/storage.mjs';
 import { createBoardService } from './board/service.mjs';
 import { asBoardEnvelopeError } from './board/errors.mjs';
+import {
+  createStorageKernelDiagnostics,
+  ensureRuntimeFilePath,
+  resolveRuntimeRoot,
+} from './storage/runtime/storage-kernel.mjs';
+import {
+  getUsageProjectionHealth,
+  rebuildUsageProjectionShadow,
+} from './storage/runtime/usage-projection.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..'); // project root: steadymade-ai-os
@@ -46,7 +55,10 @@ const PUBLIC = path.join(__dirname, 'public');
 const META_FILE = path.join(__dirname, 'meta.json'); // sidecar metadata (status, scope) — keeps real docs untouched
 const FLOWS_FILE = path.join(__dirname, 'workflows.json'); // user workflow edits: overrides / custom / deleted (machine-local)
 const PROVIDER_SETTINGS_FILE = path.join(__dirname, 'provider-settings.json');
-const USAGE_LOG = path.join(ROOT, 'runs', 'usage.jsonl');
+const RUNTIME_ROOT_HINT = resolveRuntimeRoot({
+  testRootOverride: process.env.STEADYMADE_STORAGE_KERNEL_TEST_ROOT || null,
+});
+const USAGE_LOG = path.join(RUNTIME_ROOT_HINT, 'streams', 'usage', 'usage.jsonl');
 const LEGACY_CHAT_USAGE_LOG = path.join(ROOT, 'runs', 'chat-usage.jsonl');
 const PORT = process.env.PORT || 4011;
 const HOST = process.env.HOST || '127.0.0.1';
@@ -69,7 +81,10 @@ const activePersonalKnowledgeRoot = normalizeConfiguredPath(ROOT, appSettingsRaw
   || path.join(ROOT, 'knowledge', 'personal');
 const activePrivateBoardRoot = normalizeConfiguredPath(ROOT, appSettingsRaw.privateBoardRoot)
   || defaultPrivateBoardRoot();
-const activeTeamBoardRoot = normalizeConfiguredPath(ROOT, appSettingsRaw.teamBoardRoot) || null;
+const configuredTeamBoardRoot = normalizeConfiguredPath(ROOT, appSettingsRaw.teamBoardRoot) || null;
+const startupUserPolicy = deriveUserTypePolicy(appSettingsRaw.userType);
+const startupRequestedDeployment = startupUserPolicy.canUseTeamBoard ? 'team-server' : 'local-only';
+const activeTeamBoardRoot = startupRequestedDeployment === 'team-server' ? configuredTeamBoardRoot : null;
 try { fs.mkdirSync(activePrivateBoardRoot, { recursive: true }); } catch {}
 
 const boardStorage = createBoardStorage({
@@ -82,24 +97,100 @@ const boardStorage = createBoardStorage({
   }),
 });
 
+const storageKernelDiagnostics = createStorageKernelDiagnostics({
+  workspaceRoot: ROOT,
+  component: 'interface',
+});
+
+function teamCapabilityReasonFromError(err) {
+  if (err?.code === 'team_root_unconfigured') return 'TEAM_ROOT_UNCONFIGURED';
+  if (err?.code === 'team_root_unavailable' || err?.code === 'board_root_unavailable') return 'TEAM_ROOT_UNAVAILABLE';
+  if (err?.code === 'team_scope_read_only') return 'TEAM_SCOPE_READ_ONLY';
+  if (err?.code === 'board_root_unsafe') return 'TEAM_ROOT_UNSAFE';
+  return 'TEAM_CHECK_FAILED';
+}
+
+function getRuntimeDeploymentState() {
+  const requestedDeployment = startupRequestedDeployment;
+  if (requestedDeployment === 'local-only') {
+    return {
+      requestedDeployment,
+      effectiveDeployment: 'local-only',
+      teamCapability: { status: 'disabled', reason: 'USER_TYPE_LOCAL_ONLY' },
+    };
+  }
+
+  if (!activeTeamBoardRoot) {
+    return {
+      requestedDeployment,
+      effectiveDeployment: 'local-only',
+      teamCapability: { status: 'disabled', reason: 'TEAM_ROOT_UNCONFIGURED' },
+    };
+  }
+
+  try {
+    boardStorage.resolveScopeRoot('team');
+    return {
+      requestedDeployment,
+      effectiveDeployment: 'team-server',
+      teamCapability: { status: 'enabled', reason: null },
+    };
+  } catch (err) {
+    return {
+      requestedDeployment,
+      effectiveDeployment: 'local-only',
+      teamCapability: { status: 'disabled', reason: teamCapabilityReasonFromError(err) },
+    };
+  }
+}
+
 const knowledgeConfig = createKnowledgeConfig({ rootDir: ROOT, fsRootOverride: activeSharedKnowledgeRoot });
 const knowledgeStorage = knowledgeConfig.backend === 'graph'
   ? createGraphKnowledgeStorage({ config: knowledgeConfig.graph })
   : createFsKnowledgeStorage({ root: knowledgeConfig.fsRoot });
 
 let boardService;
-const scheduler = createScheduler({
-  rootDir: ROOT,
-  resolveRuntimeContext: async () => readProviderSettingsRaw(),
-  onRunEvent: async (event) => {
-    if (boardService) await boardService.applySchedulerEvent(event);
-  },
-});
+function createFailClosedScheduler(err) {
+  const issues = Array.isArray(err?.issues) ? err.issues.map((issue) => String(issue)) : [];
+  const failureCode = String(err?.code || 'scheduler_unavailable');
+  const unavailableError = { errors: ['scheduler unavailable'], code: failureCode };
+  return {
+    listJobs: () => [],
+    listRuns: () => [],
+    getRunLog: async () => null,
+    createJob: async () => unavailableError,
+    updateJob: async () => unavailableError,
+    deleteJob: async () => unavailableError,
+    runNow: async () => unavailableError,
+    cancelRun: async () => unavailableError,
+    deleteRun: async () => unavailableError,
+    getDiagnostics: () => ({
+      available: false,
+      reason: failureCode,
+      issues,
+    }),
+  };
+}
+
+let scheduler;
+try {
+  scheduler = createScheduler({
+    rootDir: ROOT,
+    resolveRuntimeContext: async () => readProviderSettingsRaw(),
+    onRunEvent: async (event) => {
+      if (boardService) await boardService.applySchedulerEvent(event);
+    },
+  });
+} catch (err) {
+  if (err?.code !== 'unsafe_runtime_root') throw err;
+  scheduler = createFailClosedScheduler(err);
+}
 boardService = createBoardService({
   rootDir: ROOT,
   guardrails,
   scheduler,
   storage: boardStorage,
+  resolveDeploymentState: () => getRuntimeDeploymentState(),
   getRuntimeSettingsRaw: () => readProviderSettingsRaw(),
   listCanonicalAgentIds: async () => readCanonicalAgentIds(),
   listCanonicalWorkflowIds: async () => readCanonicalWorkflowIds(),
@@ -1008,13 +1099,40 @@ async function readJsonl(file) {
   catch (err) {
     if (err.code !== 'ENOENT') throw err;
   }
-  return text
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map((line) => {
-      try { return JSON.parse(line); } catch { return null; }
-    })
-    .filter(Boolean);
+  const entries = [];
+  let totalLines = 0;
+  let blankLineCount = 0;
+  let malformedLineCount = 0;
+
+  const lines = text.length ? text.split(/\r?\n/) : [];
+  if (lines.length && lines[lines.length - 1] === '') lines.pop();
+
+  for (const line of lines) {
+    totalLines += 1;
+    if (!String(line).trim()) {
+      blankLineCount += 1;
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) entries.push(parsed);
+      else malformedLineCount += 1;
+    } catch {
+      malformedLineCount += 1;
+    }
+  }
+
+  return {
+    entries,
+    diagnostics: {
+      filePresent: Boolean(text.length) || fs.existsSync(file),
+      totalLines,
+      projectedLineCount: entries.length,
+      quarantinedLineCount: blankLineCount + malformedLineCount,
+      blankLineCount,
+      malformedLineCount,
+    },
+  };
 }
 
 function usageEntryKey(e) {
@@ -1037,12 +1155,35 @@ function usageEntryKey(e) {
 }
 
 async function readUsageLog() {
-  const unified = await readJsonl(USAGE_LOG);
+  let unified;
+  let canonicalAccessError = null;
+  try {
+    const safeCanonical = ensureRuntimeFilePath({
+      runtimeRoot: RUNTIME_ROOT_HINT,
+      relativePath: path.join('streams', 'usage', 'usage.jsonl'),
+      code: 'unsafe_usage_stream_path',
+    });
+    unified = await readJsonl(safeCanonical);
+  } catch (err) {
+    unified = {
+      entries: [],
+      diagnostics: {
+        source: 'runs/usage.jsonl',
+        filePresent: false,
+        totalLines: 0,
+        projectedLineCount: 0,
+        quarantinedLineCount: 0,
+        blankLineCount: 0,
+        malformedLineCount: 0,
+      },
+    };
+    canonicalAccessError = err?.code || 'usage_log_unavailable';
+  }
   const legacy = await readJsonl(LEGACY_CHAT_USAGE_LOG);
 
-  const merged = unified.map((e) => ({ ...e, source: e.source || 'chat' }));
+  const merged = unified.entries.map((e) => ({ ...e, source: e.source || 'chat' }));
   const seen = new Set(merged.map(usageEntryKey));
-  for (const e of legacy) {
+  for (const e of legacy.entries) {
     const normalized = { ...e, source: 'chat' };
     const key = usageEntryKey(normalized);
     if (!seen.has(key)) {
@@ -1075,6 +1216,22 @@ async function readUsageLog() {
       : 'runs/chat-usage.jsonl (legacy)',
     entries,
     summary: { ...summary, sessions: summary.sessions.size },
+    diagnostics: {
+      canonical: {
+        source: 'runs/usage.jsonl',
+        accessError: canonicalAccessError,
+        ...unified.diagnostics,
+      },
+      legacy: {
+        source: 'runs/chat-usage.jsonl',
+        ...legacy.diagnostics,
+      },
+    },
+    shadowProjection: rebuildUsageProjectionShadow({
+      workspaceRoot: ROOT,
+      canonicalUsageLogPath: USAGE_LOG,
+      testRootOverride: process.env.STEADYMADE_STORAGE_KERNEL_TEST_ROOT || null,
+    }),
   };
 }
 
@@ -1098,6 +1255,7 @@ function getActiveUser() {
 // ---------- API ----------
 
 async function getSystem() {
+  const deploymentState = getRuntimeDeploymentState();
   const system = {
     agents: [],
     folders: [],
@@ -1106,7 +1264,18 @@ async function getSystem() {
     meta: await readMeta(),
     user: getActiveUser(),
     appSettings: await getAppSettingsResponse(),
+    requestedDeployment: deploymentState.requestedDeployment,
+    effectiveDeployment: deploymentState.effectiveDeployment,
+    teamCapability: deploymentState.teamCapability,
     warnings: [],
+    diagnostics: {
+      storageKernel: storageKernelDiagnostics.getStatus(),
+      scheduler: typeof scheduler.getDiagnostics === 'function' ? scheduler.getDiagnostics() : null,
+      usageProjection: getUsageProjectionHealth({
+        workspaceRoot: ROOT,
+        testRootOverride: process.env.STEADYMADE_STORAGE_KERNEL_TEST_ROOT || null,
+      }),
+    },
   };
 
   // Agents from .claude/agents/*.md
@@ -1180,7 +1349,7 @@ async function handleApi(req, res, url) {
   };
   const sendBoard = (code, data) => send(code, { ok: true, data });
 
-  const isBoardPath = /^\/api\/(board\/metadata|board\/artifacts\/[^/]+\/[^/]+\/.+|projects(?:\/[^/]+(?:\/(activity|audit|visibility-migration))?)?|tasks(?:\/[^/]+(?:\/(execution\/(run|cancel|retry)|review\/decision))?)?|internal\/tasks\/execution-callback)$/.test(url.pathname);
+  const isBoardPath = /^\/api\/(board\/metadata|board\/artifacts\/[^/]+(?:\/[^/]+\/.+)?|projects(?:\/[^/]+(?:\/(activity|audit|visibility-migration|dashboard))?)?|tasks(?:\/[^/]+(?:\/(execution\/(run|cancel|retry)|review\/decision))?)?|internal\/tasks\/execution-callback)$/.test(url.pathname);
   const isInternalExecutionCallbackPath = url.pathname === '/api/internal/tasks/execution-callback';
 
   const mutating = req.method !== 'GET';
@@ -1252,6 +1421,10 @@ async function handleApi(req, res, url) {
       const body = await readBody(req, { maxBytes: 256 * 1024 });
       return sendBoard(200, await boardService.deleteProject(projectMatch[1], body, actor));
     }
+    const projectDashboardMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/dashboard$/);
+    if (projectDashboardMatch && req.method === 'GET') {
+      return sendBoard(200, await boardService.getProjectDashboard(projectDashboardMatch[1], actor));
+    }
     const projectStreamMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/(activity|audit)$/);
     if (projectStreamMatch && req.method === 'GET') {
       const [, id, kind] = projectStreamMatch;
@@ -1314,12 +1487,30 @@ async function handleApi(req, res, url) {
       };
       return sendBoard(200, await boardService.executionCallback(body, internalActor));
     }
-    const boardArtifactMatch = url.pathname.match(/^\/api\/board\/artifacts\/([^/]+)\/([^/]+)\/(.+)$/);
-    if (boardArtifactMatch && req.method === 'GET') {
-      const [, taskId, attemptId, artifactPath] = boardArtifactMatch;
+    const boardArtifactIdMatch = url.pathname.match(/^\/api\/board\/artifacts\/([^/]+)$/);
+    if (boardArtifactIdMatch && req.method === 'GET') {
+      const [, artifactId] = boardArtifactIdMatch;
+      const artifact = await boardService.readArtifactById({ artifactId: decodeURIComponent(artifactId), actor });
+      const type = artifact.content_type || 'application/octet-stream';
+      res.writeHead(200, { 'Content-Type': type, 'Content-Disposition': 'inline' });
+      return fs.createReadStream(artifact.abs).pipe(res);
+    }
+    if (boardArtifactIdMatch && req.method === 'DELETE') {
+      const [, artifactId] = boardArtifactIdMatch;
+      const body = await readBody(req, { maxBytes: 64 * 1024 });
+      const deleted = await boardService.deleteArtifactById({
+        artifactId: decodeURIComponent(artifactId),
+        actor,
+        reason: body?.reason,
+      });
+      return sendBoard(200, deleted);
+    }
+    const boardArtifactLegacyMatch = url.pathname.match(/^\/api\/board\/artifacts\/([^/]+)\/([^/]+)\/(.+)$/);
+    if (boardArtifactLegacyMatch && req.method === 'GET') {
+      const [, taskId, attemptId, artifactPath] = boardArtifactLegacyMatch;
       const artifact = await boardService.readTaskArtifact({ taskId, attemptId, artifactPath, actor });
       const ext = path.extname(artifact.abs).toLowerCase();
-      const type = { '.md': 'text/plain; charset=utf-8', '.txt': 'text/plain; charset=utf-8', '.pdf': 'application/pdf', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' }[ext] || MIME[ext] || 'application/octet-stream';
+      const type = artifact.content_type || { '.md': 'text/plain; charset=utf-8', '.txt': 'text/plain; charset=utf-8', '.pdf': 'application/pdf', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' }[ext] || MIME[ext] || 'application/octet-stream';
       res.writeHead(200, { 'Content-Type': type, 'Content-Disposition': 'inline' });
       return fs.createReadStream(artifact.abs).pipe(res);
     }

@@ -1,0 +1,4 @@
+{
+  "id": "job_bad",
+  "name": "Broken Scheduler Fixture",
+  "scheduleType": "once",

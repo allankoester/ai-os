@@ -6,12 +6,13 @@
   "scripts": {
     "test:board": "node --test tests/board/*.test.mjs",
     "test:settings": "node --test tests/board/app-settings.test.mjs",
-    "test:startup": "node --test tests/board/app-settings.test.mjs",
+    "test:startup": "node --test tests/board/start-preflight-runtime.test.mjs",
     "test": "node --test tests/board/*.test.mjs",
-    "preflight": "node scripts/start.mjs --check-only"
+    "preflight": "node scripts/start.mjs --check-only",
+    "bench:storage-plan": "node scripts/benchmark-storage-plan.mjs"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",

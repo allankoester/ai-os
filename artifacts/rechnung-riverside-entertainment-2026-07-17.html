@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rechnung 2026NL01 — Riverside Entertainment GmbH & AlwaysOn Production GmbH</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  --g600: #148A3F; --g800: #0A4D23; --g50: #E8FBF0;
+  --a600: #C46A38; --a50: #FFF0E8;
+  --d900: #0B2218; --d800: #1A3328;
+  --white: #FAFBFA; --n50: #F2F4F2; --n100: #E4E7E4;
+  --n300: #9DA19D; --n500: #6E736E; --n700: #474B47; --n900: #1C1F1D;
+  --fd: 'Space Grotesk', sans-serif;
+  --fb: 'Plus Jakarta Sans', sans-serif;
+  --fm: 'JetBrains Mono', monospace;
+}
+@page { size: A4; margin: 11mm 20mm 11mm; }
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body {
+  font-family: var(--fb);
+  font-size: 9.5pt;
+  color: var(--n700);
+  background: var(--white);
+  line-height: 1.55;
+  max-width: 176mm;
+  margin: 0 auto;
+  padding: 24mm 0 20mm;
+}
+.doc-header {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  padding-bottom: 10px; margin-bottom: 12px;
+}
+.doc-logo {
+  font-family: var(--fd); font-weight: 700; font-size: 15pt;
+  color: var(--n900); letter-spacing: -0.02em;
+}
+.doc-logo .logo-dot { color: var(--g600); }
+.doc-logo .logo-ai  { color: var(--g600); font-weight: 500; }
+.doc-tagline {
+  font-family: var(--fm); font-size: 7pt; color: var(--n300);
+  letter-spacing: 0.07em; text-transform: uppercase; margin-top: 3px;
+}
+.doc-header-right {
+  text-align: right;
+  font-family: var(--fm); font-size: 7.5pt; color: var(--n500);
+  letter-spacing: 0.04em; line-height: 1.7;
+}
+.doc-sender-line {
+  font-size: 7.5pt; color: var(--n300); margin-bottom: 10px;
+  border-bottom: 1px solid var(--n100); padding-bottom: 5px; width: fit-content;
+}
+.doc-recipient { font-size: 9.5pt; color: var(--n700); line-height: 1.5; }
+.doc-meta-row {
+  display: flex; justify-content: flex-end; gap: 28px;
+  margin: 8px 0 10px;
+}
+.doc-meta-item { text-align: right; }
+.doc-meta-label {
+  font-family: var(--fm); font-size: 7pt; color: var(--n300);
+  letter-spacing: 0.07em; text-transform: uppercase; display: block;
+}
+.doc-meta-value { font-size: 10pt; color: var(--n900); font-weight: 500; }
+.doc-subject {
+  font-family: var(--fd); font-size: 14pt; font-weight: 700;
+  color: var(--n900); letter-spacing: -0.02em; margin-bottom: 6px;
+}
+.doc-subject-bar {
+  width: 48px; height: 3px; background: var(--g600);
+  border-radius: 100px; margin-bottom: 10px;
+}
+.doc-body { color: var(--n700); }
+.doc-body p { margin-bottom: 6px; }
+.doc-body p:last-child { margin-bottom: 0; }
+.doc-body h2 {
+  font-family: var(--fd); font-size: 11pt; font-weight: 700;
+  color: var(--n900); letter-spacing: -0.02em; margin: 10px 0 4px;
+}
+.doc-table { width: 100%; border-collapse: collapse; margin: 10px 0 14px; font-size: 9.5pt; }
+.doc-table th {
+  font-family: var(--fm); font-size: 7.5pt; font-weight: 500;
+  letter-spacing: 0.07em; text-transform: uppercase; color: var(--n300);
+  text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--n100);
+}
+.doc-table td { padding: 6px 10px; border-bottom: 1px solid var(--n100); }
+.doc-table td.right { text-align: right; white-space: nowrap; }
+.doc-table tr.subtotal td { color: var(--n500); font-size: 9pt; }
+.doc-table tr.total td {
+  font-family: var(--fd); font-weight: 700; font-size: 10pt;
+  color: var(--n900); border-top: 2px solid var(--n900); border-bottom: none;
+}
+.doc-infobox {
+  background: var(--n50); border: 1px solid var(--n100);
+  padding: 9px 14px; margin: 10px 0; border-radius: 8px;
+}
+.doc-infobox p { margin: 0; font-size: 9.5pt; }
+.doc-signature { margin-top: 10px; }
+.doc-signature-greeting { margin-bottom: 12px; }
+.doc-signature-name {
+  font-family: var(--fd); font-weight: 700; font-size: 11pt; color: var(--n900);
+}
+.doc-signature-role {
+  font-family: var(--fm); font-size: 7.5pt; color: var(--n300);
+  letter-spacing: 0.07em; text-transform: uppercase; margin-top: 2px;
+}
+.doc-signature-contact {
+  font-size: 8.5pt; color: var(--n500); margin-top: 6px; line-height: 1.5;
+}
+.doc-footer-block {
+  margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--n100);
+  display: flex; justify-content: space-between; gap: 24px;
+}
+.doc-footer-col { font-size: 8pt; color: var(--n500); line-height: 1.5; }
+.doc-footer-label {
+  display: block; font-family: var(--fm); font-size: 7pt; color: var(--g600);
+  letter-spacing: 0.07em; text-transform: uppercase; margin-bottom: 4px;
+}
+.doc-footer {
+  margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--n100);
+  display: flex; justify-content: space-between;
+  font-family: var(--fm); font-size: 7pt; color: var(--n300); letter-spacing: 0.05em;
+}
+@media print {
+  html, body { background: #ffffff; padding: 0; margin: 0; }
+  .doc-header, .doc-recipient, .doc-signature, .doc-footer, .doc-footer-block { break-inside: avoid; }
+  .doc-infobox { break-inside: avoid; }
+  .doc-table { break-inside: avoid; }
+  .doc-table tr { break-inside: avoid; }
+}
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="doc-header">
+  <div>
+    <div class="doc-logo">steadymade<span class="logo-dot">.</span><span class="logo-ai">ai</span></div>
+    <div class="doc-tagline">Secure. Measurable. Scalable.</div>
+  </div>
+</div>
+
+<!-- Absenderzeile -->
+<div class="doc-sender-line">steadymade.ai · Alex Blancke · Bundesstr. 11 · 20146 Hamburg</div>
+
+<!-- Empfänger -->
+<div class="doc-recipient">
+  Anja Dumm<br>
+  Produktionsleitung<br>
+  Riverside Entertainment GmbH &amp; AlwaysOn Production GmbH<br>
+  Jenfelder Allee 80 | Haus R, 2.OG Raum 211<br>
+  22045 Hamburg
+</div>
+
+<!-- Meta-Zeile -->
+<div class="doc-meta-row">
+  <div class="doc-meta-item">
+    <span class="doc-meta-label">Rechnungsnr.</span>
+    <span class="doc-meta-value">2026NL01</span>
+  </div>
+  <div class="doc-meta-item">
+    <span class="doc-meta-label">Datum</span>
+    <span class="doc-meta-value">17.07.2026</span>
+  </div>
+  <div class="doc-meta-item">
+    <span class="doc-meta-label">Leistungsbeginn</span>
+    <span class="doc-meta-value">14.07.2026</span>
+  </div>
+</div>
+
+<!-- Betreff -->
+<div class="doc-subject">Rechnung 2026NL01 — NDR Newsletter Intelligence Pipeline</div>
+<div class="doc-subject-bar"></div>
+
+<!-- Body -->
+<div class="doc-body">
+  <p>Sehr geehrte Frau Dumm,</p>
+  <p>wir stellen Ihnen die vereinbarten Leistungen zum Projekt NDR Newsletter Intelligence Pipeline in Rechnung. Bezug: Angebot Nr. 2026NL01 vom 27.05.2026.</p>
+
+  <h2>Leistungsübersicht</h2>
+  <table class="doc-table">
+    <thead>
+      <tr>
+        <th>Leistung</th>
+        <th>Beschreibung</th>
+        <th class="right">Betrag</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Setup-Leistung (einmalig)</td>
+        <td>Spezifikation, Planung &amp; Umsetzung der Automationslogik</td>
+        <td class="right">3.250,00 €</td>
+      </tr>
+      <tr>
+        <td>Laufende Leistung (Jahr&nbsp;1)</td>
+        <td>4 Newsletter-Instanzen à 650,00 €/Jahr, Leistungsbeginn 14.07.2026</td>
+        <td class="right">2.600,00 €</td>
+      </tr>
+      <tr class="subtotal">
+        <td colspan="2">Nettobetrag</td>
+        <td class="right">5.850,00 €</td>
+      </tr>
+      <tr class="subtotal">
+        <td colspan="2">MwSt. 19 %</td>
+        <td class="right">1.111,50 €</td>
+      </tr>
+      <tr class="total">
+        <td colspan="2">Gesamtbetrag</td>
+        <td class="right">6.961,50 €</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="doc-infobox">
+    <p>Abgerechnet werden 4 von 4 aktuell beauftragten Newsletter-Instanzen. Die im Angebot genannte Mindestabnahme von 5 Instanzen wird auf Wunsch des Auftraggebers vorerst unterschritten. Weitere Instanzen folgen zu einem späteren Zeitpunkt.</p>
+  </div>
+
+  <p>Zahlungsziel: 14 Tage netto ab Rechnungsdatum. Bitte geben Sie bei der Überweisung die Rechnungsnummer 2026NL01 im Verwendungszweck an.</p>
+</div>
+
+<!-- Signatur -->
+<div class="doc-signature">
+  <div class="doc-signature-greeting"><p>Mit freundlichen Grüßen</p></div>
+  <div class="doc-signature-name">Alex Blancke</div>
+  <div class="doc-signature-role">AI Development, Agents &amp; Prompt Engineering</div>
+  <div class="doc-signature-contact">
+    alex.blancke@steadymade.ai<br>
+    steadymade.ai
+  </div>
+</div>
+
+<!-- Fuß-Block: Bankverbindung + Steuerdaten -->
+<div class="doc-footer-block">
+  <div class="doc-footer-col">
+    <span class="doc-footer-label">Bankverbindung</span>
+    Hamburger Sparkasse<br>
+    IBAN: DE56 2005 0550 1228 4983 98<br>
+    BIC: HASPDEHHXXX
+  </div>
+  <div class="doc-footer-col">
+    <span class="doc-footer-label">Steuerliche Angaben</span>
+    Steuernummer: 42 022 06463<br>
+    USt-ID: DE406095239
+  </div>
+</div>
+
+<!-- Footer -->
+<div class="doc-footer">
+  <span>steadymade.ai · Alex Blancke · Bundesstr 11 · 20146 Hamburg · alex.blancke@steadymade.ai</span>
+</div>
+
+</body>
+</html>

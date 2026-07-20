@@ -4,6 +4,7 @@ export const PROJECT_STATUSES = new Set(['active', 'paused', 'archived']);
 export const PROJECT_VISIBILITIES = new Set(['private', 'team']);
 export const TASK_STATUSES = new Set(['backlog', 'todo', 'in_progress', 'needs_review', 'blocked', 'done']);
 export const PRIORITIES = new Set(['low', 'medium', 'high']);
+export const WORK_TYPES = new Set(['feature', 'bug', 'tech_debt', 'spike']);
 export const ASSIGNEE_TYPES = new Set(['human', 'agent', 'unassigned']);
 export const REVIEW_STATES = new Set(['none', 'needs_review', 'approved', 'changes_requested']);
 export const REVIEW_DECISIONS = new Set([null, 'approve', 'request_changes']);
@@ -26,6 +27,14 @@ export const PATCH_OPS = new Set([
   'set_blocked',
   'set_linked_paths',
   'set_linked_runs',
+  'set_work_type',
+  'set_component_tags',
+  'set_sprint',
+  'set_story_points',
+  'set_completion_percent',
+  'set_dependencies',
+  'set_external_links',
+  'set_custom_fields',
 ]);
 
 export const TASK_STATUS_TRANSITIONS = {
@@ -61,4 +70,16 @@ export const LIMITS = {
   linkedRunsMax: 30,
   reviewersMax: 10,
   retriesMax: 3,
+  componentTagsMax: 10,
+  componentTagMaxLength: 40,
+  sprintMax: 80,
+  storyPointsMin: 0,
+  storyPointsMax: 100,
+  completionPercentMin: 0,
+  completionPercentMax: 100,
+  dependenciesMax: 20,
+  externalLinksMax: 20,
+  externalLinkLabelMax: 80,
+  customFieldsMax: 30,
+  customFieldKeyMax: 60,
 };
