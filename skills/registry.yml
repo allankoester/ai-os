@@ -102,6 +102,14 @@ skills:
     allowed_agents: [danny, mara]
     approval_required: false
 
+  project-board-operations:
+    owner: alex
+    scope: company
+    status: active
+    purpose: Sichere Lese-/Pflege-Operationen fuer interne Projects-UI / project-board-Daten (Read-before-Write, Versionierung, Review-Autoritaet).
+    allowed_agents: [danny, paula]
+    approval_required: false
+
   promote-knowledge:
     owner: alex
     scope: company
