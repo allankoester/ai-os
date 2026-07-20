@@ -14,6 +14,8 @@ import { createKnowledgeConfig } from './storage/config.mjs';
 import { createFsKnowledgeStorage } from './storage/fs-storage.mjs';
 import { createGraphKnowledgeStorage } from './storage/graph-storage.mjs';
 import { createScheduler, resolveClaudeBin } from './scheduler.mjs';
+import mammoth from 'mammoth';
+import TurndownService from 'turndown';
 import {
   buildAppSettingsStatus,
   deriveUserTypePolicy,
@@ -1542,6 +1544,23 @@ async function handleApi(req, res, url) {
     if (!abs || !abs.endsWith('.md') || !fs.existsSync(abs)) return send(404, { error: 'not found' });
     await fsp.unlink(abs);
     return send(200, { ok: true });
+  }
+
+  if (url.pathname === '/api/convert-docx' && req.method === 'POST') {
+    // 20MB base64 budget (~15MB raw .docx) — generous for text documents with a few images.
+    const body = await readBody(req, { maxBytes: 20 * 1024 * 1024 });
+    if (!body.dataBase64) return send(400, { error: 'dataBase64 is required' });
+    let buffer;
+    try { buffer = Buffer.from(body.dataBase64, 'base64'); }
+    catch { return send(400, { error: 'invalid base64 payload' }); }
+    try {
+      const { value: html, messages } = await mammoth.convertToHtml({ buffer });
+      const markdown = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' }).turndown(html);
+      const warnings = messages.filter((m) => m.type === 'warning').map((m) => m.message);
+      return send(200, { markdown, warnings });
+    } catch (err) {
+      return send(422, { error: 'docx conversion failed: ' + err.message });
+    }
   }
 
   // ---------- workflows (edit / delete stored as overrides on the base model) ----------

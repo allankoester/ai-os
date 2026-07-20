@@ -1553,7 +1553,7 @@ function paintKnDocs() {
       </button>`).join('') : `<div class="stat-note" style="padding:0 12px">${folder ? (state.kn.filter === 'review-needed' ? 'No review-needed docs in this folder.' : 'Empty folder.') : 'No documents at this level - open a subfolder.'}</div>`) +
       (showNewDoc ? `<div class="kn-dropzone" id="kn-dropzone">
         <svg class="kn-dropzone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 4v11m0 0l-4-4m4 4l4-4" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 17v2a2 2 0 002 2h10a2 2 0 002-2v-2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        Drop a .md file here to add it to ${esc(headerLabel)}
+        Drop a .md or .docx file here to add it to ${esc(headerLabel)}
       </div>` : '');
     $('[data-new-doc]', el)?.addEventListener('click', () => openNewDocDrawer(state.kn.folder));
     $$('.kn-doc-btn[data-path]', el).forEach((b) => b.addEventListener('click', () => loadDoc(b.dataset.path)));
@@ -1576,21 +1576,48 @@ function bindKnDropzone(zone, folder) {
   });
 }
 
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+    reader.onerror = () => reject(new Error('could not read file'));
+    reader.readAsDataURL(file);
+  });
+}
+
 async function handleDroppedFile(file, folder) {
-  if (!/\.md$/i.test(file.name)) {
-    toast('ONLY .MD FILES CAN BE DROPPED HERE: ' + file.name.toUpperCase(), true);
+  const isMd = /\.md$/i.test(file.name);
+  const isDocx = /\.docx$/i.test(file.name);
+  if (!isMd && !isDocx) {
+    toast('ONLY .MD OR .DOCX FILES CAN BE DROPPED HERE: ' + file.name.toUpperCase(), true);
     return;
   }
-  const relPath = `knowledge/${folder}/${file.name}`;
+  const targetName = isDocx ? file.name.replace(/\.docx$/i, '.md') : file.name;
+  const relPath = `knowledge/${folder}/${targetName}`;
   const existing = findDocEntry(relPath);
-  if (existing && !confirm(`"${file.name}" already exists in ${folder}. Overwrite it?`)) return;
+  if (existing && !confirm(`"${targetName}" already exists in ${folder}. Overwrite it?`)) return;
   try {
-    const content = await file.text();
+    let content;
+    if (isDocx) {
+      toast('CONVERTING ' + file.name.toUpperCase() + '…');
+      const dataBase64 = await fileToBase64(file);
+      const res = await fetch('/api/convert-docx', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dataBase64 }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
+      content = data.markdown;
+      if (data.warnings?.length) console.warn('docx conversion warnings for ' + file.name, data.warnings);
+    } else {
+      content = await file.text();
+    }
     await putFileGuarded(relPath, content);
     try { state.system = await apiJson('/api/system'); } catch { /* keep stale model */ }
     paintKnFolders();
     paintKnDocs();
-    toast((existing ? 'REPLACED ' : 'ADDED ') + file.name.toUpperCase());
+    toast((existing ? 'REPLACED ' : 'ADDED ') + targetName.toUpperCase() + (isDocx ? ' (CONVERTED FROM DOCX)' : ''));
   } catch (e) {
     if (!/cancelled/.test(e.message)) toast(e.message.toUpperCase(), true);
   }
