@@ -1515,6 +1515,35 @@ async function handleApi(req, res, url) {
     return send(200, { ok: true, mtime: (await fsp.stat(abs)).mtimeMs });
   }
 
+  if (url.pathname === '/api/file' && req.method === 'DELETE') {
+    const rel = url.searchParams.get('path') || '';
+    const deleteGate = guardrails.check(rel, 'write');
+    if (!deleteGate.allowed) return send(403, { error: deleteGate.reason });
+    if (deleteGate.confirmRequired && url.searchParams.get('confirmed') !== 'true') {
+      return send(409, { confirmRequired: true, folder: deleteGate.folder, error: `guardrail: ${deleteGate.folder} is set to "ask" — confirm the delete` });
+    }
+    if (isPersonalKnowledgePath(rel)) {
+      const abs = resolvePersonalKnowledgePath(activePersonalKnowledgeRoot, rel);
+      if (!abs || !abs.endsWith('.md') || !fs.existsSync(abs)) return send(404, { error: 'not found' });
+      await fsp.unlink(abs);
+      return send(200, { ok: true });
+    }
+    if (isKnowledgePath(rel)) {
+      try {
+        return send(200, await knowledgeStorage.deleteFile(rel));
+      } catch (err) {
+        if (err.code === 'NOT_FOUND') return send(404, { error: 'not found' });
+        if (err.status) return send(err.status, { error: err.message });
+        throw err;
+      }
+    }
+
+    const abs = safeResolve(rel);
+    if (!abs || !abs.endsWith('.md') || !fs.existsSync(abs)) return send(404, { error: 'not found' });
+    await fsp.unlink(abs);
+    return send(200, { ok: true });
+  }
+
   // ---------- workflows (edit / delete stored as overrides on the base model) ----------
 
   if (url.pathname === '/api/workflows' && req.method === 'GET') {

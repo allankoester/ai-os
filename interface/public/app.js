@@ -1615,6 +1615,7 @@ function paintKnEditor() {
           <span class="save-state ${dirty ? 'dirty' : ''}" id="save-state">${dirty ? 'UNSAVED CHANGES' : 'SAVED · ' + timeAgo(entry.mtime).toUpperCase()}</span>
           <button class="btn btn-small" id="btn-mode">${state.kn.mode === 'edit' ? 'Preview' : 'Edit'}</button>
           <button class="btn btn-green btn-small" id="btn-save">Save</button>
+          <button class="btn btn-ghost btn-small" id="btn-delete-doc" style="color:var(--apricot-deep)">Delete</button>
         </div>
       </div>
       <div class="kn-meta-controls">
@@ -1642,6 +1643,23 @@ function paintKnEditor() {
     paintKnEditor();
   });
   $('#btn-save').addEventListener('click', saveDoc);
+  $('#btn-delete-doc').addEventListener('click', async () => {
+    if (!confirm(`Delete "${entry.title}"?\n\n${state.kn.doc}\n\nThis removes the file from disk. This cannot be undone.`)) return;
+    const deletedPath = state.kn.doc;
+    try {
+      await deleteFileGuarded(deletedPath);
+      state.kn.doc = null;
+      state.kn.content = '';
+      state.kn.savedContent = '';
+      try { state.system = await apiJson('/api/system'); } catch { /* keep stale model */ }
+      paintKnFolders();
+      paintKnDocs();
+      paintKnEditor();
+      toast('DELETED ' + deletedPath.split('/').pop().toUpperCase());
+    } catch (e) {
+      if (!/cancelled/.test(e.message)) toast(e.message.toUpperCase(), true);
+    }
+  });
   const ta = $('#kn-text');
   if (ta) ta.addEventListener('input', () => {
     state.kn.content = ta.value;
@@ -1687,6 +1705,27 @@ async function putFileGuarded(path, content) {
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw new Error(data.error || (data.errors && data.errors.join('; ')) || 'HTTP ' + res.status);
+  }
+  return res.json();
+}
+
+// DELETE a markdown file with guardrail awareness: a 409 confirmRequired response
+// means the folder is set to "ask" — the user confirms, then we resend.
+async function deleteFileGuarded(path) {
+  const doDelete = (confirmed) => fetch(`/api/file?path=${encodeURIComponent(path)}${confirmed ? '&confirmed=true' : ''}`, { method: 'DELETE' });
+  let res = await doDelete(false);
+  if (res.status === 409) {
+    const data = await res.json().catch(() => ({}));
+    if (data.confirmRequired) {
+      if (!confirm(`Guardrail: "${data.folder}" is set to ASK.\n\nDelete ${path}?`)) {
+        throw new Error('delete cancelled (guardrail)');
+      }
+      res = await doDelete(true);
+    }
+  }
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || 'HTTP ' + res.status);
   }
   return res.json();
 }

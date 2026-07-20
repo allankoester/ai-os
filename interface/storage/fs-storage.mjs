@@ -144,6 +144,15 @@ export function createFsKnowledgeStorage({ root }) {
       await fsp.writeFile(absPath, content, 'utf8');
       return { ok: true, mtime: (await fsp.stat(absPath)).mtimeMs };
     },
+    async deleteFile(relPath) {
+      const subpath = getKnowledgeSubpath(relPath);
+      const absPath = resolveInsideRoot(root, subpath);
+      if (!fs.existsSync(absPath)) {
+        throw createError('NOT_FOUND', `knowledge file not found: ${relPath}`, 404);
+      }
+      await fsp.unlink(absPath);
+      return { ok: true };
+    },
     async listArtifacts() {
       if (!fs.existsSync(root)) {
         throw createError('CONFIG_ERROR', `knowledge root not found: ${root}`, 500);

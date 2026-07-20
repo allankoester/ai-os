@@ -259,6 +259,17 @@ export function createGraphKnowledgeStorage({ config }) {
     };
   }
 
+  async function deleteFile(relPath) {
+    const subpath = toKnowledgeSubpath(relPath);
+    const absolutePath = buildGraphAbsolutePath(config.knowledgeRoot, subpath);
+    const metadata = await getItemByAbsolutePath(absolutePath, { allowNotFound: true });
+    if (!metadata) {
+      throw createError('NOT_FOUND', `knowledge file not found: ${relPath}`, 404);
+    }
+    await graphRequest('DELETE', `/drives/${encodeURIComponent(config.driveId)}/items/${encodeURIComponent(metadata.id)}`, {});
+    return { ok: true };
+  }
+
   return {
     kind: 'graph',
     root: config.knowledgeRoot,
@@ -268,5 +279,6 @@ export function createGraphKnowledgeStorage({ config }) {
     },
     readFile,
     writeFile,
+    deleteFile,
   };
 }
