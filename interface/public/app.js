@@ -64,8 +64,10 @@ const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').
 
 const VIEW_TITLES = {
   chat: 'Chat',
+  desk: 'My Desk',
   command: 'Command Center',
   projects: 'Projects',
+  activities: 'Activities',
   map: 'Agent Map',
   knowledge: 'Knowledge Docs',
   flows: 'Automations',
@@ -74,6 +76,7 @@ const VIEW_TITLES = {
   skills: 'Skill Hub',
   departments: 'Departments',
   artifacts: 'Artifacts',
+  workspaces: 'Workspaces',
   settings: 'Settings',
 };
 
@@ -335,6 +338,10 @@ function setView(view) {
   // Workflows and the Scheduler are fused into one "Automations" view; keep the
   // old view keys working for existing links (search, command center, etc.).
   if (view === 'workflows' || view === 'scheduler') view = 'flows';
+  if (view === 'activities') {
+    projectState.mode = 'activities';
+    view = 'projects';
+  }
   state.view = view;
   state.selectedAgent = state.selectedFolder = null;
   if (mapState.observer && view !== 'map') { mapState.observer.disconnect(); mapState.observer = null; }
@@ -358,7 +365,7 @@ function setView(view) {
 
   el.className = 'view view-enter';
   el.innerHTML = '';
-  ({ command: renderCommand, projects: renderProjects, map: renderMap, knowledge: renderKnowledge,
+  ({ desk: renderDesk, command: renderCommand, projects: renderProjects, activities: renderActivities, workspaces: renderWorkspaces, map: renderMap, knowledge: renderKnowledge,
      flows: renderFlows, skills: renderSkills,
       departments: renderDepartments,
        artifacts: renderArtifacts, settings: renderSettings }[view])(el);
@@ -4934,6 +4941,14 @@ const TASK_STATUS_OPTIONS = ['backlog', 'todo', 'in_progress', 'needs_review', '
 const PROJECT_STATUS_OPTIONS = ['active', 'paused', 'archived'];
 const PRIORITY_OPTIONS = ['low', 'medium', 'high'];
 
+
+const deskState = {
+  el: null,
+  loading: false,
+  filter: 'focus',
+  query: '',
+};
+
 const projectState = {
   el: null,
   loading: false,
@@ -5027,6 +5042,7 @@ function normalizeMetadata(raw) {
     },
     visibilityOptions: Array.isArray(raw?.visibility_options) ? raw.visibility_options : ['private', 'team'],
     transitions: raw?.task_status_transitions || {},
+    supportedOps: raw?.operations?.tasks || null,
   };
 }
 
@@ -5443,13 +5459,16 @@ function openTaskCreateDrawer(projectId, { prefill = null } = {}) {
     </div>
     <div class="drawer-body">
       ${prefill?.conversationId ? `<div class="stat-note" style="margin-bottom:8px">From chat conversation ${esc(prefill.conversationId.slice(0, 10))}…</div>` : ''}
-      <div class="drawer-grid-2">
-        <div class="form-field"><label>Project</label>
-          <select id="task-new-project">${projectState.projects.map((p) => `<option value="${esc(p.id)}" ${p.id === selectedProjectId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
-        </div>
-        <div class="form-field"><label>Workflow</label>
-          <select id="task-new-workflow"><option value="">(none)</option>${meta.workflows.map((w) => `<option value="${esc(w)}">${esc(w)}</option>`).join('')}</select>
-        </div>
+      <div class="form-field"><label>Location</label>
+        <select id="task-new-location">
+          <option value="inbox" ${!selectedProjectId ? 'selected' : ''}>Inbox</option>
+          <optgroup label="Projects">
+            ${projectState.projects.map(p => `<option value="project:${esc(p.id)}" ${p.id === selectedProjectId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
+          </optgroup>
+          <optgroup label="Activities">
+            ${projectState.activity.map(a => `<option value="activity:${esc(a.id)}">${esc(a.name)}</option>`).join('')}
+          </optgroup>
+        </select>
       </div>
       <div class="form-field"><label>Title</label><input id="task-new-title" value="${esc(prefill?.title || '')}" placeholder="Task title"></div>
       <div class="form-field"><label>Description</label><textarea id="task-new-desc" rows="6">${esc(prefill?.description || '')}</textarea></div>
@@ -5509,9 +5528,14 @@ function openTaskCreateDrawer(projectId, { prefill = null } = {}) {
   paintAssignee();
   $('#task-new-save', drawer)?.addEventListener('click', async () => {
     const title = $('#task-new-title', drawer)?.value.trim();
-    const pid = $('#task-new-project', drawer)?.value;
-    if (!pid) return toast('PROJECT IS REQUIRED', true);
     if (!title) return toast('TASK TITLE IS REQUIRED', true);
+    
+    const loc = $('#task-new-location', drawer)?.value || 'inbox';
+    let pid = null;
+    let actId = null;
+    if (loc.startsWith('project:')) pid = loc.slice(8);
+    else if (loc.startsWith('activity:')) actId = loc.slice(9);
+    
     const type = $('#task-new-assignee-type', drawer)?.value || 'agent';
     let assigneeId = null;
     let humanAssigneeLabel = null;
@@ -5540,34 +5564,39 @@ function openTaskCreateDrawer(projectId, { prefill = null } = {}) {
     }
 
     try {
-      const task = await boardApi('/api/tasks', {
-        method: 'POST',
-        body: {
-          project_id: pid,
-          title,
-          description: $('#task-new-desc', drawer)?.value.trim() || '',
-          workflow_id: $('#task-new-workflow', drawer)?.value || null,
-          status: $('#task-new-status', drawer)?.value || 'todo',
-          priority: $('#task-new-priority', drawer)?.value || 'medium',
-          assignee_type: type,
-          assignee_id: type === 'unassigned' ? null : assigneeId,
-          human_assignee_label: type === 'human' ? humanAssigneeLabel : null,
-          work_type: normalizeWorkType($('#task-new-work-type', drawer)?.value),
-          sprint: $('#task-new-sprint', drawer)?.value.trim() || null,
-          story_points: $('#task-new-points', drawer)?.value ? Number($('#task-new-points', drawer).value) : null,
-          completion_percent: normalizeCompletionPercent($('#task-new-completion', drawer)?.value, 0),
-          due_at: dateToLocalEndISO($('#task-new-due', drawer)?.value),
-          component_tags: tags,
-          dependencies: deps,
-          external_links: links,
-          custom_fields: customFields,
-        },
-      });
+      const payload = {
+        title,
+        description: $('#task-new-desc', drawer)?.value.trim() || '',
+        status: $('#task-new-status', drawer)?.value || 'todo',
+        priority: $('#task-new-priority', drawer)?.value || 'medium',
+        work_type: normalizeWorkType($('#task-new-work-type', drawer)?.value),
+        sprint: $('#task-new-sprint', drawer)?.value.trim() || null,
+        story_points: $('#task-new-points', drawer)?.value ? Number($('#task-new-points', drawer).value) : null,
+        completion_percent: normalizeCompletionPercent($('#task-new-completion', drawer)?.value, 0),
+        due_at: $('#task-new-due', drawer)?.value ? dateToLocalEndISO($('#task-new-due', drawer).value) : null,
+        component_tags: tags,
+        dependencies: deps,
+        external_links: links,
+        custom_fields: customFields,
+        assignee_type: type,
+        assignee_id: assigneeId,
+        human_assignee_label: humanAssigneeLabel,
+      };
+      if (pid) payload.project_id = pid;
+      if (actId) payload.activity_id = actId;
+      
+      const created = await boardApi('/api/tasks', { method: 'POST', body: payload });
+      const idx = projectState.tasks.findIndex(t => t.id === created.id);
+      if (idx !== -1) projectState.tasks[idx] = created;
+      else projectState.tasks.push(created);
+      
       closeDrawer();
       toast('TASK CREATED');
-      applyTaskToState(task);
-      refreshProjectsView();
-    } catch (e) { toast((e.message || 'CREATE FAILED').toUpperCase(), true); }
+      if (state.view === 'projects') refreshProjectsView();
+      if (state.view === 'desk') renderDesk($('#view'));
+    } catch (e) {
+      toast((e.message || 'CREATE FAILED').toUpperCase(), true);
+    }
   });
 }
 
@@ -5710,9 +5739,22 @@ function openTaskDrawer(taskId) {
       <button class="drawer-close">✕</button>
       <div class="drawer-dept">TASK</div>
       <div class="drawer-name">Edit Task</div>
-      <div class="drawer-role">${esc(project?.name || task.project_id)}</div>
+      <div class="drawer-role">
+        ${task.project_id ? `Project: ${esc(project?.name || task.project_id)}` : (task.activity_id ? `Activity: ${esc(projectState.activity.find(a => a.id === task.activity_id)?.name || task.activity_id)}` : 'Inbox')}
+      </div>
     </div>
     <div class="drawer-body">
+      <div class="form-field"><label>Location</label>
+    <select id="task-edit-location">
+      <option value="inbox" ${!task.project_id && !task.activity_id ? 'selected' : ''}>Inbox</option>
+      <optgroup label="Projects">
+        ${projectState.projects.map(p => `<option value="project:${esc(p.id)}" ${task.project_id === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
+      </optgroup>
+      <optgroup label="Activities">
+        ${projectState.activity.map(a => `<option value="activity:${esc(a.id)}" ${task.activity_id === a.id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}
+      </optgroup>
+    </select>
+  </div>
       <div class="form-field"><label>Title</label><input id="task-edit-title" value="${esc(task.title)}" placeholder="Task title"></div>
       <div class="form-field"><label>Instruction</label><textarea id="task-edit-desc" rows="4">${esc(task.description || '')}</textarea></div>
       
@@ -5826,6 +5868,22 @@ function openTaskDrawer(taskId) {
     const s = $('#task-edit-status', drawer)?.value;
     const p = $('#task-edit-priority', drawer)?.value;
     const w = $('#task-edit-workflow', drawer)?.value || null;
+    const loc = $('#task-edit-location', drawer)?.value || 'inbox';
+    let pId = null;
+    let actId = null;
+        if (loc === 'inbox') {
+      if (task.project_id) ops.push({ op: 'set_project_id', value: null });
+      if (task.activity_id) ops.push({ op: 'set_activity_id', value: null });
+    } else if (loc.startsWith('project:')) {
+      const pid = loc.slice(8);
+      if (task.project_id !== pid) ops.push({ op: 'set_project_id', value: pid });
+      if (task.activity_id) ops.push({ op: 'set_activity_id', value: null });
+    } else if (loc.startsWith('activity:')) {
+      const aid = loc.slice(9);
+      if (task.activity_id !== aid) ops.push({ op: 'set_activity_id', value: aid });
+      if (task.project_id) ops.push({ op: 'set_project_id', value: null });
+    }
+    
     const aType = typeEl?.value;
     let aId = null;
     let hLabel = null;
@@ -5974,6 +6032,43 @@ function paintProjects() {
   const isOverview = projectState.activeTab === 'overview';
   const isList = projectState.activeTab === 'list';
   const isBoard = projectState.activeTab === 'board';
+
+  if (projectState.mode === 'activities') {
+    const actHtml = `
+      <div style="padding:16px;max-width:1200px;margin:0 auto;width:100%;">
+        <div style="display:flex;align-items:center;margin-bottom:16px;">
+          <div class="filter-tabs" style="margin-right:16px">
+            <button class="filter-tab" data-pj-mode="projects">Projects</button>
+            <button class="filter-tab active" data-pj-mode="activities">Activities</button>
+          </div>
+          <button class="btn btn-primary btn-small" id="act-btn-new">New Activity</button>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          ${projectState.activity && projectState.activity.length ? projectState.activity.map(a => `
+            <div class="card" style="display:flex;justify-content:space-between;align-items:center;">
+              <div>
+                <div class="list-title">${esc(a.name || a.title || 'Unnamed')}</div>
+                ${a.description ? `<div class="list-meta" style="margin-top:4px">${esc(a.description)}</div>` : ''}
+              </div>
+              <button class="btn btn-ghost btn-small" data-act-edit="${esc(a.id)}">Edit</button>
+            </div>
+          `).join('') : '<div class="stat-note">No activities found.</div>'}
+        </div>
+      </div>
+    `;
+    el.innerHTML = actHtml;
+    
+    $$('[data-pj-mode]', el).forEach(b => b.addEventListener('click', () => {
+      projectState.mode = b.dataset.pjMode;
+      paintProjects();
+    }));
+    $('#act-btn-new', el)?.addEventListener('click', () => openActivityCreateDrawer());
+    $$('[data-act-edit]', el).forEach(b => b.addEventListener('click', () => {
+      const a = projectState.activity.find(x => x.id === b.dataset.actEdit);
+      if (a) openActivityEditDrawer(a);
+    }));
+    return;
+  }
 
   const qProject = projectState.projectQuery.toLowerCase();
   const qTask = projectState.taskQuery.toLowerCase();
@@ -6134,9 +6229,14 @@ function paintProjects() {
     <div class="projects-layout ${!projectState.showSidebar ? 'no-sidebar' : ''}">
       ${projectState.showSidebar ? `
       <div class="pj-sidebar">
-        <div class="pj-sidebar-header">
-          <div class="section-title" style="margin:0">Projects</div>
-          <button class="btn btn-primary btn-small" data-pj-new-project>New</button>
+        <div class="pj-sidebar-header" style="flex-direction:column;align-items:flex-start;gap:12px;">
+          <div style="display:flex;width:100%;justify-content:space-between;align-items:center;">
+            <div class="filter-tabs">
+              <button class="filter-tab active" data-pj-mode="projects">Projects</button>
+              <button class="filter-tab" data-pj-mode="activities">Activities</button>
+            </div>
+            <button class="btn btn-primary btn-small" data-pj-new-project>New</button>
+          </div>
         </div>
         <div class="pj-sidebar-search">
           <input id="pj-project-q" class="filter-input" style="width:100%;" placeholder="Search projects…" value="${esc(projectState.projectQuery)}">
@@ -6346,6 +6446,10 @@ function paintProjects() {
   }
 
   $('[data-pj-toggle-sidebar]', el)?.addEventListener('click', () => { projectState.showSidebar = !projectState.showSidebar; savePjPrefs(); paintProjects(); });
+  $$('[data-pj-mode]', el).forEach(b => b.addEventListener('click', () => {
+    projectState.mode = b.dataset.pjMode;
+    paintProjects();
+  }));
   $('[data-pj-toggle-filters]', el)?.addEventListener('click', () => { projectState.showFilters = !projectState.showFilters; paintProjects(); });
   $$('[data-pj-tab]', el).forEach((b) => b.addEventListener('click', () => { projectState.activeTab = b.dataset.pjTab; paintProjects(); }));
   
@@ -6545,4 +6649,524 @@ function renderChat() {
 
 // ---------------------------------------------------------------- go
 
+async function renderDesk(el) {
+  el.innerHTML = `<div class="desk-shell"><div class="desk-header"><div class="section-title">My Desk</div></div><div class="stat-note">Loading tasks…</div></div>`;
+  try {
+    const [tasksData, projectsData, activitiesData] = await Promise.all([
+      fetchBoardListAll('/api/tasks').catch(() => []),
+      projectState.projects.length ? Promise.resolve(projectState.projects) : fetchBoardListAll('/api/projects', { limit: 200 }).catch(() => []),
+      projectState.activity.length ? Promise.resolve(projectState.activity) : fetchBoardListAll('/api/activities', { limit: 200 }).catch(() => [])
+    ]);
+    if (projectsData && projectsData.length && !projectState.projects.length) projectState.projects = projectsData;
+    if (activitiesData && activitiesData.length && !projectState.activity.length) projectState.activity = activitiesData;
+    
+    const allTasks = Array.isArray(tasksData) ? tasksData : (tasksData.items || tasksData.tasks || []);
+    
+    const existingIds = new Set(projectState.tasks.map(t => t.id));
+    for (const t of allTasks) {
+      if (!existingIds.has(t.id)) projectState.tasks.push(t);
+    }
+    
+    const uid = state.system?.user?.id || 'allan'; 
+    const myTasks = allTasks.filter(t => t.assignee_id === uid || (t.review?.required && t.review?.state === 'needs_review') || (!t.project_id && !t.activity_id && !t.assignee_id));
+    
+    const now = new Date();
+    
+    let inboxTasks = [];
+    let todayTasks = [];
+    let overdueTasks = [];
+    let waitingTasks = [];
+    let completedTasks = [];
+    let upcomingTasks = [];
+    let importantTasks = [];
+    let totalOpen = 0;
+    
+    for (const t of myTasks) {
+      const isDone = ['done', 'completed', 'delivered'].includes(t.status);
+      if (isDone) completedTasks.push(t);
+      else totalOpen++;
+      
+      if (!t.project_id && !t.activity_id) inboxTasks.push(t);
+      if (t.priority === 'high' || t.priority === 'urgent') importantTasks.push(t);
+      
+      if (t.status === 'blocked' || (t.review?.required && t.review?.state === 'needs_review')) {
+        waitingTasks.push(t);
+      }
+      
+      if (t.due_at && !isDone) {
+        const d = new Date(t.due_at);
+        const diff = (d - now) / (1000 * 60 * 60 * 24);
+        if (diff < 0) overdueTasks.push(t);
+        else if (diff <= 1) todayTasks.push(t);
+        else upcomingTasks.push(t);
+      }
+    }
+    
+    const ratioCompleted = completedTasks.length;
+    const totalAll = completedTasks.length + totalOpen;
+    const ratioPercent = totalAll > 0 ? Math.round((ratioCompleted / totalAll) * 100) : 0;
+    
+    state.deskFilter = state.deskFilter || 'focus';
+    
+    const renderFilter = (id, label) => `
+      <button class="desk-filter-chip ${state.deskFilter === id ? 'active' : ''}" data-desk-filter="${id}">${label}</button>
+    `;
+    
+    let displayTasks = [];
+    if (state.deskFilter === 'focus') {
+      displayTasks = [...overdueTasks, ...todayTasks, ...importantTasks.filter(t => !['done','completed','delivered'].includes(t.status))];
+      // deduplicate
+      displayTasks = Array.from(new Map(displayTasks.map(t => [t.id, t])).values());
+    } else if (state.deskFilter === 'inbox') displayTasks = inboxTasks;
+    else if (state.deskFilter === 'today') displayTasks = todayTasks;
+    else if (state.deskFilter === 'upcoming') displayTasks = upcomingTasks;
+    else if (state.deskFilter === 'important') displayTasks = importantTasks;
+    else if (state.deskFilter === 'waiting') displayTasks = waitingTasks;
+    else if (state.deskFilter === 'completed') displayTasks = completedTasks;
+    
+    const qDesk = (state.deskSearch || '').toLowerCase();
+    if (qDesk) {
+      displayTasks = displayTasks.filter(t => (t.title + ' ' + (t.description || '')).toLowerCase().includes(qDesk));
+    }
+    
+    const renderGroup = (title, arr) => {
+      if (!arr.length) return '';
+      return `
+        <div class="desk-group">
+          <div class="desk-group-header">
+            ${title} <span class="desk-group-count">(${arr.length})</span>
+          </div>
+          <div class="desk-task-list">
+            ${arr.map(t => {
+              let ctx = 'Inbox';
+              if (t.project_id) {
+                const p = projectState.projects.find(p => p.id === t.project_id);
+                ctx = p ? p.name : `Project ${t.project_id}`;
+              } else if (t.activity_id) {
+                const a = projectState.activity.find(a => a.id === t.activity_id);
+                ctx = a ? a.name : `Activity ${t.activity_id}`;
+              }
+              const isDone = ['done', 'completed', 'delivered'].includes(t.status);
+              const isOverdue = t.due_at && Date.parse(t.due_at) < Date.now() && !isDone;
+              
+              return `
+              <div class="desk-task-row ${isDone ? 'is-completed' : ''}" tabindex="0" role="button" data-desk-task-id="${esc(t.id)}">
+                <input type="checkbox" aria-label="Mark task ${isDone ? 'incomplete' : 'complete'}" class="desk-task-checkbox" ${isDone ? 'checked' : ''} tabindex="-1">
+                <div class="desk-task-content">
+                  <div class="desk-task-title" title="${esc(t.title)}">${esc(t.title)}</div>
+                  <div class="desk-task-meta">
+                    <span class="desk-task-status">${esc(statusLabel(t.status || 'todo'))}</span>
+                    <span class="desk-task-context">${esc(ctx)}</span>
+                    ${t.due_at ? `<span class="desk-task-due ${isOverdue ? 'overdue' : ''} ${!isOverdue && !isDone ? 'upcoming' : ''}">${esc(new Date(t.due_at).toLocaleDateString(undefined, {month:'short', day:'numeric'}))}</span>` : ''}
+                  </div>
+                </div>
+              </div>`;
+            }).join('')}
+          </div>
+        </div>
+      `;
+    };
+    
+    el.innerHTML = `
+      <div class="desk-shell">
+        <div class="desk-metrics">
+          <div class="desk-metric-card ratio-card" tabindex="0" role="button" data-desk-metric="completed">
+            <div class="desk-metric-label">Completion</div>
+            <div class="desk-metric-value">${ratioPercent}%</div>
+          </div>
+          <div class="desk-metric-card" tabindex="0" role="button" data-desk-metric="inbox">
+            <div class="desk-metric-label">Inbox</div>
+            <div class="desk-metric-value">${inboxTasks.length}</div>
+          </div>
+          <div class="desk-metric-card" tabindex="0" role="button" data-desk-metric="today">
+            <div class="desk-metric-label">Due Today</div>
+            <div class="desk-metric-value">${todayTasks.length}</div>
+          </div>
+          <div class="desk-metric-card ${overdueTasks.length ? 'warn' : ''}" tabindex="0" role="button" data-desk-metric="focus">
+            <div class="desk-metric-label">Overdue</div>
+            <div class="desk-metric-value">${overdueTasks.length}</div>
+          </div>
+          <div class="desk-metric-card" tabindex="0" role="button" data-desk-metric="waiting">
+            <div class="desk-metric-label">Waiting</div>
+            <div class="desk-metric-value">${waitingTasks.length}</div>
+          </div>
+        </div>
+        
+        <div class="desk-controls">
+          <div class="desk-filters">
+            ${renderFilter('focus', 'Focus')}
+            ${renderFilter('inbox', 'Inbox')}
+            ${renderFilter('today', 'Today')}
+            ${renderFilter('upcoming', 'Upcoming')}
+            ${renderFilter('important', 'Important')}
+            ${renderFilter('waiting', 'Waiting')}
+            ${renderFilter('completed', 'Completed')}
+          </div>
+          
+          <div class="desk-search-bar">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <input id="desk-search" type="text" placeholder="Search tasks..." value="${esc(state.deskSearch || '')}" autocomplete="off" />
+          </div>
+        </div>
+        
+        <div class="desk-quick-capture">
+          <input id="desk-quick-capture" type="text" placeholder="Quick capture inbox task (Press Enter)" />
+          <button id="desk-quick-add" class="btn btn-primary">Add to Inbox</button>
+        </div>
+        
+        ${renderGroup(state.deskFilter === 'focus' ? 'Focus Area' : state.deskFilter.toUpperCase(), displayTasks)}
+        ${!displayTasks.length ? '<div class="stat-note">No tasks in this view.</div>' : ''}
+      </div>
+    `;
+    
+    Array.from(el.querySelectorAll('[data-desk-filter]')).forEach(b => b.addEventListener('click', () => {
+      state.deskFilter = b.dataset.deskFilter;
+      renderDesk(el);
+    }));
+    
+    $$('[data-desk-metric]', el).forEach(card => {
+      const handleMetricClick = (e) => {
+        e.preventDefault();
+        state.deskFilter = card.dataset.deskMetric;
+        renderDesk(el);
+      };
+      card.addEventListener('click', handleMetricClick);
+      card.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          handleMetricClick(e);
+        }
+      });
+    });
+    
+    const searchInput = $('#desk-search', el);
+    searchInput?.addEventListener('input', (e) => {
+      state.deskSearch = e.target.value;
+      // Simple debounce to re-render desk
+      clearTimeout(state.deskSearchTid);
+      state.deskSearchTid = setTimeout(() => renderDesk(el), 300);
+    });
+    
+    const qcap = $('#desk-quick-capture', el);
+    const qadd = $('#desk-quick-add', el);
+    
+    const addQuickTask = async () => {
+      const val = qcap.value.trim();
+      if (!val) return;
+      try {
+        qcap.disabled = true;
+        qadd.disabled = true;
+        await boardApi('/api/tasks', {
+          method: 'POST',
+          body: { title: val, status: 'todo' }
+        });
+        qcap.value = '';
+        toast('ADDED TO INBOX');
+        renderDesk(el);
+      } catch (e) {
+        toast((e.message || 'FAILED TO ADD').toUpperCase(), true);
+      } finally {
+        qcap.disabled = false;
+        qadd.disabled = false;
+        qcap.focus();
+      }
+    };
+    
+    qcap?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        addQuickTask();
+      }
+    });
+    qadd?.addEventListener('click', addQuickTask);
+    
+    $$('[data-desk-task-id]', el).forEach(card => {
+      card.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          openTaskDrawer(card.dataset.deskTaskId);
+        }
+      });
+      card.addEventListener('click', (e) => {
+        if (e.target.classList.contains('desk-task-checkbox')) return;
+        openTaskDrawer(card.dataset.deskTaskId);
+      });
+      
+      const chk = card.querySelector('.desk-task-checkbox');
+      const handleToggle = async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const tId = card.dataset.deskTaskId;
+        const task = allTasks.find(x => x.id === tId);
+        if (!task) return;
+        
+        const isDone = ['done', 'completed', 'delivered'].includes(task.status);
+        const targetStatus = isDone ? 'todo' : 'done'; // default toggle
+        
+        // Optimistic UI
+        chk.checked = !isDone;
+        if (!isDone) {
+          card.classList.add('is-completed');
+        } else {
+          card.classList.remove('is-completed');
+        }
+        
+        try {
+          await boardApi(`/api/tasks/${encodeURIComponent(task.id)}`, {
+            method: 'PATCH',
+            body: { version: task.version, ops: [{ op: 'set_status', value: targetStatus }] }
+          });
+          toast(`TASK MARKED ${targetStatus.toUpperCase()}`);
+          renderDesk(el);
+        } catch (err) {
+          chk.checked = isDone;
+          if (isDone) {
+            card.classList.add('is-completed');
+          } else {
+            card.classList.remove('is-completed');
+          }
+          toast((err.message || 'STATUS CHANGE FAILED').toUpperCase(), true);
+        }
+      };
+      
+      chk.addEventListener('click', handleToggle);
+      
+      card.addEventListener('keydown', (e) => {
+        if (e.key === ' ') {
+          e.preventDefault();
+          handleToggle(e);
+        }
+      });
+    });
+    
+  } catch (e) {
+    el.innerHTML = `<div class="desk-shell"><div class="desk-header"><div class="section-title">My Desk</div></div><div class="stat-note" style="color:var(--apricot-deep)">Could not load desk: ${esc(e.message)}</div></div>`;
+  }
+}
+
+
+let activitiesState = {
+  activities: [],
+  selectedActivityId: null,
+  loading: false,
+  error: null,
+  el: null
+};
+
+async function loadActivities() {
+  activitiesState.loading = true;
+  paintActivities();
+  try {
+    const actData = await boardApi('/api/activities');
+    activitiesState.activities = Array.isArray(actData) ? actData : (actData.items || actData.activities || []);
+    activitiesState.error = null;
+  } catch (e) {
+    activitiesState.error = e;
+  } finally {
+    activitiesState.loading = false;
+    paintActivities();
+  }
+}
+
+function renderActivities(el) {
+  activitiesState.el = el;
+  activitiesState.selectedActivityId = null;
+  loadActivities();
+}
+
+function paintActivities() {
+  const el = activitiesState.el;
+  if (!el) return;
+  
+  if (activitiesState.loading && !activitiesState.activities.length) {
+    el.innerHTML = `<div class="section-title">Activities</div><div class="stat-note">Loading…</div>`;
+    return;
+  }
+  
+  if (activitiesState.error) {
+    el.innerHTML = `<div class="section-title">Activities</div><div class="stat-note" style="color:var(--apricot-deep)">${esc(activitiesState.error.message)}</div>`;
+    return;
+  }
+  
+  const selected = activitiesState.activities.find(a => a.id === activitiesState.selectedActivityId);
+  
+  el.innerHTML = `
+    <div class="section-title" style="display:flex;align-items:center;gap:12px">
+      <span style="flex:1">Activities</span>
+      <button class="btn btn-primary btn-small" id="act-btn-new">New Activity</button>
+    </div>
+    <div class="pj-split" style="display:flex;gap:20px;align-items:flex-start">
+      <!-- List col -->
+      <div style="flex:1;min-width:300px;display:flex;flex-direction:column;gap:8px">
+        ${activitiesState.activities.length ? activitiesState.activities.map(a => `
+          <div class="card clickable ${a.id === activitiesState.selectedActivityId ? 'active' : ''}" style="display:block" tabindex="0" role="button" data-act-id="${esc(a.id)}">
+            <div class="list-title">${esc(a.name || a.title || 'Unnamed')}</div>
+            ${a.description ? `<div class="list-meta" style="margin-top:4px">${esc(a.description)}</div>` : ''}
+          </div>
+        `).join('') : '<div class="stat-note">No activities found.</div>'}
+      </div>
+      
+      <!-- Detail col -->
+      ${selected ? `
+      <div style="flex:2;min-width:400px;display:flex;flex-direction:column;gap:16px">
+        <div class="card" style="display:block">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+            <div class="list-title" style="flex:1;font-size:1.2em">${esc(selected.name || selected.title || 'Unnamed')}</div>
+            <button class="chip" id="act-btn-edit">EDIT</button>
+            <button class="chip" id="act-btn-delete" style="color:var(--apricot-deep)">DELETE</button>
+          </div>
+          ${selected.description ? `<div style="white-space:pre-wrap;margin-bottom:16px">${esc(selected.description)}</div>` : ''}
+          <div class="list-meta">ID: ${esc(selected.id)}</div>
+          ${selected.project_id ? `<div class="list-meta">Project: ${esc(selected.project_id)}</div>` : ''}
+        </div>
+        
+        <div class="card" style="display:block">
+          <div class="section-title" style="margin-bottom:12px">Activity Tasks</div>
+          <div id="act-tasks-holder"><div class="stat-note">Loading tasks…</div></div>
+        </div>
+      </div>
+      ` : '<div class="stat-note" style="flex:2">Select an activity to view details.</div>'}
+    </div>
+  `;
+  
+  $('#act-btn-new', el)?.addEventListener('click', openActivityCreateDrawer);
+  
+  $$('[data-act-id]', el).forEach(card => {
+    card.addEventListener('click', () => {
+      activitiesState.selectedActivityId = card.dataset.actId;
+      paintActivities();
+      if (activitiesState.selectedActivityId) loadActivityTasks(activitiesState.selectedActivityId);
+    });
+  });
+  
+  $('#act-btn-edit', el)?.addEventListener('click', () => openActivityEditDrawer(selected));
+  $('#act-btn-delete', el)?.addEventListener('click', async () => {
+    if (!confirm('Delete this activity?')) return;
+    try {
+      await boardApi(`/api/activities/${encodeURIComponent(selected.id)}`, { method: 'DELETE', body: { version: selected.version, confirm: true } });
+      activitiesState.selectedActivityId = null;
+      toast('ACTIVITY DELETED');
+      loadActivities();
+    } catch (e) {
+      toast((e.message || 'DELETE FAILED').toUpperCase(), true);
+    }
+  });
+  
+  if (selected && !$('#act-tasks-holder', el).dataset.loaded) {
+    loadActivityTasks(selected.id);
+  }
+}
+
+async function loadActivityTasks(actId) {
+  const holder = $('#act-tasks-holder', activitiesState.el);
+  if (!holder) return;
+  try {
+    const data = await boardApi(`/api/tasks`);
+    const tasks = (Array.isArray(data) ? data : (data.items || data.tasks || [])).filter(t => t.activity_id === actId);
+    holder.dataset.loaded = 'true';
+    if (!tasks.length) {
+      holder.innerHTML = '<div class="stat-note">No tasks for this activity.</div>';
+      return;
+    }
+    holder.innerHTML = tasks.map(t => `
+      <div class="card" style="margin-bottom:8px;padding:8px 12px;display:flex;gap:12px;align-items:center">
+        <div class="pj-status" data-status="${esc(t.status || 'todo')}">${esc(statusLabel(t.status || 'todo'))}</div>
+        <div style="flex:1" class="list-title">${esc(t.title)}</div>
+        ${t.assignee_id ? `<div class="pj-avatar" title="${esc(t.assignee_id)}">${esc(t.assignee_id.slice(0,2).toUpperCase())}</div>` : ''}
+      </div>
+    `).join('');
+  } catch (e) {
+    holder.innerHTML = `<div class="stat-note" style="color:var(--apricot-deep)">Could not load tasks.</div>`;
+  }
+}
+
+function openActivityCreateDrawer() {
+  openDrawer(`
+    <div class="drawer-head">
+      <button class="drawer-close">✕</button>
+      <div class="drawer-dept">ACTIVITIES</div>
+      <div class="drawer-name">New Activity</div>
+    </div>
+    <div class="drawer-body">
+      <div class="form-field"><label>Name</label><input id="act-new-name" placeholder="Activity name"></div>
+      <div class="form-field"><label>Description</label><textarea id="act-new-desc" rows="4"></textarea></div>
+      <div class="drawer-actions"><button id="act-new-save" class="btn btn-primary">Create activity</button></div>
+    </div>
+  `);
+  $('#act-new-save', $('#drawer'))?.addEventListener('click', async () => {
+    const name = $('#act-new-name')?.value.trim();
+    if (!name) return toast('NAME IS REQUIRED', true);
+    try {
+      const act = await boardApi('/api/activities', {
+        method: 'POST',
+        body: { name, description: $('#act-new-desc')?.value.trim() || '' },
+      });
+      activitiesState.selectedActivityId = act.id;
+      closeDrawer();
+      toast('ACTIVITY CREATED');
+      loadActivities();
+    } catch (e) { toast((e.message || 'CREATE FAILED').toUpperCase(), true); }
+  });
+}
+
+function openActivityEditDrawer(act) {
+  openDrawer(`
+    <div class="drawer-head">
+      <button class="drawer-close">✕</button>
+      <div class="drawer-dept">ACTIVITIES</div>
+      <div class="drawer-name">Edit Activity</div>
+    </div>
+    <div class="drawer-body">
+      <div class="form-field"><label>Name</label><input id="act-edit-name" value="${esc(act.name || act.title || '')}"></div>
+      <div class="form-field"><label>Description</label><textarea id="act-edit-desc" rows="4">${esc(act.description || '')}</textarea></div>
+      <div class="drawer-actions"><button id="act-edit-save" class="btn btn-primary">Save changes</button></div>
+    </div>
+  `);
+  $('#act-edit-save', $('#drawer'))?.addEventListener('click', async () => {
+    const name = $('#act-edit-name')?.value.trim();
+    if (!name) return toast('NAME IS REQUIRED', true);
+    try {
+      await boardApi(`/api/activities/${encodeURIComponent(act.id)}`, {
+        method: 'PATCH',
+        body: { version: act.version, name, description: $('#act-edit-desc')?.value.trim() || '' },
+      });
+      closeDrawer();
+      toast('ACTIVITY UPDATED');
+      loadActivities();
+    } catch (e) { toast((e.message || 'UPDATE FAILED').toUpperCase(), true); }
+  });
+}
+async function renderWorkspaces(el) {
+  el.innerHTML = `<div class="section-title">Workspaces</div><div class="stat-note">Loading workspace info…</div>`;
+  try {
+    let res = await fetch('/api/workspace');
+    if (!res.ok) res = await fetch('/api/workspaces');
+    if (!res.ok) throw new Error('Could not load workspace info');
+    const data = await res.json();
+    const ws = Array.isArray(data) ? data[0] : (data.workspace || data);
+    
+    if (!ws) {
+      el.innerHTML = `<div class="section-title">Workspaces</div><div class="stat-note">No active workspace found.</div>`;
+      return;
+    }
+    el.innerHTML = `
+      <div class="section-title">Personal Workspace</div>
+      <div class="card" style="max-width:600px; margin-bottom: 16px;">
+        <div class="list-title" style="font-size:1.1em;margin-bottom:8px">${esc(ws.name || 'Personal Workspace')}</div>
+        ${ws.description ? `<div class="stat-note" style="margin-bottom:12px">${esc(ws.description)}</div>` : ''}
+        <div class="list-meta">Status: Active</div>
+        <div class="list-meta">Role: Owner</div>
+      </div>
+      <div class="stat-note">
+        This view is deprecated in Phase 1. To configure your workspace details and shared roots, please visit <a href="#" data-link="settings" style="color:var(--text-normal);text-decoration:underline">Settings</a>.
+      </div>
+    `;
+    $('[data-link="settings"]', el)?.addEventListener('click', (e) => {
+      e.preventDefault();
+      setView('settings');
+    });
+  } catch (e) {
+    el.innerHTML = `<div class="section-title">Workspaces</div><div class="stat-note" style="color:var(--apricot-deep)">${esc(e.message)}</div>`;
+  }
+}
 boot();
+

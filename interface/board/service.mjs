@@ -4,6 +4,8 @@ import fsp from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import {
   ACTIVE_EXECUTION_STATES,
+  ACTIVITY_STATUSES,
+  ACTIVITY_VISIBILITIES,
   ASSIGNEE_TYPES,
   CALLBACK_STATES,
   LIMITS,
@@ -37,6 +39,7 @@ import {
   validateLinkedPaths,
   validateLinkedRuns,
   validateProjectCreate,
+  validateActivityCreate,
   validateTaskCreate,
 } from './validators.mjs';
 import { assertReviewStateTransition, assertTaskStatusTransition } from './transitions.mjs';
@@ -119,6 +122,11 @@ function parsePositiveIntOr(defaultValue, raw) {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return defaultValue;
   return Math.floor(n);
+}
+
+function normalizeOptionalTaskLinkId(value, field) {
+  if (value === null || value === undefined || value === '') return null;
+  return ensureId(value, field);
 }
 
 function artifactPolicy() {
@@ -289,6 +297,21 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
     return String(project.owner_id) === actorIdFrom(actor);
   }
 
+  function canReadActivity(activity, actor) {
+    if (!actor) return true;
+    if (actor?.isInternal) return true;
+    if (activity.visibility === 'team') return Boolean(actor?.id);
+    return String(activity.owner_id) === actorIdFrom(actor);
+  }
+
+  function canWriteActivity(activity, actor) {
+    if (!actor) return true;
+    if (actor?.isInternal) return true;
+    if (!actor?.isHuman) return false;
+    if (activity.visibility === 'team') return true;
+    return String(activity.owner_id) === actorIdFrom(actor);
+  }
+
   async function findProjectScoped(id) {
     const pid = ensureId(id);
     const hits = [];
@@ -331,6 +354,27 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
     return hits[0];
   }
 
+  async function findActivityScoped(id) {
+    const aid = ensureId(id);
+    const hits = [];
+    for (const scope of ['private', 'team']) {
+      let activity = null;
+      try {
+        activity = await storage.readActivityEntity(scope, aid);
+      } catch (err) {
+        if (!(scope === 'team' && (err?.code === 'team_root_unconfigured' || err?.code === 'team_root_unavailable'))) {
+          throw err;
+        }
+      }
+      if (activity) hits.push({ scope, activity });
+    }
+    if (!hits.length) return null;
+    if (hits.length > 1) {
+      throw boardError(409, 'conflict', `activity id ${aid} exists in multiple scopes`);
+    }
+    return hits[0];
+  }
+
   async function assertProjectReadable(projectId, actor) {
     const located = await findProjectScoped(projectId);
     if (!located) throw boardError(404, 'not_found', 'project not found');
@@ -341,17 +385,77 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
   async function assertTaskReadable(taskId, actor) {
     const located = await findTaskScoped(taskId);
     if (!located) throw boardError(404, 'not_found', 'task not found');
-    const projectInfo = await findProjectScoped(located.task.project_id);
-    if (!projectInfo) throw boardError(404, 'not_found', 'project not found');
-    if (projectInfo.scope !== located.scope) {
-      throw boardError(409, 'conflict', 'task/project scope mismatch');
+
+    let project = null;
+    let activity = null;
+    if (located.task.project_id) {
+      const projectInfo = await findProjectScoped(located.task.project_id);
+      if (!projectInfo) throw boardError(404, 'not_found', 'project not found');
+      if (projectInfo.scope !== located.scope) {
+        throw boardError(409, 'conflict', 'task/project scope mismatch');
+      }
+      project = projectInfo.project;
     }
+    if (located.task.activity_id) {
+      const activityInfo = await findActivityScoped(located.task.activity_id);
+      if (!activityInfo) throw boardError(404, 'not_found', 'activity not found');
+      if (activityInfo.scope !== located.scope) {
+        throw boardError(409, 'conflict', 'task/activity scope mismatch');
+      }
+      activity = activityInfo.activity;
+    }
+
     const actorId = actor ? actorIdFrom(actor) : null;
-    const canRead = canReadProject(projectInfo.project, actor)
-      || actorId === located.task.created_by
+    const canRead = (project ? canReadProject(project, actor) : false)
+      || (activity ? canReadActivity(activity, actor) : false)
+      || (!project && !activity && (
+        actor?.isInternal
+        || (located.task.visibility === 'team' && Boolean(actor?.id))
+        || actorId === located.task.created_by
+      ))
       || (located.task.review?.reviewers || []).includes(actorId);
-    if (!canRead) throw boardError(403, 'forbidden', 'project access denied');
-    return { ...located, project: projectInfo.project };
+    if (!canRead) throw boardError(403, 'forbidden', 'task access denied');
+    return { ...located, project, activity };
+  }
+
+  function canWriteTaskContainer(located, actor) {
+    if (located.project) return canWriteProject(located.project, actor);
+    if (located.activity) return canWriteActivity(located.activity, actor);
+    if (!actor) return true;
+    if (actor?.isInternal) return true;
+    if (!actor?.isHuman) return false;
+    if (located.task.visibility === 'team') return true;
+    return String(located.task.created_by || '') === actorIdFrom(actor);
+  }
+
+  async function resolveTaskContainerForCreate(task, actor) {
+    let scope = 'private';
+    let visibility = 'private';
+    let project = null;
+    let activity = null;
+
+    if (task.project_id) {
+      const locatedProject = await findProjectScoped(task.project_id);
+      project = locatedProject?.project;
+      if (!project) throw boardError(422, 'validation_error', 'project_id does not exist');
+      if (!canWriteProject(project, actor)) throw boardError(403, 'forbidden', 'project access denied');
+      scope = locatedProject.scope;
+      visibility = project.visibility || 'private';
+    }
+
+    if (task.activity_id) {
+      const locatedActivity = await findActivityScoped(task.activity_id);
+      activity = locatedActivity?.activity;
+      if (!activity) throw boardError(422, 'validation_error', 'activity_id does not exist');
+      if (!canWriteActivity(activity, actor)) throw boardError(403, 'forbidden', 'activity access denied');
+      if (task.project_id && locatedActivity.scope !== scope) {
+        throw boardError(409, 'conflict', 'project/activity scope mismatch');
+      }
+      scope = locatedActivity.scope;
+      visibility = activity.visibility || visibility;
+    }
+
+    return { scope, visibility, project, activity };
   }
 
   async function auditArtifactAccess({
@@ -402,6 +506,17 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
     }
   }
 
+  async function listScopeActivitiesSafe(scope) {
+    try {
+      return await storage.listActivities(scope);
+    } catch (err) {
+      if (scope === 'team' && (err?.code === 'team_root_unconfigured' || err?.code === 'team_root_unavailable')) {
+        return [];
+      }
+      throw err;
+    }
+  }
+
   async function mutateProject(id, actor, mutator, action) {
     return storage.withLock(`project:${id}`, async () => {
       const actorId = actorIdFrom(actor);
@@ -437,13 +552,13 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       const actorId = actorIdFrom(actor);
       const located = await assertTaskReadable(id, actor);
       await assertTeamMutationAllowed(located.scope);
-      if (!options.skipProjectWriteCheck && !canWriteProject(located.project, actor)) {
+      if (!options.skipProjectWriteCheck && !canWriteTaskContainer(located, actor)) {
         throw boardError(403, 'forbidden', 'task access denied');
       }
       const existing = located.task;
       normalizeTaskShape(existing);
       const before = existing.version;
-      const next = await mutator(existing);
+      const next = await mutator(existing, located);
       next.schema_version = SCHEMA_VERSION;
       next.updated_at = nowIso();
       next.updated_by = actorId;
@@ -654,6 +769,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
   }
 
   async function ensureRunnableProject(task) {
+    if (!task.project_id) throw boardError(422, 'validation_error', 'task must be linked to project_id for execution');
     const located = await findProjectScoped(task.project_id);
     const project = located?.project;
     if (!project) throw boardError(422, 'validation_error', 'project_id does not exist');
@@ -1070,6 +1186,160 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       });
     },
 
+    async listActivities(query, actor) {
+      const allRaw = [
+        ...(await listScopeActivitiesSafe('private')),
+        ...(await listScopeActivitiesSafe('team')),
+      ];
+      const all = sortByUpdatedDesc(allRaw.filter((a) => canReadActivity(a, actor)));
+      const status = query?.status ? ensureEnum(String(query.status), ACTIVITY_STATUSES, 'status') : null;
+      const visibility = query?.visibility ? ensureEnum(String(query.visibility), ACTIVITY_VISIBILITIES, 'visibility') : null;
+      const q = String(query?.q || '').trim().toLowerCase();
+      let filtered = all;
+      if (status) filtered = filtered.filter((a) => a.status === status);
+      if (visibility) filtered = filtered.filter((a) => a.visibility === visibility);
+      if (q) filtered = filtered.filter((a) => a.name.toLowerCase().includes(q) || String(a.description || '').toLowerCase().includes(q));
+      const limit = Math.max(1, Math.min(200, Number(query?.limit || 50)));
+      const offset = Math.max(0, Number(query?.offset || 0));
+      return { items: asItemList(filtered, { limit, offset }), total: filtered.length };
+    },
+
+    async createActivity(body, actor) {
+      const actorId = actorIdFrom(actor);
+      const activity = validateActivityCreate(body);
+      const scope = activity.visibility === 'team' ? 'team' : 'private';
+      await assertTeamMutationAllowed(scope);
+      activity.schema_version = SCHEMA_VERSION;
+      activity.created_by = actorId;
+      activity.updated_by = actorId;
+      activity.owner_id = actorId;
+      await storage.withLock(`activity:${activity.id}`, async () => {
+        if (!actor?.isHuman) throw boardError(403, 'forbidden', 'activity create requires authenticated human');
+        const existing = await findActivityScoped(activity.id);
+        if (existing) throw boardError(409, 'conflict', 'activity id already exists');
+        await storage.writeActivityEntity(scope, activity.id, activity, {
+          expectedVersion: null,
+          event: makeEvent({
+            entityType: 'activity',
+            entityId: activity.id,
+            projectId: null,
+            action: 'create_activity',
+            actorId,
+            oldVersion: 0,
+            newVersion: activity.version,
+          }),
+        });
+      });
+      return activity;
+    },
+
+    async getActivity(id, actor) {
+      const located = await findActivityScoped(id);
+      if (!located) throw boardError(404, 'not_found', 'activity not found');
+      if (!canReadActivity(located.activity, actor)) throw boardError(403, 'forbidden', 'activity access denied');
+      return located.activity;
+    },
+
+    async patchActivity(id, body, actor) {
+      const requestedVersion = Number(body?.version);
+      if (!Number.isInteger(requestedVersion) || requestedVersion < 1) throw boardError(422, 'validation_error', 'version is required');
+      const aid = ensureId(id);
+      return storage.withLock(`activity:${aid}`, async () => {
+        const actorId = actorIdFrom(actor);
+        const located = await findActivityScoped(aid);
+        if (!located) throw boardError(404, 'not_found', 'activity not found');
+        await assertTeamMutationAllowed(located.scope);
+        if (!canWriteActivity(located.activity, actor)) throw boardError(403, 'forbidden', 'activity access denied');
+        const next = { ...located.activity };
+        if (next.version !== requestedVersion) throw boardError(409, 'conflict', 'Version mismatch', { expected: next.version, got: requestedVersion });
+        if (body?.name !== undefined) next.name = ensureLength(body.name || '', 'name', 1, LIMITS.activityNameMax);
+        if (body?.description !== undefined) next.description = ensureLength(body.description || '', 'description', 0, LIMITS.descriptionMax);
+        if (body?.status !== undefined) next.status = ensureEnum(body.status, ACTIVITY_STATUSES, 'status');
+        if (body?.visibility !== undefined) {
+          const targetVisibility = ensureEnum(body.visibility, ACTIVITY_VISIBILITIES, 'visibility');
+          if (targetVisibility === 'team' && located.scope !== 'team') {
+            throw boardError(422, 'validation_error', 'activity visibility migration is not supported in this patch endpoint');
+          }
+          next.visibility = targetVisibility;
+        }
+        if (body?.tags !== undefined) {
+          const tagsInput = Array.isArray(body.tags) ? body.tags : [];
+          if (tagsInput.length > LIMITS.tagsMax) throw boardError(422, 'validation_error', `tags max ${LIMITS.tagsMax}`);
+          next.tags = tagsInput.map((t) => String(t).trim()).filter(Boolean);
+        }
+        if (body?.custom_fields !== undefined) next.custom_fields = sanitizeCustomFields(body.custom_fields);
+        const before = next.version;
+        next.schema_version = SCHEMA_VERSION;
+        next.updated_at = nowIso();
+        next.updated_by = actorId;
+        next.version = before + 1;
+        await storage.writeActivityEntity(located.scope, aid, next, {
+          expectedVersion: before,
+          event: makeEvent({
+            entityType: 'activity',
+            entityId: aid,
+            projectId: null,
+            action: 'patch_activity',
+            actorId,
+            oldVersion: before,
+            newVersion: next.version,
+          }),
+        });
+        return next;
+      });
+    },
+
+    async deleteActivity(id, body, actor) {
+      const requestedVersion = parseDeletePayload(body);
+      const aid = ensureId(id);
+      return storage.withLock(`activity:${aid}`, async () => {
+        const actorId = actorIdFrom(actor);
+        const located = await findActivityScoped(aid);
+        if (!located) throw boardError(404, 'not_found', 'activity not found');
+        await assertTeamMutationAllowed(located.scope);
+        if (!canWriteActivity(located.activity, actor)) throw boardError(403, 'forbidden', 'activity access denied');
+        if (located.activity.version !== requestedVersion) {
+          throw boardError(409, 'conflict', 'Version mismatch', { expected: located.activity.version, got: requestedVersion });
+        }
+        const tasks = await storage.listActivityTasks(located.scope, aid);
+        const activeTask = tasks.find((task) => ACTIVE_EXECUTION_STATES.has(task.execution?.state || 'none'));
+        if (activeTask) {
+          throw boardError(409, 'execution_active', `cannot delete activity while task ${activeTask.id} has active execution`);
+        }
+        const events = [
+          ...tasks.map((task) => makeEvent({
+            entityType: 'task',
+            entityId: task.id,
+            projectId: task.project_id || null,
+            action: 'delete_task_cascade_activity',
+            actorId,
+            oldVersion: task.version,
+            newVersion: task.version + 1,
+          })),
+          makeEvent({
+            entityType: 'activity',
+            entityId: aid,
+            projectId: null,
+            action: 'delete_activity',
+            actorId,
+            oldVersion: located.activity.version,
+            newVersion: located.activity.version + 1,
+            details: { deleted_task_ids: tasks.map((task) => task.id) },
+          }),
+        ];
+        for (const task of tasks) {
+          await deleteTaskArtifactsByScopeTask({
+            scope: located.scope,
+            taskId: task.id,
+            actor,
+            reasonCode: 'activity_delete_cascade',
+          });
+        }
+        await storage.deleteActivityEntity(located.scope, aid, { events });
+        return { id: aid, deleted: true, cascade_deleted_tasks: tasks.length };
+      });
+    },
+
     async listTasks(query, actor) {
       const allRaw = [
         ...(await listScopeTasksSafe('private')),
@@ -1079,9 +1349,22 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
         ...(await listScopeProjectsSafe('private')),
         ...(await listScopeProjectsSafe('team')),
       ];
+      const allActivities = [
+        ...(await listScopeActivitiesSafe('private')),
+        ...(await listScopeActivitiesSafe('team')),
+      ];
       const visibleProjects = new Set(allProjects.filter((p) => canReadProject(p, actor)).map((p) => p.id));
-      let all = sortByUpdatedDesc(allRaw.filter((t) => visibleProjects.has(t.project_id)));
+      const visibleActivities = new Set(allActivities.filter((a) => canReadActivity(a, actor)).map((a) => a.id));
+      const actorId = actor ? actorIdFrom(actor) : null;
+      let all = sortByUpdatedDesc(allRaw.filter((t) => {
+        if (t.project_id) return visibleProjects.has(t.project_id);
+        if (t.activity_id) return visibleActivities.has(t.activity_id);
+        if (actor?.isInternal) return true;
+        if (t.visibility === 'team') return Boolean(actor?.id);
+        return actorId ? String(t.created_by || '') === actorId : true;
+      }));
       if (query?.project_id) all = all.filter((t) => t.project_id === query.project_id);
+      if (query?.activity_id) all = all.filter((t) => t.activity_id === query.activity_id);
       if (query?.status) {
         const status = ensureEnum(String(query.status), TASK_STATUSES, 'status');
         all = all.filter((t) => t.status === status);
@@ -1098,16 +1381,13 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
     async createTask(body, actor) {
       const actorId = actorIdFrom(actor);
       const task = validateTaskCreate(body);
-      const locatedProject = await findProjectScoped(task.project_id);
-      const project = locatedProject?.project;
-      if (!project) throw boardError(422, 'validation_error', 'project_id does not exist');
-      await assertTeamMutationAllowed(locatedProject.scope);
-      if (!canWriteProject(project, actor)) throw boardError(403, 'forbidden', 'project access denied');
+      const container = await resolveTaskContainerForCreate(task, actor);
+      await assertTeamMutationAllowed(container.scope);
       if (task.assignee_type === 'agent' && !task.assignee_id) task.assignee_id = 'danny';
       task.schema_version = SCHEMA_VERSION;
       task.created_by = actorId;
       task.updated_by = actorId;
-      task.visibility = project.visibility || 'private';
+      task.visibility = container.visibility || 'private';
       task.linked_paths = await validateLinkedPaths({ items: body?.linked_paths || [], rootDir, guardrails });
       task.linked_runs = validateLinkedRuns(body?.linked_runs || []);
       normalizeTaskShape(task);
@@ -1117,7 +1397,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       await storage.withLock(`task:${task.id}`, async () => {
         const existing = await findTaskScoped(task.id);
         if (existing) throw boardError(409, 'conflict', 'task id already exists');
-        await storage.writeTask(locatedProject.scope, task.id, task, {
+        await storage.writeTask(container.scope, task.id, task, {
           expectedVersion: null,
           event: makeEvent({
             entityType: 'task',
@@ -1146,15 +1426,16 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       for (const op of ops) {
         if (!PATCH_OPS.has(op?.op)) throw boardError(422, 'validation_error', `unsupported patch op: ${op?.op}`);
       }
-      return mutateTask(ensureId(id), actor, async (task) => {
+      return mutateTask(ensureId(id), actor, async (task, located) => {
         const actorId = actorIdFrom(actor);
         normalizeTaskShape(task);
         const touchesReviewRoster = ops.some((op) => op.op === 'set_review_required' || op.op === 'set_reviewers');
         if (touchesReviewRoster) {
-          const project = (await findProjectScoped(task.project_id))?.project;
-          const canMutate = actorId === task.created_by || actorId === project?.owner_id;
+          const project = task.project_id ? (await findProjectScoped(task.project_id))?.project : null;
+          const activity = task.activity_id ? (await findActivityScoped(task.activity_id))?.activity : null;
+          const canMutate = actorId === task.created_by || actorId === project?.owner_id || actorId === activity?.owner_id;
           if (!canMutate) {
-            throw boardError(403, 'forbidden', 'only task creator or project owner may modify review roster/requirement');
+            throw boardError(403, 'forbidden', 'only task creator or project/activity owner may modify review roster/requirement');
           }
         }
         if (task.version !== requestedVersion) throw boardError(409, 'conflict', 'Version mismatch', { expected: task.version, got: requestedVersion });
@@ -1191,6 +1472,50 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
             case 'set_priority':
               task.priority = ensureEnum(op.value, PRIORITIES, 'priority');
               break;
+            case 'set_project_id': {
+              const nextProjectId = normalizeOptionalTaskLinkId(op.value, 'project_id');
+              if (task.activity_id && nextProjectId) {
+                throw boardError(422, 'validation_error', 'task may link to either project_id or activity_id, not both');
+              }
+              if (!nextProjectId) {
+                task.project_id = null;
+                break;
+              }
+              const locatedProject = await findProjectScoped(nextProjectId);
+              if (!locatedProject?.project) {
+                throw boardError(422, 'validation_error', 'project_id does not exist');
+              }
+              if (locatedProject.scope !== located.scope) {
+                throw boardError(422, 'validation_error', 'project_id must reference a project in the same scope');
+              }
+              if (!canWriteProject(locatedProject.project, actor)) {
+                throw boardError(403, 'forbidden', 'project access denied');
+              }
+              task.project_id = nextProjectId;
+              break;
+            }
+            case 'set_activity_id': {
+              const nextActivityId = normalizeOptionalTaskLinkId(op.value, 'activity_id');
+              if (task.project_id && nextActivityId) {
+                throw boardError(422, 'validation_error', 'task may link to either project_id or activity_id, not both');
+              }
+              if (!nextActivityId) {
+                task.activity_id = null;
+                break;
+              }
+              const locatedActivity = await findActivityScoped(nextActivityId);
+              if (!locatedActivity?.activity) {
+                throw boardError(422, 'validation_error', 'activity_id does not exist');
+              }
+              if (locatedActivity.scope !== located.scope) {
+                throw boardError(422, 'validation_error', 'activity_id must reference an activity in the same scope');
+              }
+              if (!canWriteActivity(locatedActivity.activity, actor)) {
+                throw boardError(403, 'forbidden', 'activity access denied');
+              }
+              task.activity_id = nextActivityId;
+              break;
+            }
             case 'set_work_type':
               task.work_type = sanitizeWorkType(op.value);
               break;
@@ -1269,7 +1594,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
         const actorId = actorIdFrom(actor);
         const located = await assertTaskReadable(taskId, actor);
         await assertTeamMutationAllowed(located.scope);
-        if (!canWriteProject(located.project, actor)) throw boardError(403, 'forbidden', 'task access denied');
+        if (!canWriteTaskContainer(located, actor)) throw boardError(403, 'forbidden', 'task access denied');
         if (located.task.version !== requestedVersion) {
           throw boardError(409, 'conflict', 'Version mismatch', { expected: located.task.version, got: requestedVersion });
         }
@@ -1306,7 +1631,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       return storage.withLock(`task:${id}`, async () => {
         const located = await assertTaskReadable(id, actor);
         await assertTeamMutationAllowed(located.scope);
-        if (!canWriteProject(located.project, actor)) throw boardError(403, 'forbidden', 'task access denied');
+        if (!canWriteTaskContainer(located, actor)) throw boardError(403, 'forbidden', 'task access denied');
         const task = located.task;
         normalizeTaskShape(task);
         const priorAttempt = (task.execution?.attempts || []).find((a) => a.idempotency_key === idempotencyKey);
@@ -1412,7 +1737,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       return storage.withLock(`task:${id}`, async () => {
         const located = await assertTaskReadable(id, actor);
         await assertTeamMutationAllowed(located.scope);
-        if (!canWriteProject(located.project, actor)) throw boardError(403, 'forbidden', 'task access denied');
+        if (!canWriteTaskContainer(located, actor)) throw boardError(403, 'forbidden', 'task access denied');
         const task = located.task;
         normalizeTaskShape(task);
         const priorAttempt = (task.execution?.attempts || []).find((a) => a.idempotency_key === idempotencyKey);
@@ -2211,7 +2536,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       }
       const rowProjectId = row.project_id || located.task.project_id;
       await assertTeamMutationAllowed(located.scope);
-      if (!canWriteProject(located.project, actor)) {
+      if (!canWriteTaskContainer(located, actor)) {
         await auditArtifactAccess({
           actor,
           operation: 'delete',

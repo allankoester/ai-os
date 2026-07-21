@@ -1,6 +1,8 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {
+  ACTIVITY_STATUSES,
+  ACTIVITY_VISIBILITIES,
   ASSIGNEE_TYPES,
   LIMITS,
   PRIORITIES,
@@ -253,13 +255,52 @@ export function validateProjectCreate(body) {
   };
 }
 
+function normalizeOptionalId(value, field) {
+  if (value === null || value === undefined || value === '') return null;
+  return ensureId(value, field);
+}
+
+export function validateActivityCreate(body) {
+  const now = new Date().toISOString();
+  const id = ensureId(body?.id || slugify(body?.name || ''), 'id');
+  const name = ensureLength(body?.name || '', 'name', 1, LIMITS.activityNameMax);
+  const status = ensureEnum(body?.status || 'active', ACTIVITY_STATUSES, 'status');
+  const visibility = ensureEnum(body?.visibility || 'private', ACTIVITY_VISIBILITIES, 'visibility');
+  const description = ensureLength(body?.description || '', 'description', 0, LIMITS.descriptionMax);
+  const tagsInput = Array.isArray(body?.tags) ? body.tags : [];
+  if (tagsInput.length > LIMITS.tagsMax) throw boardError(422, 'validation_error', `tags max ${LIMITS.tagsMax}`);
+  const tags = tagsInput.map((t) => String(t).trim()).filter(Boolean);
+  const custom_fields = sanitizeCustomFields(body?.custom_fields);
+  return {
+    id,
+    name,
+    description,
+    status,
+    visibility,
+    owner_id: ensureId(body?.owner_id || body?.created_by || 'unknown', 'owner_id'),
+    tags,
+    custom_fields,
+    version: 1,
+    created_at: now,
+    updated_at: now,
+  };
+}
+
 export function validateTaskCreate(body) {
   const now = new Date().toISOString();
   const id = ensureId(body?.id || slugify(body?.title || ''), 'id');
   const assigneeType = ensureEnum(body?.assignee_type || 'unassigned', ASSIGNEE_TYPES, 'assignee_type');
+  const project_id = normalizeOptionalId(body?.project_id, 'project_id');
+  const activity_id = normalizeOptionalId(body?.activity_id, 'activity_id');
+  // Phase 1 decision: reject linking a task to both project and activity.
+  // This keeps permission/read paths deterministic while legacy project flows remain unchanged.
+  if (project_id && activity_id) {
+    throw boardError(422, 'validation_error', 'task may link to either project_id or activity_id, not both');
+  }
   return {
     id,
-    project_id: ensureId(body?.project_id, 'project_id'),
+    project_id,
+    activity_id,
     title: ensureLength(body?.title || '', 'title', 1, LIMITS.taskTitleMax),
     description: ensureLength(body?.description || '', 'description', 0, LIMITS.descriptionMax),
     status: ensureEnum(body?.status || 'backlog', TASK_STATUSES, 'status'),

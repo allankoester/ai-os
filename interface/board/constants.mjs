@@ -2,6 +2,8 @@ export const SCHEMA_VERSION = '1.0';
 
 export const PROJECT_STATUSES = new Set(['active', 'paused', 'archived']);
 export const PROJECT_VISIBILITIES = new Set(['private', 'team']);
+export const ACTIVITY_STATUSES = new Set(['active', 'paused', 'archived']);
+export const ACTIVITY_VISIBILITIES = new Set(['private', 'team']);
 export const TASK_STATUSES = new Set(['backlog', 'todo', 'in_progress', 'needs_review', 'blocked', 'done']);
 export const PRIORITIES = new Set(['low', 'medium', 'high']);
 export const WORK_TYPES = new Set(['feature', 'bug', 'tech_debt', 'spike']);
@@ -18,6 +20,8 @@ export const PATCH_OPS = new Set([
   'set_title',
   'set_description',
   'set_priority',
+  'set_project_id',
+  'set_activity_id',
   'set_assignee',
   'set_workflow_id',
   'set_subtasks',
@@ -57,6 +61,7 @@ export const CALLBACK_STATES = new Set(['queued', 'started', 'succeeded', 'faile
 
 export const LIMITS = {
   projectNameMax: 120,
+  activityNameMax: 120,
   taskTitleMax: 160,
   humanAssigneeLabelMax: 120,
   descriptionMax: 4000,

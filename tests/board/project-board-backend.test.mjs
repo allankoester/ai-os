@@ -253,6 +253,316 @@ test('assignment metadata change does not dispatch execution', async () => {
   }
 });
 
+test('activities CRUD lifecycle works', async () => {
+  const h = await createHarness();
+  try {
+    const created = await h.service.createActivity({
+      id: 'activity_alpha',
+      name: 'Activity Alpha',
+      description: 'ongoing stream',
+      status: 'active',
+      visibility: 'private',
+      tags: ['ops'],
+      custom_fields: { lane: 'delivery' },
+    }, HUMAN_ACTOR);
+    assert.equal(created.id, 'activity_alpha');
+
+    const listed = await h.service.listActivities({}, HUMAN_ACTOR);
+    assert.ok(listed.items.some((item) => item.id === created.id));
+
+    const fetched = await h.service.getActivity(created.id, HUMAN_ACTOR);
+    assert.equal(fetched.name, 'Activity Alpha');
+
+    const patched = await h.service.patchActivity(created.id, {
+      version: fetched.version,
+      name: 'Activity Alpha Updated',
+      status: 'paused',
+    }, HUMAN_ACTOR);
+    assert.equal(patched.name, 'Activity Alpha Updated');
+    assert.equal(patched.status, 'paused');
+
+    const deleted = await h.service.deleteActivity(created.id, {
+      version: patched.version,
+      confirm: true,
+    }, HUMAN_ACTOR);
+    assert.equal(deleted.deleted, true);
+  } finally {
+    await cleanupRoot(h.rootDir);
+  }
+});
+
+test('task create supports inbox task without project/activity', async () => {
+  const h = await createHarness();
+  try {
+    const task = await h.service.createTask({
+      id: 'task_inbox_alpha',
+      title: 'Inbox Task',
+      assignee_type: 'unassigned',
+      status: 'todo',
+    }, HUMAN_ACTOR);
+
+    assert.equal(task.project_id, null);
+    assert.equal(task.activity_id, null);
+    assert.equal(task.visibility, 'private');
+
+    const fetched = await h.service.getTask(task.id, HUMAN_ACTOR);
+    assert.equal(fetched.id, task.id);
+  } finally {
+    await cleanupRoot(h.rootDir);
+  }
+});
+
+test('task create supports activity-linked tasks and activity_id filter', async () => {
+  const h = await createHarness();
+  try {
+    const activity = await h.service.createActivity({
+      id: 'activity_task_link',
+      name: 'Activity Task Link',
+      visibility: 'private',
+    }, HUMAN_ACTOR);
+
+    const task = await h.service.createTask({
+      id: 'task_activity_alpha',
+      activity_id: activity.id,
+      title: 'Activity Task',
+      assignee_type: 'unassigned',
+      status: 'todo',
+    }, HUMAN_ACTOR);
+    assert.equal(task.activity_id, activity.id);
+    assert.equal(task.project_id, null);
+
+    const listed = await h.service.listTasks({ activity_id: activity.id }, HUMAN_ACTOR);
+    assert.ok(listed.items.some((item) => item.id === task.id));
+  } finally {
+    await cleanupRoot(h.rootDir);
+  }
+});
+
+test('task create rejects invalid project/activity references', async () => {
+  const h = await createHarness();
+  try {
+    const project = await h.service.createProject({ id: 'proj_ref_check', name: 'Ref Check' }, HUMAN_ACTOR);
+    const activity = await h.service.createActivity({ id: 'activity_ref_check', name: 'Activity Ref Check' }, HUMAN_ACTOR);
+
+    await expectBoardErrorStatus(h.service.createTask({
+      id: 'task_bad_project_ref',
+      title: 'Bad Project Ref',
+      project_id: 'proj_missing',
+    }, HUMAN_ACTOR), 422);
+
+    await expectBoardErrorStatus(h.service.createTask({
+      id: 'task_bad_activity_ref',
+      title: 'Bad Activity Ref',
+      activity_id: 'activity_missing',
+    }, HUMAN_ACTOR), 422);
+
+    await expectBoardErrorStatus(h.service.createTask({
+      id: 'task_both_links',
+      title: 'Both Links',
+      project_id: project.id,
+      activity_id: activity.id,
+    }, HUMAN_ACTOR), 422);
+  } finally {
+    await cleanupRoot(h.rootDir);
+  }
+});
+
+test('task create keeps existing project-linked flow working', async () => {
+  const h = await createHarness();
+  try {
+    const project = await h.service.createProject({ id: 'proj_linked_flow', name: 'Linked Flow' }, HUMAN_ACTOR);
+    const task = await h.service.createTask({
+      id: 'task_project_linked_flow',
+      project_id: project.id,
+      title: 'Project Linked Task',
+      assignee_type: 'agent',
+      assignee_id: 'agent_alpha',
+      workflow_id: 'workflow_alpha',
+    }, HUMAN_ACTOR);
+    assert.equal(task.project_id, project.id);
+    assert.equal(task.activity_id, null);
+  } finally {
+    await cleanupRoot(h.rootDir);
+  }
+});
+
+test('task patch set_activity_id supports set and clear for inbox tasks', async () => {
+  const h = await createHarness();
+  try {
+    const activity = await h.service.createActivity({
+      id: 'activity_patch_link',
+      name: 'Activity Patch Link',
+      visibility: 'private',
+    }, HUMAN_ACTOR);
+    const task = await h.service.createTask({
+      id: 'task_patch_activity_link',
+      title: 'Task patch activity',
+      assignee_type: 'unassigned',
+      status: 'todo',
+    }, HUMAN_ACTOR);
+
+    const linked = await h.service.patchTask(task.id, {
+      version: task.version,
+      ops: [{ op: 'set_activity_id', value: activity.id }],
+    }, HUMAN_ACTOR);
+    assert.equal(linked.activity_id, activity.id);
+    assert.equal(linked.project_id, null);
+
+    const cleared = await h.service.patchTask(task.id, {
+      version: linked.version,
+      ops: [{ op: 'set_activity_id', value: '' }],
+    }, HUMAN_ACTOR);
+    assert.equal(cleared.activity_id, null);
+  } finally {
+    await cleanupRoot(h.rootDir);
+  }
+});
+
+test('task patch set_activity_id enforces validation rules', async () => {
+  const privateRoot = path.join(os.tmpdir(), `board-private-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const teamRoot = path.join(os.tmpdir(), `board-team-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const h = await createHarness({ boardRoots: { privateRoot, teamRoot } });
+  try {
+    const project = await h.service.createProject({ id: 'proj_patch_activity_rules', name: 'Patch Activity Rules' }, HUMAN_ACTOR);
+    const privateActivity = await h.service.createActivity({ id: 'activity_patch_rules_private', name: 'Private Activity', visibility: 'private' }, HUMAN_ACTOR);
+    const teamActivity = await h.service.createActivity({ id: 'activity_patch_rules_team', name: 'Team Activity', visibility: 'team' }, HUMAN_ACTOR);
+    const projectTask = await h.service.createTask({
+      id: 'task_patch_activity_project_linked',
+      project_id: project.id,
+      title: 'Project linked task',
+      assignee_type: 'unassigned',
+      status: 'todo',
+    }, HUMAN_ACTOR);
+    const inboxTask = await h.service.createTask({
+      id: 'task_patch_activity_inbox',
+      title: 'Inbox task',
+      assignee_type: 'unassigned',
+      status: 'todo',
+    }, HUMAN_ACTOR);
+
+    await expectBoardErrorStatus(h.service.patchTask(projectTask.id, {
+      version: projectTask.version,
+      ops: [{ op: 'set_activity_id', value: privateActivity.id }],
+    }, HUMAN_ACTOR), 422);
+
+    await expectBoardErrorStatus(h.service.patchTask(inboxTask.id, {
+      version: inboxTask.version,
+      ops: [{ op: 'set_activity_id', value: 'activity_missing' }],
+    }, HUMAN_ACTOR), 422);
+
+    await expectBoardErrorStatus(h.service.patchTask(inboxTask.id, {
+      version: inboxTask.version,
+      ops: [{ op: 'set_activity_id', value: teamActivity.id }],
+    }, HUMAN_ACTOR), 422);
+  } finally {
+    await cleanupRoot(h.rootDir);
+    await fsp.rm(privateRoot, { recursive: true, force: true });
+    await fsp.rm(teamRoot, { recursive: true, force: true });
+  }
+});
+
+test('task patch set_project_id supports set and clear for inbox tasks', async () => {
+  const h = await createHarness();
+  try {
+    const project = await h.service.createProject({
+      id: 'proj_patch_link',
+      name: 'Project Patch Link',
+      visibility: 'private',
+    }, HUMAN_ACTOR);
+    const task = await h.service.createTask({
+      id: 'task_patch_project_link',
+      title: 'Task patch project',
+      assignee_type: 'unassigned',
+      status: 'todo',
+    }, HUMAN_ACTOR);
+
+    const linked = await h.service.patchTask(task.id, {
+      version: task.version,
+      ops: [{ op: 'set_project_id', value: project.id }],
+    }, HUMAN_ACTOR);
+    assert.equal(linked.project_id, project.id);
+    assert.equal(linked.activity_id, null);
+
+    const cleared = await h.service.patchTask(task.id, {
+      version: linked.version,
+      ops: [{ op: 'set_project_id', value: null }],
+    }, HUMAN_ACTOR);
+    assert.equal(cleared.project_id, null);
+  } finally {
+    await cleanupRoot(h.rootDir);
+  }
+});
+
+test('task patch supports project/activity relinking with exclusivity and scope checks', async () => {
+  const privateRoot = path.join(os.tmpdir(), `board-private-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const teamRoot = path.join(os.tmpdir(), `board-team-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const h = await createHarness({ boardRoots: { privateRoot, teamRoot } });
+  try {
+    const privateProject = await h.service.createProject({ id: 'proj_patch_relink_private', name: 'Private Relink Project', visibility: 'private' }, HUMAN_ACTOR);
+    const teamProject = await h.service.createProject({ id: 'proj_patch_relink_team', name: 'Team Relink Project', visibility: 'team' }, HUMAN_ACTOR);
+    const activity = await h.service.createActivity({ id: 'activity_patch_relink_private', name: 'Private Relink Activity', visibility: 'private' }, HUMAN_ACTOR);
+    const task = await h.service.createTask({
+      id: 'task_patch_relink_chain',
+      title: 'Relink chain task',
+      assignee_type: 'unassigned',
+      status: 'todo',
+    }, HUMAN_ACTOR);
+
+    const projectLinked = await h.service.patchTask(task.id, {
+      version: task.version,
+      ops: [{ op: 'set_project_id', value: privateProject.id }],
+    }, HUMAN_ACTOR);
+    assert.equal(projectLinked.project_id, privateProject.id);
+    assert.equal(projectLinked.activity_id, null);
+
+    await expectBoardErrorStatus(h.service.patchTask(task.id, {
+      version: projectLinked.version,
+      ops: [{ op: 'set_activity_id', value: activity.id }],
+    }, HUMAN_ACTOR), 422);
+
+    const activityLinked = await h.service.patchTask(task.id, {
+      version: projectLinked.version,
+      ops: [
+        { op: 'set_project_id', value: '' },
+        { op: 'set_activity_id', value: activity.id },
+      ],
+    }, HUMAN_ACTOR);
+    assert.equal(activityLinked.project_id, null);
+    assert.equal(activityLinked.activity_id, activity.id);
+
+    const relinkedProject = await h.service.patchTask(task.id, {
+      version: activityLinked.version,
+      ops: [
+        { op: 'set_activity_id', value: null },
+        { op: 'set_project_id', value: privateProject.id },
+      ],
+    }, HUMAN_ACTOR);
+    assert.equal(relinkedProject.project_id, privateProject.id);
+    assert.equal(relinkedProject.activity_id, null);
+
+    const inboxAgain = await h.service.patchTask(task.id, {
+      version: relinkedProject.version,
+      ops: [{ op: 'set_project_id', value: '' }],
+    }, HUMAN_ACTOR);
+    assert.equal(inboxAgain.project_id, null);
+    assert.equal(inboxAgain.activity_id, null);
+
+    await expectBoardErrorStatus(h.service.patchTask(task.id, {
+      version: inboxAgain.version,
+      ops: [{ op: 'set_project_id', value: 'proj_missing' }],
+    }, HUMAN_ACTOR), 422);
+
+    await expectBoardErrorStatus(h.service.patchTask(task.id, {
+      version: inboxAgain.version,
+      ops: [{ op: 'set_project_id', value: teamProject.id }],
+    }, HUMAN_ACTOR), 422);
+  } finally {
+    await cleanupRoot(h.rootDir);
+    await fsp.rm(privateRoot, { recursive: true, force: true });
+    await fsp.rm(teamRoot, { recursive: true, force: true });
+  }
+});
+
 test('explicit run creates one attempt/job', async () => {
   const h = await createHarness();
   try {
@@ -2390,21 +2700,35 @@ test('pre-change private board SQLite schema migrates transactionally with migra
       CREATE TABLE IF NOT EXISTS board_tasks (
         scope TEXT NOT NULL,
         id TEXT NOT NULL,
+        schema_version TEXT,
         project_id TEXT NOT NULL,
+        activity_id TEXT,
         title TEXT NOT NULL,
         description TEXT NOT NULL,
         status TEXT NOT NULL,
         priority TEXT NOT NULL,
+        work_type TEXT NOT NULL DEFAULT 'feature',
         assignee_type TEXT NOT NULL,
         assignee_id TEXT,
+        human_assignee_label TEXT,
+        workflow_id TEXT,
         subtasks_json TEXT NOT NULL,
+        component_tags_json TEXT NOT NULL DEFAULT '[]',
+        sprint TEXT,
+        story_points INTEGER,
+        completion_percent INTEGER NOT NULL DEFAULT 0,
+        dependencies_json TEXT NOT NULL DEFAULT '[]',
+        external_links_json TEXT NOT NULL DEFAULT '[]',
+        custom_fields_json TEXT NOT NULL DEFAULT '{}',
         due_at TEXT,
         review_json TEXT NOT NULL,
         blocked_json TEXT NOT NULL,
         visibility TEXT NOT NULL,
         version INTEGER NOT NULL,
         created_at TEXT NOT NULL,
+        created_by TEXT,
         updated_at TEXT NOT NULL,
+        updated_by TEXT,
         PRIMARY KEY (scope, id)
       );
 
@@ -2417,6 +2741,33 @@ test('pre-change private board SQLite schema migrates transactionally with migra
         position INTEGER NOT NULL,
         created_at TEXT NOT NULL
       );
+
+      INSERT INTO board_projects (
+        scope, id, name, status, visibility, owner_id, description,
+        tags_json, review_json, blocked_json, linked_paths_json, linked_runs_json,
+        version, created_at, updated_at
+      ) VALUES (
+        'private', 'proj_prechange', 'Legacy Project', 'active', 'private', 'human', '',
+        '[]', '{"state":"none","required":false,"reviewers":[],"decision":null,"decided_at":null,"decided_by":null}',
+        '{"is_blocked":false,"reason":"","since":null}', '[]', '[]',
+        1, '2024-01-01T00:00:00.000Z', '2024-01-01T00:00:00.000Z'
+      );
+
+      INSERT INTO board_tasks (
+        scope, id, schema_version, project_id, activity_id, title, description, status, priority,
+        work_type, assignee_type, assignee_id, human_assignee_label, workflow_id, subtasks_json,
+        component_tags_json, sprint, story_points, completion_percent, dependencies_json,
+        external_links_json, custom_fields_json, due_at, review_json, blocked_json,
+        visibility, version, created_at, created_by, updated_at, updated_by
+      ) VALUES (
+        'private', 'task_prechange', '1.0', 'proj_prechange', NULL, 'Legacy Task', '', 'todo', 'medium',
+        'feature', 'human', 'human', NULL, NULL, '[]',
+        '[]', NULL, NULL, 0, '[]',
+        '[]', '{}', NULL,
+        '{"state":"none","required":false,"reviewers":[],"decision":null,"decided_at":null,"decided_by":null}',
+        '{"is_blocked":false,"reason":"","since":null}',
+        'private', 1, '2024-01-01T00:00:00.000Z', 'human', '2024-01-01T00:00:00.000Z', 'human'
+      );
     `);
   } finally {
     legacyDb.close();
@@ -2427,15 +2778,26 @@ test('pre-change private board SQLite schema migrates transactionally with migra
     const db = new DatabaseSync(storage.getPrivateDbPath());
     try {
       const migrationRows = db.prepare('SELECT version, name FROM board_schema_migrations ORDER BY version ASC').all();
-      assert.ok(migrationRows.length >= 3);
+      assert.ok(migrationRows.length >= 4);
       assert.ok(migrationRows.some((row) => Number(row.version) === 4102));
       assert.ok(migrationRows.some((row) => Number(row.version) === 4103));
+      assert.ok(migrationRows.some((row) => Number(row.version) === 4104));
 
       const artifactColumns = db.prepare('PRAGMA table_info(board_task_execution_artifacts)').all();
       const artifactColumnNames = new Set(artifactColumns.map((row) => row.name));
       assert.ok(artifactColumnNames.has('artifact_id'));
       assert.ok(artifactColumnNames.has('storage_ref'));
       assert.ok(artifactColumnNames.has('hash_sha256'));
+
+      const taskColumns = db.prepare('PRAGMA table_info(board_tasks)').all();
+      const projectIdColumn = taskColumns.find((row) => row.name === 'project_id');
+      const taskColumnNames = new Set(taskColumns.map((row) => row.name));
+      assert.ok(taskColumnNames.has('activity_id'));
+      assert.equal(Number(projectIdColumn?.notnull || 0), 0);
+
+      const taskFks = db.prepare('PRAGMA foreign_key_list(board_tasks)').all();
+      assert.ok(taskFks.some((row) => row.table === 'board_projects'));
+      assert.ok(taskFks.some((row) => row.table === 'board_activities'));
 
       const idxRows = db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'board_task_execution_artifacts'").all();
       const idx = new Set(idxRows.map((row) => row.name));

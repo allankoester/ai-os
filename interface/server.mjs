@@ -157,6 +157,27 @@ function getRuntimeDeploymentState() {
   }
 }
 
+function buildSharedCapabilityState({ userPolicy, appSettings, deploymentState }) {
+  const canUseTeamBoard = Boolean(userPolicy?.canUseTeamBoard);
+  const configuredTeamRoot = String(appSettings?.settings?.teamBoardRoot || '').trim();
+  const activeTeamExists = Boolean(appSettings?.activeRuntimeRoots?.board?.team?.exists);
+  const capabilityReason = deploymentState?.teamCapability?.reason || null;
+
+  if (!canUseTeamBoard) {
+    return { status: 'disabled', enabled: false, reason: capabilityReason || 'USER_TYPE_LOCAL_ONLY' };
+  }
+  if (!configuredTeamRoot) {
+    return { status: 'not_configured', enabled: false, reason: capabilityReason || 'TEAM_ROOT_UNCONFIGURED' };
+  }
+  if (deploymentState?.effectiveDeployment === 'team-server' && deploymentState?.teamCapability?.status === 'enabled') {
+    return { status: 'ready', enabled: true, reason: null };
+  }
+  if (!activeTeamExists || appSettings?.restartRequired) {
+    return { status: 'degraded', enabled: false, reason: capabilityReason || 'TEAM_ROOT_UNAVAILABLE' };
+  }
+  return { status: 'degraded', enabled: false, reason: capabilityReason || 'TEAM_CAPABILITY_UNAVAILABLE' };
+}
+
 const knowledgeConfig = createKnowledgeConfig({ rootDir: ROOT, fsRootOverride: activeSharedKnowledgeRoot });
 const knowledgeStorage = knowledgeConfig.backend === 'graph'
   ? createGraphKnowledgeStorage({ config: knowledgeConfig.graph })
@@ -330,7 +351,7 @@ function endpointExpectsJsonBody(req, url) {
     return true;
   }
   if (req.method === 'DELETE') {
-    if (/^\/api\/(projects|tasks)\/[^/]+$/i.test(url.pathname)) return true;
+    if (/^\/api\/(projects|tasks|activities)\/[^/]+$/i.test(url.pathname)) return true;
     return false;
   }
   return false;
@@ -1450,7 +1471,7 @@ async function handleApi(req, res, url) {
   };
   const sendBoard = (code, data) => send(code, { ok: true, data });
 
-  const isBoardPath = /^\/api\/(board\/metadata|board\/artifacts\/[^/]+(?:\/[^/]+\/.+)?|projects(?:\/[^/]+(?:\/(activity|audit|visibility-migration|dashboard))?)?|tasks(?:\/[^/]+(?:\/(execution\/(run|cancel|retry)|review\/decision))?)?|internal\/tasks\/execution-callback)$/.test(url.pathname);
+  const isBoardPath = /^\/api\/(board\/metadata|board\/artifacts\/[^/]+(?:\/[^/]+\/.+)?|projects(?:\/[^/]+(?:\/(activity|audit|visibility-migration|dashboard))?)?|activities(?:\/[^/]+)?|tasks(?:\/[^/]+(?:\/(execution\/(run|cancel|retry)|review\/decision))?)?|internal\/tasks\/execution-callback)$/.test(url.pathname);
   const isInternalExecutionCallbackPath = url.pathname === '/api/internal/tasks/execution-callback';
 
   const mutating = req.method !== 'GET';
@@ -1545,6 +1566,25 @@ async function handleApi(req, res, url) {
     if (url.pathname === '/api/tasks' && req.method === 'POST') {
       const body = await readBody(req, { maxBytes: 256 * 1024 });
       return sendBoard(201, await boardService.createTask(body, actor));
+    }
+    if (url.pathname === '/api/activities' && req.method === 'GET') {
+      return sendBoard(200, await boardService.listActivities(Object.fromEntries(url.searchParams.entries()), actor));
+    }
+    if (url.pathname === '/api/activities' && req.method === 'POST') {
+      const body = await readBody(req, { maxBytes: 256 * 1024 });
+      return sendBoard(201, await boardService.createActivity(body, actor));
+    }
+    const activityMatch = url.pathname.match(/^\/api\/activities\/([^/]+)$/);
+    if (activityMatch && req.method === 'GET') {
+      return sendBoard(200, await boardService.getActivity(activityMatch[1], actor));
+    }
+    if (activityMatch && req.method === 'PATCH') {
+      const body = await readBody(req, { maxBytes: 256 * 1024 });
+      return sendBoard(200, await boardService.patchActivity(activityMatch[1], body, actor));
+    }
+    if (activityMatch && req.method === 'DELETE') {
+      const body = await readBody(req, { maxBytes: 256 * 1024 });
+      return sendBoard(200, await boardService.deleteActivity(activityMatch[1], body, actor));
     }
     const taskMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)$/);
     if (taskMatch && req.method === 'GET') {
@@ -2264,10 +2304,19 @@ async function handleApi(req, res, url) {
 
   // ---------- workspace status (profile + instructions completeness) ----------
 
+  if (url.pathname === '/api/workspaces' && req.method === 'GET') {
+    return send(200, [{
+      id: 'personal',
+      name: 'Personal Workspace',
+      type: 'personal',
+    }]);
+  }
+
   if (url.pathname === '/api/workspace' && req.method === 'GET') {
     const appSettings = await getAppSettingsResponse();
     const userType = String(appSettings?.settings?.userType || '');
     const userPolicy = deriveUserTypePolicy(userType);
+    const deploymentState = getRuntimeDeploymentState();
     const knowledgeSpaces = {
       personalReady: Boolean(appSettings.activeRuntimeRoots?.personal?.exists),
       sharedReady: knowledgeStorage.kind === 'fs'
@@ -2305,7 +2354,13 @@ async function handleApi(req, res, url) {
       knowledgeSpacesDone: Boolean(knowledgeSpaces.personalReady && knowledgeSpaces.sharedReady),
     };
     onboarding.complete = onboarding.userTypeDone && onboarding.personalDone && onboarding.companyDone && onboarding.memoryDone;
-    return send(200, { checks, onboarding, knowledgeSpaces, appSettings, userType, userPolicy });
+    const workspace = {
+      id: 'personal',
+      name: 'Personal Workspace',
+      type: 'personal',
+    };
+    const sharedCapability = buildSharedCapabilityState({ userPolicy, appSettings, deploymentState });
+    return send(200, { workspace, checks, onboarding, knowledgeSpaces, appSettings, userType, userPolicy, sharedCapability });
   }
 
   if (url.pathname === '/api/meta' && req.method === 'PUT') {
