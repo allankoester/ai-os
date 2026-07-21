@@ -3,7 +3,7 @@ import {
   createNativeM365OAuthClient,
 } from './oauth-native.mjs';
 
-const DEFAULT_SCOPES = [
+export const DEFAULT_M365_READONLY_SCOPES = [
   'openid',
   'profile',
   'offline_access',
@@ -13,16 +13,35 @@ const DEFAULT_SCOPES = [
   'Files.Read',
 ];
 
-function parseScopes(raw) {
+function parseScopes(raw, defaultScopes) {
   const fromEnv = String(raw || '').trim();
-  if (!fromEnv) return DEFAULT_SCOPES;
+  if (!fromEnv) return [...defaultScopes];
   return fromEnv.split(/\s+/).map((s) => s.trim()).filter(Boolean);
 }
 
-export function createM365TokenProvider({ env = process.env } = {}) {
-  const tenantId = String(env.M365_TENANT_ID || '').trim();
-  const clientId = String(env.M365_CLIENT_ID || '').trim();
-  const scopes = parseScopes(env.M365_SCOPES);
+function readEnvString(env, primaryKey, fallbackKey) {
+  const primary = String(env?.[primaryKey] || '').trim();
+  if (primary) return primary;
+  if (!fallbackKey) return '';
+  return String(env?.[fallbackKey] || '').trim();
+}
+
+export function createM365TokenProvider({
+  env = process.env,
+  defaultScopes = DEFAULT_M365_READONLY_SCOPES,
+  tenantIdEnvKey = 'M365_TENANT_ID',
+  clientIdEnvKey = 'M365_CLIENT_ID',
+  scopesEnvKey = 'M365_SCOPES',
+  tenantIdFallbackEnvKey = '',
+  clientIdFallbackEnvKey = '',
+  scopesFallbackEnvKey = '',
+  loginToolName = 'm365_auth_login',
+} = {}) {
+  const tenantId = readEnvString(env, tenantIdEnvKey, tenantIdFallbackEnvKey);
+  const clientId = readEnvString(env, clientIdEnvKey, clientIdFallbackEnvKey);
+  const scopeText = readEnvString(env, scopesEnvKey, scopesFallbackEnvKey);
+  const scopes = parseScopes(scopeText, defaultScopes);
+  const configHint = `${tenantIdEnvKey} and ${clientIdEnvKey}`;
 
   let currentAccess = null;
   let refreshInFlight = null;
@@ -83,7 +102,7 @@ export function createM365TokenProvider({ env = process.env } = {}) {
 
     async loginInteractive() {
       if (!nativeOAuth) {
-        throw new Error('native OAuth is not configured. Set M365_TENANT_ID and M365_CLIENT_ID first.');
+        throw new Error(`native OAuth is not configured. Set ${configHint} first.`);
       }
       const token = await nativeOAuth.loginInteractive();
       setCurrentAccess(token.accessToken, token.expiresAt);
@@ -113,7 +132,7 @@ export function createM365TokenProvider({ env = process.env } = {}) {
           try {
             const refreshedToken = await refreshNativeAccessToken();
             if (refreshedToken) return refreshedToken;
-            throw new Error('not authenticated. Run m365_auth_login to sign in.');
+            throw new Error(`not authenticated. Run ${loginToolName} to sign in.`);
           } finally {
             refreshInFlight = null;
           }
@@ -123,7 +142,7 @@ export function createM365TokenProvider({ env = process.env } = {}) {
         return await refreshInFlight;
       } catch (err) {
         if (/invalid_grant|interaction_required|consent_required/i.test(String(err?.message || ''))) {
-          throw new Error('session expired or revoked. Run m365_auth_login again.');
+          throw new Error(`session expired or revoked. Run ${loginToolName} again.`);
         }
         throw err;
       }

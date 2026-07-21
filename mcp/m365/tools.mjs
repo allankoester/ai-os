@@ -107,30 +107,6 @@ export const TOOL_DEFINITIONS = [
       },
     },
   },
-  {
-    name: 'm365_sharepoint_search_sites',
-    description: 'Searches SharePoint sites (requires Sites.Read.All if tenant policy enforces it).',
-    inputSchema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        query: { type: 'string', default: '"*"' },
-        top: { type: 'integer', minimum: 1, maximum: 50, default: 10 },
-      },
-    },
-  },
-  {
-    name: 'm365_sharepoint_list_drives',
-    description: 'Lists document libraries (drives) for a specific SharePoint siteId.',
-    inputSchema: {
-      type: 'object',
-      additionalProperties: false,
-      required: ['siteId'],
-      properties: {
-        siteId: { type: 'string', minLength: 1 },
-      },
-    },
-  },
 ];
 
 assertReadonlyToolDefinitions(TOOL_DEFINITIONS);
@@ -162,10 +138,6 @@ export async function callM365Tool({ name, args, authProvider, graphClient }) {
       return await graphClient.listDriveItems(input);
     case 'm365_files_get':
       return await graphClient.getDriveItem(input);
-    case 'm365_sharepoint_search_sites':
-      return await graphClient.searchSites(input);
-    case 'm365_sharepoint_list_drives':
-      return await graphClient.listSiteDrives(input);
     default:
       throw new Error(`unsupported tool: ${toolName}`);
   }

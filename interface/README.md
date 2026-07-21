@@ -101,7 +101,7 @@ changed remotely, writes return HTTP `409`.
 | Chat storage authority | `chat/history/*.jsonl` canonical transcripts + SQLite canonical session metadata/search index |
 | Skill Hub | Live — search/filter over `skills/company` + `skills/personal`, activation via `.skill-profile` → `.claude/skills/` symlinks (API `/api/skills`) |
 | Marketplace | Live — browses ComposioHQ/awesome-claude-skills, installs GitHub skills into `skills/personal/` (API `/api/marketplace`) |
-| Plugins | Real for MCP/permissions — writes `.mcp.json` and `.claude/settings.local.json`; includes built-in local `m365-readonly` MCP (read-only delegated Graph); external tools are config-only (API `/api/plugins`) |
+| Plugins | Real for MCP/permissions — writes `.mcp.json` and `.claude/settings.local.json`; includes built-in `m365-readonly` (read-only delegated Graph) and `m365-write` (calendar-read + SharePoint write with confirm gate); external tools are config-only (API `/api/plugins`) |
 | Profile editors | Real — Settings edits `knowledge/personal/user-profile.md`, `CLAUDE.local.md`, `CLAUDE.md` on disk |
 | "Ask Nora / Mara / Atlas", "Run test task" | Prototype — copies a task brief to the clipboard; interactive chat execution pending |
 
@@ -151,11 +151,17 @@ interface/
   replace with calls to a Claude runtime / Agent SDK.
 - `server.mjs` → add a `/api/task` endpoint that forwards briefs to an agent runner.
 
-## Microsoft 365 MCP (local read-only)
+## Microsoft 365 MCP
 
 - Built-in plugin id: `m365-readonly`
 - Command path: `node mcp/m365/server.mjs` (repo-local, no `npx -y`)
 - Auth intent: OAuth Authorization Code + PKCE (S256), work-account tenant only
-- Tool scope: read-only mail/tasks/files/sharepoint listing/read
+- Tool scope: read-only profile/mail/tasks/OneDrive tools
+
+- Built-in plugin id: `m365-write`
+- Command path: `node mcp/m365-write/server.mjs`
+- Tool scope: calendar reads + SharePoint read/write file tools
+- Mutation guardrail: every write tool call requires explicit `confirm=true`
 
 Setup guide: `docs/guide-m365-mcp-readonly-setup.md`
+Setup guide (write server): `docs/guide-m365-mcp-write-setup.md`

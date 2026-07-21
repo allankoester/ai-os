@@ -38,6 +38,7 @@ const DEFAULT_PROVIDER_SETTINGS = {
 const uiState = {
   chatMode: 'chat',
   providerSettings: { ...DEFAULT_PROVIDER_SETTINGS },
+  providerSettingsLoaded: false,
 };
 
 const viewRefreshSeq = {
@@ -291,8 +292,10 @@ async function refreshProviderSettingsState() {
       ...(payload?.settings || {}),
       envVault: Array.isArray(payload?.settings?.envVault) ? payload.settings.envVault : [],
     };
+    uiState.providerSettingsLoaded = true;
   } catch {
-    uiState.providerSettings = { ...DEFAULT_PROVIDER_SETTINGS };
+    uiState.providerSettings = { ...(uiState.providerSettings || DEFAULT_PROVIDER_SETTINGS) };
+    uiState.providerSettingsLoaded = false;
   }
 }
 
@@ -3621,7 +3624,7 @@ const SETTINGS_SECTIONS = [
   ['ai-provider', 'AI Provider'],
   ['onboarding', 'Onboarding'],
   ['profile', 'Profile & Instructions'],
-  ['plugins', 'Plugins'],
+  ['plugins', 'MCP & Plugins'],
   ['guardrails', 'Guardrails'],
 ];
 
@@ -3635,22 +3638,49 @@ async function paintSettings(el) {
   let workspace = { checks: [], onboarding: null };
   let plugins = [];
   let guardrails = null;
-  let providerSettings = { settings: { ...DEFAULT_PROVIDER_SETTINGS } };
+  let providerSettings = {
+    settings: {
+      ...DEFAULT_PROVIDER_SETTINGS,
+      ...(uiState.providerSettings || {}),
+      envVault: Array.isArray(uiState.providerSettings?.envVault) ? uiState.providerSettings.envVault : [],
+    },
+  };
+  let providerSettingsLoaded = uiState.providerSettingsLoaded;
   let appSettings = state.system?.appSettings || null;
+  let opencodeImport = null;
   try {
-    [workspace, { plugins }, guardrails, providerSettings, appSettings] = await Promise.all([
-      apiJson('/api/workspace'), apiJson('/api/plugins'), apiJson('/api/guardrails'), apiJson('/api/provider-settings'), apiJson('/api/app-settings'),
+    const [workspaceRes, pluginsRes, guardrailsRes, providerSettingsRes, appSettingsRes, opencodeImportRes] = await Promise.allSettled([
+      apiJson('/api/workspace'),
+      apiJson('/api/plugins'),
+      apiJson('/api/guardrails'),
+      apiJson('/api/provider-settings'),
+      apiJson('/api/app-settings'),
+      apiJson('/api/provider-settings/opencode-config-import').catch(() => null),
     ]);
+    if (workspaceRes.status === 'fulfilled') workspace = workspaceRes.value;
+    if (pluginsRes.status === 'fulfilled') plugins = pluginsRes.value?.plugins || [];
+    if (guardrailsRes.status === 'fulfilled') guardrails = guardrailsRes.value;
+    if (providerSettingsRes.status === 'fulfilled') {
+      providerSettings = providerSettingsRes.value;
+      providerSettingsLoaded = true;
+    }
+    if (appSettingsRes.status === 'fulfilled') appSettings = appSettingsRes.value;
+    if (opencodeImportRes.status === 'fulfilled') opencodeImport = opencodeImportRes.value;
   } catch { /* server-side features unavailable */ }
   if (state.view !== 'settings') return;
-  settingsState.data = { workspace, plugins, guardrails, providerSettings, appSettings };
-  uiState.providerSettings = { ...DEFAULT_PROVIDER_SETTINGS, ...(providerSettings?.settings || {}) };
+  settingsState.data = { workspace, plugins, guardrails, providerSettings, appSettings, opencodeImport };
+  uiState.providerSettings = {
+    ...DEFAULT_PROVIDER_SETTINGS,
+    ...(providerSettings?.settings || {}),
+    envVault: Array.isArray(providerSettings?.settings?.envVault) ? providerSettings.settings.envVault : [],
+  };
+  uiState.providerSettingsLoaded = providerSettingsLoaded;
   postChatRuntimeConfig();
   paintSettingsBody(el);
 }
 
 function paintSettingsBody(el) {
-  const { workspace, plugins, guardrails, providerSettings, appSettings } = settingsState.data;
+  const { workspace, plugins, guardrails, providerSettings, appSettings, opencodeImport } = settingsState.data;
   const show = (section) => settingsState.section === 'all' || settingsState.section === section;
   const profileChecks = (workspace.checks || []).filter((c) => c.id !== 'mcp-servers' && c.path !== '.mcp.json');
   const onb = workspace.onboarding;
@@ -3760,6 +3790,22 @@ function paintSettingsBody(el) {
         <button class="btn btn-ghost btn-small" data-act="onboarding-guide">Show Onboarding Guide</button>
         <span class="stat-note">The guide also appears automatically when the app loads while onboarding is incomplete.</span>
       </div>
+    </div>`;
+
+  const mcpPlugins = plugins.filter((p) => p.kind === 'mcp');
+  const otherPlugins = plugins.filter((p) => p.kind !== 'mcp');
+  const pluginRow = (p) => `
+    <div class="list-row" style="cursor:default;align-items:flex-start">
+      <span class="badge ${p.enabled ? 'badge-green' : 'badge-gray'}">${p.enabled ? 'ON' : 'OFF'}</span>
+      <span style="flex:1;min-width:0">
+        <span class="list-title" style="display:block">${esc(p.name)} <span class="list-meta">· ${esc(p.kind)}${p.custom ? ' · custom' : ''}</span></span>
+        <span class="stat-note" style="display:block;white-space:normal">${esc(p.description)} <em>${esc(p.effect)}</em></span>
+      </span>
+      <span style="display:flex;gap:6px;flex-shrink:0">
+        <button class="chip" data-plugin-config="${esc(p.id)}">CONFIGURE</button>
+        <button class="chip" data-plugin-toggle="${esc(p.id)}" data-enabled="${p.enabled ? '1' : ''}">${p.enabled ? 'DISABLE' : 'ENABLE'}</button>
+        ${p.custom ? `<button class="chip" data-plugin-del="${esc(p.id)}" style="color:var(--apricot-deep)">DELETE</button>` : ''}
+      </span>
     </div>`;
 
   el.innerHTML = `<div class="view-pad settings-block">
@@ -3931,12 +3977,51 @@ function paintSettingsBody(el) {
         <span class="stat-note" id="provider-save-status">${providerSavedLabel}</span>
       </div>
       <div class="stat-note" style="margin-top:8px;white-space:normal">
-        Local provider diagnostics: ${(providerDiagnostics?.checks || []).length
-          ? providerDiagnostics.checks.map((c) => `[${String(c.status || '').toUpperCase()}] ${esc(c.message || c.id)}`).join(' · ')
-          : 'not available'}
+        Provider readiness: 
+        ${(() => {
+          let lbl = 'unknown';
+          let cls = 'badge-gray';
+          if (providerDiagnostics?.ready === true) {
+            lbl = 'CLI ready';
+            cls = 'badge-green';
+          } else if (providerDiagnostics?.blockingFailures?.length) {
+            const hasSetup = providerDiagnostics.blockingFailures.some((f) => String(f.category).includes('setup') || String(f.id).includes('binary') || String(f.id).includes('setup'));
+            if (hasSetup) { lbl = 'setup required'; cls = 'badge-apricot'; }
+            else { lbl = 'auth/runtime failure'; cls = 'badge-apricot'; }
+          }
+          return `<span class="badge ${cls}">${esc(lbl)}</span>`;
+        })()}
+        ${(providerDiagnostics?.checks || []).length
+          ? `<br>Details: ` + providerDiagnostics.checks.map((c) => `[${String(c.status || '').toUpperCase()}] ${esc(c.message || c.id)}`).join(' · ')
+          : ''}
       </div>
       <div class="stat-note" id="provider-deep-test-status" style="margin-top:4px;white-space:normal">Deep provider test runs on demand only.</div>
       <div class="stat-note" style="margin-top:8px;white-space:normal">Settings are machine-local (<code>interface/provider-settings.json</code>) and apply on restart. Use <strong>Runtime → Restart App + Chat</strong> after saving.</div>
+    </div>
+    <div class="card" data-section="ai-provider">
+      <div class="section-title">OpenCode Import</div>
+      <div class="stat-note" style="margin-bottom:10px;white-space:normal">The app uses an independent managed CLI. You can import your existing OpenCode configuration here. Your existing credentials are reused and NOT copied.</div>
+      <div id="opencode-import-body" class="stat-note" style="white-space:normal;margin-bottom:10px;padding:8px;background:var(--bg);border-radius:4px;border:1px solid var(--border)">
+        ${(() => {
+          if (!opencodeImport) return 'Import status unavailable.';
+          const importStatus = opencodeImport?.status || null;
+          if (!importStatus) return 'Import status missing in response.';
+          let txt = `Status: ${importStatus.importState?.importedAt ? '<span class="badge badge-green">IMPORTED</span>' : '<span class="badge badge-gray">NOT IMPORTED</span>'}`;
+          if (importStatus.importState?.importedAt) txt += `<br>Last imported: ${timeAgo(Date.parse(importStatus.importState.importedAt))}`;
+          if (importStatus.sourcePath) txt += `<br>Source path: ${esc(importStatus.sourcePath)}`;
+          if (importStatus.targetPath) txt += `<br>Target path: ${esc(importStatus.targetPath)}`;
+          if (importStatus.diagnostics) {
+            const msgs = Array.isArray(importStatus.diagnostics) ? importStatus.diagnostics : [importStatus.diagnostics];
+            if (msgs.length) txt += `<br>Result: ${esc(msgs.join(', '))}`;
+          }
+          return txt;
+        })()}
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button class="btn btn-primary btn-small" data-act="opencode-import" data-mode="initial">Import Configuration</button>
+        <button class="btn btn-ghost btn-small" data-act="opencode-import" data-mode="refresh">Refresh Import</button>
+        <button class="btn btn-ghost btn-small" data-act="opencode-import-inspect">Inspect Status</button>
+      </div>
     </div>` : ''}
 
     ${show('onboarding') ? onboardingCard : ''}
@@ -3961,27 +4046,22 @@ function paintSettingsBody(el) {
     </div>` : ''}
 
     ${show('plugins') ? `
+    <div class="card" data-section="mcp">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+        <div class="section-title" style="flex:1;margin:0">MCP Servers</div>
+        <button class="btn btn-primary btn-small" data-act="add-mcp">Add MCP</button>
+      </div>
+      <div class="stat-note" style="margin-bottom:10px;white-space:normal">Model Context Protocol servers that Claude and the agents can call. Entries are written to <code>.mcp.json</code> and load in <strong>new</strong> runtime sessions. Use <strong>Add MCP</strong> for the setup wizard (manual or AI-assisted, with a connectivity test).</div>
+      ${mcpPlugins.map(pluginRow).join('') || '<div class="stat-note">No MCP servers yet — use “Add MCP” to configure one.</div>'}
+    </div>
+
     <div class="card" data-section="plugins">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
         <div class="section-title" style="flex:1;margin:0">Plugins</div>
         <button class="btn btn-ghost btn-small" data-act="add-plugin">Add Plugin</button>
       </div>
-      ${plugins.map((p) => `
-        <div class="list-row" style="cursor:default;align-items:flex-start">
-          <span class="badge ${p.enabled ? 'badge-green' : 'badge-gray'}">${p.enabled ? 'ON' : 'OFF'}</span>
-          <span style="flex:1;min-width:0">
-            <span class="list-title" style="display:block">${esc(p.name)} <span class="list-meta">· ${esc(p.kind)}${p.custom ? ' · custom' : ''}</span></span>
-            <span class="stat-note" style="display:block;white-space:normal">${esc(p.description)} <em>${esc(p.effect)}</em></span>
-          </span>
-          <span style="display:flex;gap:6px;flex-shrink:0">
-            <button class="chip" data-plugin-config="${esc(p.id)}">CONFIGURE</button>
-            <button class="chip" data-plugin-toggle="${esc(p.id)}" data-enabled="${p.enabled ? '1' : ''}">${p.enabled ? 'DISABLE' : 'ENABLE'}</button>
-            ${p.custom ? `<button class="chip" data-plugin-del="${esc(p.id)}" style="color:var(--apricot-deep)">DELETE</button>` : ''}
-          </span>
-        </div>`).join('') || '<div class="stat-note">Plugin manager unavailable.</div>'}
-      <div class="stat-note" style="margin-top:8px;white-space:normal">
-        MCP and permission plugins take effect in <strong>new</strong> runtime sessions (Claude/OpenCode). External plugins are config-only.
-      </div>
+      <div class="stat-note" style="margin-bottom:10px;white-space:normal">Permission and external plugins. Permission plugins write <code>.claude/settings.local.json</code> and take effect in <strong>new</strong> runtime sessions; external plugins store config and setup notes only.</div>
+      ${otherPlugins.map(pluginRow).join('') || '<div class="stat-note">No plugins configured.</div>'}
     </div>` : ''}
 
     ${show('guardrails') ? '<div class="card" id="gr-card" data-section="guardrails"></div>' : ''}
@@ -4008,6 +4088,40 @@ function paintSettingsBody(el) {
     }
   });
   bindMemoryActions(el);
+
+  $$('[data-act="opencode-import"]', el).forEach((b) => b.addEventListener('click', async () => {
+    const mode = b.dataset.mode; // 'initial' or 'refresh'
+    const btnText = b.textContent;
+    b.textContent = 'Importing...';
+    b.disabled = true;
+    try {
+      await apiJson('/api/provider-settings/opencode-config-import', {
+        method: 'POST',
+        body: JSON.stringify({ mode })
+      });
+      toast(`OPENCODE CONFIG IMPORT SUCCESSFUL`);
+      paintSettings(el);
+    } catch (e) {
+      toast(`IMPORT FAILED: ${e.message.toUpperCase()}`, true);
+      b.textContent = btnText;
+      b.disabled = false;
+    }
+  }));
+
+  $$('[data-act="opencode-import-inspect"]', el).forEach((b) => b.addEventListener('click', async () => {
+    const btnText = b.textContent;
+    b.textContent = 'Inspecting...';
+    b.disabled = true;
+    try {
+      await paintSettings(el);
+      toast('STATUS REFRESHED');
+    } catch (e) {
+      toast('FAILED TO REFRESH STATUS', true);
+    } finally {
+      b.textContent = btnText;
+      b.disabled = false;
+    }
+  }));
 
   $$('[data-edit-file]', el).forEach((b) => b.addEventListener('click', () => {
     const check = profileChecks.find((c) => c.path === b.dataset.editFile);
@@ -4053,6 +4167,7 @@ function paintSettingsBody(el) {
     } catch (e) { toast(e.message.toUpperCase(), true); }
   }));
 
+  $('[data-act="add-mcp"]', el)?.addEventListener('click', () => openMcpWizard(() => paintSettings(el)));
   $('[data-act="add-plugin"]', el)?.addEventListener('click', () => openPluginCreateDrawer(() => paintSettings(el)));
 
   const envListEl = $('#provider-env-list', el);
@@ -4110,6 +4225,11 @@ function paintSettingsBody(el) {
     const bridgeEl = $('#provider-cli-bridge-enabled', el);
     const statusEl = $('#provider-save-status', el);
     if (!modeEl || !binEl || !bridgeEl || !statusEl) return;
+    if (!uiState.providerSettingsLoaded) {
+      statusEl.textContent = 'Provider settings unavailable. Refresh and retry before saving.';
+      toast('PROVIDER SETTINGS NOT LOADED', true);
+      return;
+    }
     const payload = {
       runtimeMode: modeEl.value,
       opencodeBin: binEl.value.trim(),
@@ -4435,21 +4555,19 @@ function openPluginCreateDrawer(onSaved) {
       <button class="drawer-close">✕</button>
       <div class="drawer-dept">PLUGIN · NEW</div>
       <div class="drawer-name">Add Plugin</div>
-      <div class="drawer-role">Register a new integration. MCP and permission plugins take real effect; external ones store config and setup notes.</div>
+      <div class="drawer-role">Register a permission or external plugin. For MCP servers use “Add MCP” instead — it has a guided setup wizard with a connectivity test.</div>
     </div>
     <div class="drawer-body">
-      <div class="form-field"><label>ID (kebab-case)</label><input id="pc-id" placeholder="my-mcp-server"></div>
-      <div class="form-field"><label>Name</label><input id="pc-name" placeholder="My MCP Server"></div>
+      <div class="form-field"><label>ID (kebab-case)</label><input id="pc-id" placeholder="my-plugin"></div>
+      <div class="form-field"><label>Name</label><input id="pc-name" placeholder="My Plugin"></div>
       <div class="form-field"><label>Kind</label>
         <select id="pc-kind">
-          <option value="mcp">mcp — server entry written to .mcp.json</option>
           <option value="permission">permission — tool rule allowed in settings.local.json</option>
           <option value="external">external — config + setup notes only</option>
         </select>
       </div>
       <div class="form-field"><label>Description</label><textarea id="pc-desc" rows="3" placeholder="What does this plugin provide?"></textarea></div>
-      <div class="form-field" id="pc-perm-wrap" style="display:none"><label>Permission rule</label><input id="pc-perm" placeholder='e.g. WebSearch or Bash(gh:*)'></div>
-      <div class="form-field" id="pc-mcp-wrap"><label>MCP command + args</label><input id="pc-cmd" placeholder="npx"><input id="pc-args" placeholder="-y my-mcp-package" style="margin-top:6px"></div>
+      <div class="form-field" id="pc-perm-wrap"><label>Permission rule</label><input id="pc-perm" placeholder='e.g. WebSearch or Bash(gh:*)'></div>
       <div class="form-field"><label>Setup notes (optional)</label><textarea id="pc-setup" rows="2" placeholder="Install command or docs link"></textarea></div>
       <button class="btn btn-primary" id="pc-save">Add Plugin</button>
     </div>`);
@@ -4457,7 +4575,6 @@ function openPluginCreateDrawer(onSaved) {
   $('#pc-kind').addEventListener('change', () => {
     const kind = $('#pc-kind').value;
     $('#pc-perm-wrap').style.display = kind === 'permission' ? 'flex' : 'none';
-    $('#pc-mcp-wrap').style.display = kind === 'mcp' ? 'flex' : 'none';
   });
 
   $('#pc-save').addEventListener('click', async () => {
@@ -4470,9 +4587,197 @@ function openPluginCreateDrawer(onSaved) {
         description: $('#pc-desc').value,
         permission: $('#pc-perm').value,
         setup: $('#pc-setup').value,
-        config: kind === 'mcp' ? { command: $('#pc-cmd').value.trim(), args: $('#pc-args').value.trim().split(/\s+/).filter(Boolean), env: {} } : {},
+        config: {},
       }) });
       toast('PLUGIN ADDED — ENABLE + CONFIGURE IT IN THE LIST');
+      closeDrawer();
+      onSaved();
+    } catch (e) { toast(e.message.toUpperCase(), true); }
+  });
+}
+
+// MCP setup wizard: two ways to configure a new MCP server — Manual (type the
+// command/args/env or the streamable-http url/headers) and Agent (paste docs or
+// describe the server; Claude generates the config). Both feed the same config,
+// which can be tested (ad-hoc connectivity check) before saving.
+function openMcpWizard(onSaved) {
+  openDrawer(`
+    <div class="drawer-head">
+      <button class="drawer-close">✕</button>
+      <div class="drawer-dept">MCP · SETUP WIZARD</div>
+      <div class="drawer-name">Add MCP Server</div>
+      <div class="drawer-role">Configure a new MCP server manually or let the agent draft it from documentation. Test the connection, then save — the entry is written to <code>.mcp.json</code> for new runtime sessions.</div>
+    </div>
+    <div class="drawer-body">
+      <div class="filter-tabs" style="margin-bottom:12px">
+        <button class="filter-tab active" data-mw-tab="manual">Manual</button>
+        <button class="filter-tab" data-mw-tab="agent">Agent (AI-assisted)</button>
+      </div>
+
+      <div id="mw-panel-agent" style="display:none">
+        <div class="form-field">
+          <label>Describe the server or paste its docs / README</label>
+          <textarea id="mw-desc-input" rows="7" spellcheck="false" placeholder="e.g. The Acme MCP server. Runs via 'npx -y @acme/mcp'. Needs an ACME_TOKEN environment variable for auth."></textarea>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-small" id="mw-generate">Generate config</button>
+          <span class="stat-note">Claude drafts the config, then fills the Manual tab for you to review, test and save. Secrets are kept as <code>\${ENV}</code> placeholders — never real values.</span>
+        </div>
+      </div>
+
+      <div id="mw-panel-manual">
+        <div class="form-field"><label>ID (kebab-case)</label><input id="mw-id" placeholder="my-mcp-server"></div>
+        <div class="form-field"><label>Name</label><input id="mw-name" placeholder="My MCP Server"></div>
+        <div class="form-field"><label>Description (optional)</label><input id="mw-desc" placeholder="What this server provides"></div>
+        <div class="form-field"><label>Transport</label>
+          <select id="mw-transport">
+            <option value="stdio">stdio — local command (command + args + env)</option>
+            <option value="streamable-http">streamable-http — remote URL + headers</option>
+          </select>
+        </div>
+        <div id="mw-stdio">
+          <div class="form-field"><label>Command</label><input id="mw-cmd" placeholder="npx"></div>
+          <div class="form-field"><label>Arguments (space-separated)</label><input id="mw-args" placeholder="-y @acme/mcp"></div>
+          <div class="form-field"><label>Environment (one KEY=value per line)</label><textarea id="mw-env" rows="3" spellcheck="false" placeholder="ACME_TOKEN=\${ACME_TOKEN}"></textarea></div>
+        </div>
+        <div id="mw-http" style="display:none">
+          <div class="form-field"><label>URL</label><input id="mw-url" placeholder="https://api.example.com/mcp"></div>
+          <div class="form-field"><label>Headers (one Name: value per line)</label><textarea id="mw-headers" rows="3" spellcheck="false" placeholder="Authorization: Bearer \${API_TOKEN}"></textarea></div>
+        </div>
+        <div class="stat-note" style="white-space:normal">Tip: use <code>\${ENV_NAME}</code> placeholders for secrets and store the values in Settings → AI Provider → env vault. Placeholders are auto-registered as <code>envKeys</code>.</div>
+      </div>
+
+      <div class="drawer-section" style="margin-top:14px">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-small" id="mw-test">Test connection</button>
+          <button class="btn btn-primary" id="mw-save">Save MCP</button>
+        </div>
+        <pre class="run-log" id="mw-test-result" style="max-height:180px;margin-top:8px;display:none"></pre>
+      </div>
+    </div>`);
+
+  const switchTab = (tab) => {
+    $$('[data-mw-tab]').forEach((b) => b.classList.toggle('active', b.dataset.mwTab === tab));
+    $('#mw-panel-manual').style.display = tab === 'manual' ? 'block' : 'none';
+    $('#mw-panel-agent').style.display = tab === 'agent' ? 'block' : 'none';
+  };
+  $$('[data-mw-tab]').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.mwTab)));
+
+  const syncTransport = () => {
+    const remote = $('#mw-transport').value === 'streamable-http';
+    $('#mw-stdio').style.display = remote ? 'none' : 'block';
+    $('#mw-http').style.display = remote ? 'block' : 'none';
+  };
+  $('#mw-transport').addEventListener('change', syncTransport);
+
+  const collectPlaceholders = (obj) => {
+    const keys = new Set();
+    const re = /\$\{([A-Z_][A-Z0-9_]*)\}/g;
+    let m;
+    while ((m = re.exec(JSON.stringify(obj)))) keys.add(m[1]);
+    return [...keys];
+  };
+
+  const buildConfig = () => {
+    if ($('#mw-transport').value === 'streamable-http') {
+      const headers = {};
+      $('#mw-headers').value.split(/\n/).forEach((line) => {
+        const i = line.indexOf(':');
+        if (i <= 0) return;
+        const k = line.slice(0, i).trim();
+        const v = line.slice(i + 1).trim();
+        if (k && v) headers[k] = v;
+      });
+      const config = { type: 'streamable-http', url: $('#mw-url').value.trim() };
+      if (Object.keys(headers).length) config.headers = headers;
+      const envKeys = collectPlaceholders(config);
+      if (envKeys.length) config.envKeys = envKeys;
+      return config;
+    }
+    const env = {};
+    $('#mw-env').value.split(/\n/).forEach((line) => {
+      const i = line.indexOf('=');
+      if (i <= 0) return;
+      const k = line.slice(0, i).trim();
+      const v = line.slice(i + 1).trim();
+      if (k) env[k] = v;
+    });
+    const config = { command: $('#mw-cmd').value.trim(), args: $('#mw-args').value.trim().split(/\s+/).filter(Boolean) };
+    if (Object.keys(env).length) config.env = env;
+    const envKeys = collectPlaceholders(config);
+    if (envKeys.length) config.envKeys = envKeys;
+    return config;
+  };
+
+  const fillFromConfig = ({ id, name, config }) => {
+    if (id) $('#mw-id').value = id;
+    if (name) $('#mw-name').value = name;
+    const c = config || {};
+    const remote = String(c.type || '').trim() === 'streamable-http' || (!c.command && c.url);
+    $('#mw-transport').value = remote ? 'streamable-http' : 'stdio';
+    syncTransport();
+    if (remote) {
+      $('#mw-url').value = c.url || '';
+      $('#mw-headers').value = Object.entries(c.headers || {}).map(([k, v]) => `${k}: ${v}`).join('\n');
+    } else {
+      $('#mw-cmd').value = c.command || '';
+      $('#mw-args').value = Array.isArray(c.args) ? c.args.join(' ') : String(c.args || '');
+      $('#mw-env').value = Object.entries(c.env || {}).map(([k, v]) => `${k}=${v}`).join('\n');
+    }
+  };
+
+  $('#mw-generate').addEventListener('click', async () => {
+    const description = $('#mw-desc-input').value.trim();
+    if (!description) return toast('DESCRIBE THE SERVER OR PASTE ITS DOCS FIRST', true);
+    const btn = $('#mw-generate');
+    try {
+      btn.disabled = true;
+      btn.textContent = 'Generating…';
+      const result = await apiJson('/api/plugins/generate-mcp', { method: 'POST', body: JSON.stringify({ description }) });
+      fillFromConfig(result);
+      switchTab('manual');
+      toast('CONFIG GENERATED — REVIEW, TEST, THEN SAVE');
+    } catch (e) {
+      toast(('GENERATION FAILED: ' + e.message).toUpperCase(), true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Generate config';
+    }
+  });
+
+  $('#mw-test').addEventListener('click', async () => {
+    const out = $('#mw-test-result');
+    const btn = $('#mw-test');
+    try {
+      out.style.display = 'block';
+      out.textContent = 'Testing MCP connection…';
+      btn.disabled = true;
+      const result = await apiJson('/api/plugins/test-config', { method: 'POST', body: JSON.stringify({ config: buildConfig() }) });
+      out.textContent = JSON.stringify(result, null, 2);
+      toast('MCP TEST FINISHED');
+    } catch (e) {
+      out.style.display = 'block';
+      out.textContent = String(e.message || e);
+      toast(('MCP TEST FAILED: ' + e.message).toUpperCase(), true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  $('#mw-save').addEventListener('click', async () => {
+    const id = $('#mw-id').value.trim();
+    const name = $('#mw-name').value.trim();
+    if (!id) return toast('ID IS REQUIRED (KEBAB-CASE)', true);
+    if (!name) return toast('NAME IS REQUIRED', true);
+    const config = buildConfig();
+    try {
+      await apiJson('/api/plugins', { method: 'POST', body: JSON.stringify({
+        id, name, kind: 'mcp',
+        description: $('#mw-desc').value.trim() || `${name} MCP server.`,
+        config,
+      }) });
+      await apiJson('/api/plugins/' + id, { method: 'PUT', body: JSON.stringify({ enabled: true, config }) });
+      toast(name.toUpperCase() + ' SAVED + ENABLED — LOADS IN NEW RUNTIME SESSIONS');
       closeDrawer();
       onSaved();
     } catch (e) { toast(e.message.toUpperCase(), true); }
@@ -5089,15 +5394,6 @@ function openProjectEditDrawer(project) {
   });
 }
 
-function makeTaskPrefill(payload) {
-  const text = String(payload?.selectedText || payload?.composerText || payload?.text || '').trim();
-  return {
-    conversationId: String(payload?.conversationId || '').trim(),
-    title: (text.split(/\r?\n/)[0] || '').slice(0, 160),
-    description: text,
-  };
-}
-
 const WORK_TYPE_VALUES = new Set(['feature', 'bug', 'tech_debt', 'spike']);
 
 function normalizeWorkType(value) {
@@ -5645,13 +5941,6 @@ function openTaskDrawer(taskId) {
   });
 }
 
-function handleChatAddTaskHandoff(payload) {
-  const conversationId = String(payload?.conversationId || '').trim();
-  if (!conversationId) return;
-  if (state.view !== 'projects') setView('projects');
-  openTaskCreateDrawer(projectState.selectedProjectId, { prefill: makeTaskPrefill(payload) });
-}
-
 function paintProjects() {
   const el = projectState.el;
   if (!el || state.view !== 'projects') return;
@@ -6175,7 +6464,6 @@ window.addEventListener('message', (e) => {
     flushPendingChatMessages();
     return;
   }
-  if (data.type === 'steadymade-chat-add-task') handleChatAddTaskHandoff(data);
 });
 
 function chatRuntimeConfigPayload() {

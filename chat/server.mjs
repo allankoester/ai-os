@@ -13,12 +13,30 @@ import {
   ensureRuntimeFilePath,
   resolveRuntimeRoot,
 } from '../interface/storage/runtime/storage-kernel.mjs';
+import {
+  prepareOpenCodeEnvironment,
+  resolveManagedCliTargets,
+} from '../runtime/managed-runtime.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
+const PROVIDER_SETTINGS_FILE = path.join(ROOT, 'interface', 'provider-settings.json');
 const PUBLIC = path.join(__dirname, 'public');
 const PORT = Number(process.env.CHAT_PORT || 4012);
 const DEFAULT_CHAT_MODEL = 'sonnet';
+const DEFAULT_CLAUDE_MODELS = ['sonnet', 'opus', 'haiku'];
+const DEFAULT_OPENCODE_MODELS = [
+  'anthropic/claude-sonnet-4-5',
+  'anthropic/claude-opus-4-1',
+  'anthropic/claude-haiku-4-5',
+  'openai/gpt-5',
+];
+const DEFAULT_OPENCODE_MODEL_ALIASES = {
+  default: 'anthropic/claude-sonnet-4-5',
+  sonnet: 'anthropic/claude-sonnet-4-5',
+  opus: 'anthropic/claude-opus-4-1',
+  haiku: 'anthropic/claude-haiku-4-5',
+};
 const CHAT_CLI_BRIDGE_ENABLED = /^(1|true|yes|on)$/i.test(String(process.env.CHAT_CLI_BRIDGE_ENABLED || '').trim());
 const CHAT_CLI_TOKEN = String(process.env.CHAT_CLI_TOKEN || '').trim();
 const LEGACY_USAGE_LOG = path.join(ROOT, 'runs', 'chat-usage.jsonl');
@@ -54,6 +72,24 @@ const ALLOWED_TOOLS = process.env.CHAT_ALLOWED_TOOLS || 'Task,Read,Glob,Grep,Ski
 // writable at all (memory/**, runs/**).
 const DISALLOWED_TOOLS = process.env.CHAT_DISALLOWED_TOOLS
   ?? 'Write(./memory/MEMORY.md),Edit(./memory/MEMORY.md)';
+
+// Interactive permissions: a PreToolUse hook gates every tool call. Safe,
+// read-only tools are auto-approved; anything else pauses the run and asks the
+// user in the chat UI (Allow / Allow for this run / Deny). Disable by setting
+// CHAT_INTERACTIVE_PERMISSIONS=0 (then non-allowlisted tools just fail, as before).
+const INTERACTIVE_PERMISSIONS = String(process.env.CHAT_INTERACTIVE_PERMISSIONS ?? '1') !== '0';
+const PERMISSION_TIMEOUT_MS = Math.max(
+  5000,
+  Number(process.env.CHAT_PERMISSION_TIMEOUT_MS || 5 * 60 * 1000) || 5 * 60 * 1000,
+);
+const PERMISSION_SAFE_TOOLS = String(
+  process.env.CHAT_PERMISSION_SAFE_TOOLS
+    || `${ALLOWED_TOOLS},WebSearch,TodoWrite,NotebookRead,BashOutput`,
+)
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+const PERMISSION_HOOK_PATH = path.join(__dirname, 'permission-hook.mjs');
 const MAX_JSON_BODY_BYTES = Math.max(1024, Number(process.env.CHAT_JSON_MAX_BYTES || 64 * 1024) || 64 * 1024);
 const CLI_INPUT_MAX_LINE = Math.max(64, Number(process.env.CHAT_CLI_MAX_INPUT_LINE || 4096) || 4096);
 const CLI_MAX_SUBSCRIBERS = Math.max(1, Number(process.env.CHAT_CLI_MAX_SUBSCRIBERS || 8) || 8);
@@ -119,23 +155,33 @@ Safety addendum (mandatory in this runtime):
 - Keep claims evidence-based and bounded; if uncertain, say so.`;
 
 const RUN_REGISTRY = new Map(); // conversationId -> non-incognito run
+const PERM_RUN_REGISTRY = new Map(); // permRunId -> run (for the permission bridge; covers incognito too)
 
-function findClaudeBin() {
-  if (process.env.CLAUDE_BIN) return process.env.CLAUDE_BIN;
-  const base = path.join(os.homedir(), 'Library/Application Support/Claude/claude-code');
+function readProviderSettingsForRuntime() {
   try {
-    const versions = fs.readdirSync(base)
-      .filter((v) => /^\d+\.\d+/.test(v))
-      .sort((a, b) => b.localeCompare(a, undefined, { numeric: true, sensitivity: 'base' }));
-    for (const v of versions) {
-      const p = path.join(base, v, 'claude.app/Contents/MacOS/claude');
-      if (fs.existsSync(p)) return p;
-    }
-  } catch {}
-  return 'claude';
+    const parsed = JSON.parse(fs.readFileSync(PROVIDER_SETTINGS_FILE, 'utf8'));
+    return {
+      runtimeMode: String(parsed?.runtimeMode || '').trim(),
+      claudeBin: String(parsed?.claudeBin || '').trim(),
+      opencodeBin: String(parsed?.opencodeBin || '').trim(),
+      opencodeConfigPath: String(parsed?.opencodeConfigPath || '').trim(),
+    };
+  } catch {
+    return { runtimeMode: '', claudeBin: '', opencodeBin: '', opencodeConfigPath: '' };
+  }
 }
-const CLAUDE_BIN = findClaudeBin();
-const OPENCODE_BIN = process.env.OPENCODE_BIN || 'opencode';
+
+function resolveCliTargets() {
+  return resolveManagedCliTargets({
+    workspaceRoot: ROOT,
+    providerSettings: readProviderSettingsForRuntime(),
+    env: process.env,
+    testRootOverride: CHAT_STORAGE_TEST_ROOT,
+  });
+}
+
+const CLAUDE_BIN = String(process.env.CLAUDE_BIN || '').trim();
+const OPENCODE_BIN = String(process.env.OPENCODE_BIN || '').trim();
 
 const PROVIDER_MODES = new Set(['claude-subscription', 'anthropic-api', 'opencode']);
 
@@ -147,6 +193,37 @@ function resolveProviderMode(rawMode) {
 
 const PROVIDER_MODE = resolveProviderMode(process.env.STEADYMADE_PROVIDER_MODE);
 const ACTIVE_CHAT_RUNTIME = PROVIDER_MODE === 'opencode' ? 'opencode' : 'claude';
+
+function parseCsvList(raw, fallback = []) {
+  const items = String(raw || '')
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return items.length ? items : fallback;
+}
+
+function parseAliasMap(raw, fallback = {}) {
+  const out = { ...fallback };
+  const entries = String(raw || '')
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+  for (const entry of entries) {
+    const idx = entry.indexOf('=');
+    if (idx <= 0) continue;
+    const alias = entry.slice(0, idx).trim().toLowerCase();
+    const model = entry.slice(idx + 1).trim();
+    if (!alias || !model || !model.includes('/')) continue;
+    out[alias] = model;
+  }
+  return out;
+}
+
+const CLAUDE_SUPPORTED_MODELS = parseCsvList(process.env.CHAT_CLAUDE_MODELS, DEFAULT_CLAUDE_MODELS);
+const OPENCODE_SUPPORTED_MODELS = parseCsvList(process.env.CHAT_OPENCODE_MODELS, DEFAULT_OPENCODE_MODELS)
+  .filter((model) => model.includes('/'));
+const OPENCODE_MODEL_ALIASES = parseAliasMap(process.env.CHAT_OPENCODE_MODEL_ALIASES, DEFAULT_OPENCODE_MODEL_ALIASES);
+const OPENCODE_DEFAULT_MODEL = String(process.env.CHAT_OPENCODE_DEFAULT_MODEL || '').trim();
 
 function expandHome(rawPath) {
   const value = String(rawPath || '').trim();
@@ -202,42 +279,16 @@ function discoverCommonLocalBinDirs() {
 }
 
 function resolveBinaryCommand(command, fallbackName) {
-  const configuredRaw = String(command || '').trim();
-  const configured = expandHome(configuredRaw || fallbackName);
-  const hasPathSegment = configured.includes(path.sep);
-  const diagnostics = {
-    configured: configuredRaw || fallbackName,
-    resolvedPath: null,
-    availablePaths: [],
-    reason: null,
+  const targetName = fallbackName === 'opencode' ? 'opencode' : 'claude';
+  const target = resolveCliTargets()[targetName];
+  return {
+    configured: String(command || '').trim() || target.selectedPath || target.managedDefaultPath,
+    resolvedPath: target.resolvedPath,
+    availablePaths: target.resolvedPath ? [target.resolvedPath] : [],
+    reason: target.reason,
+    source: target.source,
+    setupRequired: target.setupRequired,
   };
-
-  const candidates = [];
-  if (hasPathSegment) {
-    candidates.push(path.resolve(configured));
-    if (!path.isAbsolute(configured)) candidates.push(path.resolve(ROOT, configured));
-  } else {
-    const searchDirs = uniquePaths([
-      ...String(process.env.PATH || '').split(path.delimiter),
-      ...COMMON_LOCAL_BIN_DIRS,
-    ]);
-    for (const dir of searchDirs) candidates.push(path.join(dir, configured));
-  }
-
-  for (const candidate of uniquePaths(candidates)) {
-    if (isExecutable(candidate)) diagnostics.availablePaths.push(candidate);
-  }
-  diagnostics.resolvedPath = diagnostics.availablePaths[0] || null;
-
-  if (!diagnostics.resolvedPath) {
-    if (hasPathSegment) {
-      diagnostics.reason = `configured path is not executable: ${diagnostics.configured}`;
-    } else {
-      diagnostics.reason = `${diagnostics.configured} binary not found in PATH/local bins`;
-    }
-  }
-
-  return diagnostics;
 }
 
 const CLI_TARGETS = {
@@ -522,6 +573,10 @@ function listAgents(res) {
   sendJson(res, 200, {
     agents: AGENTS.map((a) => ({ id: a.id, name: a.name, function: a.function, mode: a.mode })),
   });
+}
+
+function listCapabilities(res) {
+  sendJson(res, 200, buildCapabilitiesPayload());
 }
 
 function isConversationRunning(id) {
@@ -1298,7 +1353,7 @@ function removeSubscriber(run, res) {
 }
 
 function emitRunEvent(run, event, data = {}) {
-  const payload = { ...data, _seq: ++run.seq };
+  const payload = { ...data, _seq: ++run.seq, _ts: nowIsoUtc() };
   run.events.push({ seq: run.seq, event, data: payload });
   for (const sub of [...run.subscribers]) {
     if (sub.writableEnded || sub.destroyed) {
@@ -1307,6 +1362,301 @@ function emitRunEvent(run, event, data = {}) {
     }
     sse(sub, event, payload);
   }
+}
+
+function emitStderrEvent(run, text, options = {}) {
+  const safeText = redactSensitiveText(text);
+  const hasText = safeText.trim().length > 0;
+  const fallbackCode = options.code || 'runtime_stderr';
+  const errorMeta = options.error
+    ? {
+        category: String(options.error.category || 'runtime_error'),
+        code: String(options.error.code || fallbackCode),
+        message: redactSensitiveText(options.error.message || safeText || 'runtime error'),
+        permission_required: Boolean(options.error.permission_required),
+      }
+    : classifyErrorMetadata(safeText || options.message || '', { fallbackCode });
+  emitRunEvent(run, 'stderr', {
+    text: hasText ? safeText : errorMeta.message,
+    category: errorMeta.category,
+    code: errorMeta.code,
+    permission_required: errorMeta.permission_required,
+    error: errorMeta,
+  });
+  if (run.conversationId) {
+    run.pendingErrorEvents.push({
+      t: 'error',
+      ts: nowIsoUtc(),
+      text: hasText ? safeText : errorMeta.message,
+      error: errorMeta,
+    });
+  }
+  run.lastErrorMeta = errorMeta;
+}
+
+function initToolState(run, payload = {}) {
+  const id = String(payload.id || '').trim() || `tool_${++run.toolCounter}`;
+  const startedAt = Date.now();
+  const tool = {
+    id,
+    name: String(payload.name || 'tool').trim() || 'tool',
+    sub: Boolean(payload.sub),
+    parent_id: payload.parent_id ? String(payload.parent_id).trim() : null,
+    detail: redactSensitiveText(payload.detail || ''),
+    input: redactSensitiveText(payload.input || ''),
+    result: '',
+    permission_id: null,
+    started_at: nowIsoUtc(),
+    started_at_ms: startedAt,
+    status: 'running',
+    completed_at: null,
+    duration_ms: null,
+    error: null,
+  };
+  run.toolStates.set(id, tool);
+  return tool;
+}
+
+function emitToolLifecycle(run, payload = {}) {
+  const id = String(payload.id || '').trim();
+  const existing = id ? run.toolStates.get(id) : null;
+  const tool = existing || initToolState(run, payload);
+  const nextStatus = String(payload.status || tool.status || 'running').trim() || 'running';
+
+  if (payload.name) tool.name = String(payload.name).trim() || tool.name;
+  if (Object.prototype.hasOwnProperty.call(payload, 'sub')) tool.sub = Boolean(payload.sub);
+  if (Object.prototype.hasOwnProperty.call(payload, 'parent_id')) {
+    tool.parent_id = payload.parent_id ? String(payload.parent_id).trim() : null;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'detail')) {
+    tool.detail = redactSensitiveText(payload.detail || '');
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'input') && payload.input) {
+    tool.input = redactSensitiveText(payload.input || '');
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'result') && payload.result) {
+    tool.result = redactSensitiveText(payload.result || '');
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'permission_id')) {
+    tool.permission_id = payload.permission_id ? String(payload.permission_id) : null;
+  }
+  tool.status = nextStatus;
+
+  if (payload.error) {
+    const err = payload.error;
+    tool.error = {
+      category: String(err.category || 'runtime_error'),
+      code: String(err.code || 'runtime_error'),
+      message: redactSensitiveText(err.message || ''),
+      permission_required: Boolean(err.permission_required),
+    };
+  }
+
+  if (nextStatus === 'completed' || nextStatus === 'error' || nextStatus === 'permission_required') {
+    if (!tool.completed_at) tool.completed_at = nowIsoUtc();
+    if (tool.duration_ms == null) tool.duration_ms = Math.max(0, Date.now() - Number(tool.started_at_ms || Date.now()));
+  }
+
+  const eventPayload = {
+    id: tool.id,
+    name: tool.name,
+    sub: tool.sub,
+    parent_id: tool.parent_id || undefined,
+    detail: tool.detail,
+    input: tool.input || undefined,
+    result: tool.result || undefined,
+    status: tool.status,
+    permission_id: tool.permission_id || undefined,
+    started_at: tool.started_at,
+    completed_at: tool.completed_at,
+    duration_ms: tool.duration_ms,
+    error: tool.error || undefined,
+  };
+  emitRunEvent(run, 'tool', eventPayload);
+  if (run.conversationId) {
+    run.pendingToolEvents.push({
+      t: 'tool',
+      ts: nowIsoUtc(),
+      ...eventPayload,
+    });
+  }
+  return tool;
+}
+
+function finalizeRunningTools(run, { status = 'completed', error = null } = {}) {
+  for (const tool of run.toolStates.values()) {
+    if (tool.status !== 'running' && tool.status !== 'awaiting_permission') continue;
+    emitToolLifecycle(run, {
+      id: tool.id,
+      status,
+      error,
+    });
+  }
+}
+
+// --- Interactive permission bridge ----------------------------------------
+// A PreToolUse hook (permission-hook.mjs) calls /api/chat/permission-request
+// for any non-safe tool and blocks until the user answers in the UI. We hold
+// the hook's HTTP response open and resolve it from /api/chat/permission-decision.
+
+function timingSafeEqualStr(a, b) {
+  const ab = Buffer.from(String(a || ''));
+  const bb = Buffer.from(String(b || ''));
+  if (ab.length !== bb.length) return false;
+  try {
+    return crypto.timingSafeEqual(ab, bb);
+  } catch {
+    return false;
+  }
+}
+
+// Best-effort: attach a pending permission to the tool card it belongs to.
+// The tool_use block streams just before the hook fires, so the matching card
+// usually already exists; prefer the latest still-open tool of the same name.
+function findToolAwaitingPermission(run, toolName) {
+  const wanted = String(toolName || '').toLowerCase();
+  let latestOpen = null;
+  let latestMatch = null;
+  for (const tool of run.toolStates.values()) {
+    if (tool.status !== 'running' && tool.status !== 'awaiting_permission') continue;
+    latestOpen = tool;
+    if (String(tool.name || '').toLowerCase() === wanted) latestMatch = tool;
+  }
+  return latestMatch || latestOpen;
+}
+
+function registerPermissionRequest(run, { toolName, input, res }) {
+  const permId = `perm_${++run.permCounter}_${Date.now().toString(36)}`;
+  const correlated = findToolAwaitingPermission(run, toolName);
+  const callId = correlated?.id || null;
+  const timer = setTimeout(() => {
+    settlePermission(run, permId, 'deny', { message: 'Permission request timed out.' });
+  }, PERMISSION_TIMEOUT_MS);
+  if (timer.unref) timer.unref();
+  const pending = { id: permId, toolName, input: input || {}, res, callId, decided: false, timer };
+  run.pendingPermissions.set(permId, pending);
+  res.on('close', () => {
+    const p = run.pendingPermissions.get(permId);
+    if (p && !p.decided) {
+      p.decided = true;
+      clearTimeout(p.timer);
+      run.pendingPermissions.delete(permId);
+    }
+  });
+  if (callId) {
+    emitToolLifecycle(run, { id: callId, status: 'awaiting_permission', permission_id: permId });
+  }
+  emitRunEvent(run, 'permission', {
+    id: permId,
+    run_id: run.permRunId,
+    status: 'pending',
+    tool: toolName,
+    detail: toolDetailFromInput(toolName, input || {}),
+    input: toolInputPreview(toolName, input || {}),
+    call_id: callId,
+  });
+}
+
+function settlePermission(run, permId, decision, { message = '', updatedInput = null, scope = 'once' } = {}) {
+  const pending = run.pendingPermissions.get(permId);
+  if (!pending || pending.decided) return false;
+  pending.decided = true;
+  clearTimeout(pending.timer);
+  run.pendingPermissions.delete(permId);
+  const allow = decision === 'allow';
+  if (allow && scope === 'always' && pending.toolName) {
+    run.sessionAllowed.add(String(pending.toolName).toLowerCase());
+  }
+  try {
+    sendJson(pending.res, 200, {
+      decision: allow ? 'allow' : 'deny',
+      message: allow ? (message || 'Approved by user.') : (message || 'Denied by user.'),
+      ...(allow ? { updatedInput: updatedInput || pending.input || {} } : {}),
+    });
+  } catch {
+    // hook socket may already be gone; the run continues regardless
+  }
+  if (pending.callId) {
+    const tool = run.toolStates.get(pending.callId);
+    if (tool) {
+      if (allow) {
+        emitToolLifecycle(run, { id: pending.callId, status: 'running', permission_id: null });
+      } else {
+        emitToolLifecycle(run, {
+          id: pending.callId,
+          status: 'permission_required',
+          permission_id: null,
+          error: {
+            category: 'permission_required',
+            code: 'user_denied',
+            message: message || 'Denied by user.',
+            permission_required: true,
+          },
+        });
+      }
+    }
+  }
+  emitRunEvent(run, 'permission', {
+    id: permId,
+    run_id: run.permRunId,
+    status: allow ? 'allowed' : 'denied',
+    call_id: pending.callId || null,
+    scope: allow ? scope : undefined,
+  });
+  return true;
+}
+
+function denyAllPendingPermissions(run, message = 'Run ended.') {
+  if (!run.pendingPermissions || !run.pendingPermissions.size) return;
+  for (const permId of [...run.pendingPermissions.keys()]) {
+    settlePermission(run, permId, 'deny', { message });
+  }
+}
+
+// Called by the PreToolUse hook (localhost, per-run token). Holds the response
+// open until the user decides; a "session allowed" tool short-circuits to allow.
+async function handlePermissionRequest(req, res) {
+  if (!hasJsonContentType(req)) {
+    return sendJson(res, 403, { error: 'forbidden: Content-Type must include application/json' });
+  }
+  const body = await readBody(req, res);
+  if (!body) return;
+  const runId = String(body.runId || '').trim();
+  const token = String(body.token || req.headers['x-perm-token'] || '').trim();
+  const toolName = String(body.toolName || '').trim() || 'unknown';
+  const input = body.input && typeof body.input === 'object' ? body.input : {};
+  const run = runId ? PERM_RUN_REGISTRY.get(runId) : null;
+  if (!run || !run.active) {
+    return sendJson(res, 200, { decision: 'deny', message: 'The run is no longer active.' });
+  }
+  if (!run.permToken || !timingSafeEqualStr(token, run.permToken)) {
+    return sendJson(res, 403, { error: 'forbidden: invalid permission token' });
+  }
+  if (run.sessionAllowed.has(toolName.toLowerCase())) {
+    return sendJson(res, 200, { decision: 'allow', message: 'Allowed for this run.', updatedInput: input });
+  }
+  // Held open: registerPermissionRequest owns res and resolves it on decision.
+  registerPermissionRequest(run, { toolName, input, res });
+}
+
+// Called by the browser when the user clicks Allow / Allow-for-run / Deny.
+async function handlePermissionDecision(req, res) {
+  const body = await readBody(req, res);
+  if (!body) return;
+  const permissionId = String(body.permissionId || '').trim();
+  if (!permissionId) return sendJson(res, 400, { error: 'permissionId required' });
+  const decision = body.decision === 'allow' ? 'allow' : 'deny';
+  const scope = body.scope === 'always' ? 'always' : 'once';
+  const runId = String(body.runId || body.conversationId || '').trim();
+  let run = runId ? PERM_RUN_REGISTRY.get(runId) : null;
+  if (!run && runId) run = RUN_REGISTRY.get(runId);
+  if (!run) return sendJson(res, 404, { error: 'run not found' });
+  const settled = settlePermission(run, permissionId, decision, {
+    scope,
+    message: decision === 'allow' ? 'Approved by user.' : 'Denied by user.',
+  });
+  if (!settled) return sendJson(res, 404, { error: 'permission not pending' });
+  sendJson(res, 200, { ok: true, decision, scope });
 }
 
 function replayRunEvents(run, res, after = 0) {
@@ -1328,7 +1678,7 @@ function persistConversationTurn(run, assistantEntry) {
     conversationId: run.conversationId,
     selectedAgent: run.selectedAgent,
     sessionId: run.meta.session_id,
-    toolEntries: run.pendingToolEvents,
+    toolEntries: [...run.pendingToolEvents, ...run.pendingErrorEvents],
     assistantEntry,
   });
   run.historyFlushed = true;
@@ -1359,7 +1709,7 @@ function finalizeUsage(run, override = {}) {
     STREAM_DIAGNOSTICS.usageAppendFailures += 1;
     STREAM_DIAGNOSTICS.lastUsageFailureCode = err?.code || 'usage_append_failed';
     run.meta.is_error = true;
-    emitRunEvent(run, 'stderr', { text: 'durable usage log write failed' });
+    emitStderrEvent(run, 'durable usage log write failed', { code: 'usage_append_failed' });
   }
 }
 
@@ -1397,6 +1747,22 @@ function buildPartialAssistant(run) {
 function finalizeRun(run, { code = 0, isError = false, assistantEntry = run.pendingAssistant } = {}) {
   if (run.finalState?.done) return;
   run.active = false;
+  // Unblock any tool still waiting on the user (deny) and detach the run from
+  // the permission bridge so late hook calls get a clean "not active" answer.
+  denyAllPendingPermissions(run, run.stopRequested ? 'Run stopped.' : 'Run ended.');
+  if (run.permRunId) PERM_RUN_REGISTRY.delete(run.permRunId);
+  if (run.meta.is_error || isError || run.stopRequested || code !== 0) {
+    const fallbackErrorText = run.lastErrorText || run.pendingAssistant?.text || '';
+    run.lastErrorMeta = run.lastErrorMeta || classifyErrorMetadata(fallbackErrorText, {
+      fallbackCode: code === 143 ? 'stopped' : (code !== 0 ? 'exit_non_zero' : 'runtime_error'),
+    });
+  }
+  finalizeRunningTools(run, {
+    status: run.lastErrorMeta
+      ? (run.lastErrorMeta.permission_required ? 'permission_required' : 'error')
+      : 'completed',
+    error: run.lastErrorMeta,
+  });
   if (!assistantEntry && run.stopRequested) assistantEntry = buildPartialAssistant(run);
   try {
     persistConversationTurn(run, assistantEntry);
@@ -1405,12 +1771,19 @@ function finalizeRun(run, { code = 0, isError = false, assistantEntry = run.pend
     const safeMsg = err?.code === 'chat_history_append_failed'
       ? 'durable transcript write failed; metadata/index skipped for this turn'
       : 'chat persistence failed';
-    emitRunEvent(run, 'stderr', { text: safeMsg });
+    emitStderrEvent(run, safeMsg, { code: err?.code || 'chat_persistence_failed' });
   }
   run.meta.duration_ms = run.meta.duration_ms ?? (Date.now() - run.startedAt);
   run.meta.is_error = Boolean(run.meta.is_error || isError || run.stopRequested || code !== 0);
   finalizeUsage(run, { duration_ms: Date.now() - run.startedAt, is_error: run.meta.is_error });
-  emitRunEvent(run, 'done', { code, stopped: !!run.stopRequested });
+  emitRunEvent(run, 'done', {
+    code,
+    stopped: !!run.stopRequested,
+    duration_ms: Date.now() - run.startedAt,
+    error: run.lastErrorMeta || undefined,
+    category: run.lastErrorMeta?.category,
+    permission_required: Boolean(run.lastErrorMeta?.permission_required),
+  });
   closeSubscribers(run);
   if (run.incognito && run.meta.session_id) {
     const slug = ROOT.replace(/[^a-zA-Z0-9]/g, '-');
@@ -1452,30 +1825,263 @@ async function handleStop(req, res) {
   sendJson(res, 200, { ok: true, conversationId });
 }
 
-function toolDetail(block) {
-  const input = block.input || {};
-  switch (block.name) {
-    case 'Task': return `${input.subagent_type || 'agent'}${input.description ? ` · ${input.description}` : ''}`;
-    case 'Skill': return input.skill || '';
-    case 'Read':
-    case 'Write':
-    case 'Edit': return path.basename(input.file_path || input.filePath || '');
-    case 'WebFetch':
-    case 'WebSearch': return input.url || input.query || '';
-    default: return input.command ? String(input.command).slice(0, 80) : '';
+// Present a file path relative to the project root when it lives inside it, so
+// the trace shows "memory/daily/2026-07-21.md" rather than a bare basename or a
+// long absolute path.
+function repoRelativePath(raw) {
+  const p = String(raw || '').trim();
+  if (!p) return '';
+  try {
+    if (path.isAbsolute(p)) {
+      const rel = path.relative(ROOT, p);
+      if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) return rel;
+      return path.basename(p);
+    }
+  } catch {
+    return path.basename(p);
+  }
+  return p.replace(/^\.\//, '');
+}
+
+// Short, human label for the collapsed step row. Shared by both runtimes and
+// keyed case-insensitively so lowercase OpenCode tool names ("read", "task")
+// are handled the same as Claude's PascalCase names.
+function toolDetailFromInput(name, input = {}) {
+  const key = String(name || '').toLowerCase();
+  switch (key) {
+    case 'task': return `${input.subagent_type || 'agent'}${input.description ? ` · ${input.description}` : ''}`;
+    case 'skill': return input.skill || '';
+    case 'read':
+    case 'write':
+    case 'edit':
+    case 'notebookedit': return repoRelativePath(input.file_path || input.filePath || input.notebook_path || '');
+    case 'glob': return input.pattern || '';
+    case 'grep': return input.pattern || input.query || '';
+    case 'webfetch':
+    case 'websearch': return input.url || input.query || '';
+    case 'bash': return input.command ? String(input.command).slice(0, 120) : '';
+    default:
+      if (input.command) return String(input.command).slice(0, 120);
+      if (input.file_path || input.filePath) return repoRelativePath(input.file_path || input.filePath);
+      if (input.url) return String(input.url);
+      if (input.query) return String(input.query);
+      return '';
   }
 }
 
-function shouldUseOpenCodeModel(model) {
-  const value = String(model || '').trim();
-  if (!value || value === 'default') return false;
-  return value.includes('/');
+function toolDetail(block) {
+  return toolDetailFromInput(block?.name, block?.input || {});
 }
 
-function resolveEffectiveChatModel(rawModel) {
-  const requestedModel = String(rawModel || '').trim();
-  if (!requestedModel || requestedModel === 'default') return DEFAULT_CHAT_MODEL;
-  return requestedModel;
+// Fuller (still redacted, still capped) view of the tool's input for the
+// expand-on-demand step body. Task calls get the delegated brief; everything
+// else gets a compact pretty-printed JSON of its arguments.
+function toolInputPreview(name, input = {}) {
+  const key = String(name || '').toLowerCase();
+  if (key === 'task') {
+    const parts = [];
+    if (input.subagent_type) parts.push(`agent: ${input.subagent_type}`);
+    if (input.description) parts.push(`task: ${input.description}`);
+    if (input.prompt) parts.push(`\n${String(input.prompt).slice(0, 1200)}`);
+    return redactSensitiveText(parts.join('\n')).slice(0, 1600);
+  }
+  try {
+    const json = JSON.stringify(input, null, 2);
+    if (!json || json === '{}') return '';
+    return redactSensitiveText(json).slice(0, 1600);
+  } catch {
+    return '';
+  }
+}
+
+// Extract a short, redacted preview of a tool_result payload for the step body.
+function toolResultPreview(content) {
+  let text = '';
+  if (typeof content === 'string') text = content;
+  else if (Array.isArray(content)) {
+    text = content
+      .map((part) => (typeof part === 'string' ? part : (part && typeof part.text === 'string' ? part.text : '')))
+      .filter(Boolean)
+      .join('\n');
+  } else if (content && typeof content === 'object' && typeof content.text === 'string') {
+    text = content.text;
+  }
+  if (!text) return '';
+  return redactSensitiveText(text).slice(0, 700);
+}
+
+function nowIsoUtc() {
+  return new Date().toISOString();
+}
+
+function redactSensitiveText(rawText) {
+  const text = String(rawText || '');
+  if (!text) return '';
+  const patterns = [
+    /(\b(?:api[_-]?key|token|password|secret|authorization|bearer|cookie|session|access[_-]?token|refresh[_-]?token)\b\s*[:=]\s*)([^\s,;]+)/gi,
+    /(\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|COOKIE|SESSION)[A-Z0-9_]*\b\s*=\s*)([^\s,;]+)/g,
+    /(Bearer\s+)[A-Za-z0-9._\-~+/]+=*/g,
+    /(sk-[A-Za-z0-9]{16,})/g,
+  ];
+  let out = text;
+  for (const re of patterns) out = out.replace(re, '$1[redacted]');
+  return out;
+}
+
+function classifyErrorMetadata(rawText, { fallbackCategory = 'runtime_error', fallbackCode = 'runtime_error' } = {}) {
+  const message = redactSensitiveText(rawText).trim();
+  if (!message) {
+    return {
+      category: fallbackCategory,
+      code: fallbackCode,
+      message: 'runtime error',
+      permission_required: false,
+    };
+  }
+
+  const lower = message.toLowerCase();
+  const permissionSignals = [
+    'permission denied',
+    'permission required',
+    'requires approval',
+    'approval required',
+    'not allowed',
+    'access denied',
+    'forbidden',
+    'eacces',
+    'operation not permitted',
+    'guardrail',
+    'blocked by policy',
+  ];
+  const isPermissionRequired = permissionSignals.some((signal) => lower.includes(signal));
+  if (isPermissionRequired) {
+    return {
+      category: 'permission_required',
+      code: 'permission_required',
+      message,
+      permission_required: true,
+    };
+  }
+
+  if (lower.includes('timeout')) {
+    return {
+      category: 'timeout',
+      code: 'timeout',
+      message,
+      permission_required: false,
+    };
+  }
+
+  return {
+    category: fallbackCategory,
+    code: fallbackCode,
+    message,
+    permission_required: false,
+  };
+}
+
+function runtimeModelCapabilities(runtime = ACTIVE_CHAT_RUNTIME) {
+  if (runtime === 'opencode') {
+    const supported = OPENCODE_SUPPORTED_MODELS.length
+      ? OPENCODE_SUPPORTED_MODELS
+      : DEFAULT_OPENCODE_MODELS;
+    const defaultModel = (OPENCODE_DEFAULT_MODEL && OPENCODE_DEFAULT_MODEL.includes('/'))
+      ? OPENCODE_DEFAULT_MODEL
+      : (supported[0] || DEFAULT_OPENCODE_MODEL_ALIASES.default);
+    return {
+      runtime,
+      style: 'provider/model',
+      default_model: defaultModel,
+      supported_models: supported,
+      aliases: OPENCODE_MODEL_ALIASES,
+    };
+  }
+  return {
+    runtime: 'claude',
+    style: 'alias',
+    default_model: DEFAULT_CHAT_MODEL,
+    supported_models: CLAUDE_SUPPORTED_MODELS,
+    aliases: {},
+  };
+}
+
+function resolveChatModelSelection(rawModel, runtime = ACTIVE_CHAT_RUNTIME) {
+  const requested = String(rawModel || '').trim();
+  const caps = runtimeModelCapabilities(runtime);
+
+  if (runtime !== 'opencode') {
+    const effective = !requested || requested === 'default'
+      ? DEFAULT_CHAT_MODEL
+      : requested;
+    return {
+      requested_model: requested || 'default',
+      effective_model: effective,
+      forwarded_model: effective,
+      model_forwarded: true,
+      fallback_reason: requested && requested !== 'default' ? null : 'default',
+      model_style: caps.style,
+    };
+  }
+
+  const normalized = requested.toLowerCase();
+  if (!requested || normalized === 'default') {
+    return {
+      requested_model: requested || 'default',
+      effective_model: null,
+      forwarded_model: null,
+      model_forwarded: false,
+      fallback_reason: 'runtime_default',
+      model_style: caps.style,
+    };
+  }
+
+  if (requested.includes('/')) {
+    return {
+      requested_model: requested,
+      effective_model: requested,
+      forwarded_model: requested,
+      model_forwarded: true,
+      fallback_reason: null,
+      model_style: caps.style,
+    };
+  }
+
+  const mapped = caps.aliases[normalized];
+  if (mapped) {
+    return {
+      requested_model: requested,
+      effective_model: mapped,
+      forwarded_model: mapped,
+      model_forwarded: true,
+      fallback_reason: 'alias_mapped',
+      model_style: caps.style,
+    };
+  }
+
+  return {
+    requested_model: requested,
+    effective_model: caps.default_model,
+    forwarded_model: caps.default_model,
+    model_forwarded: true,
+    fallback_reason: 'unsupported_alias',
+    model_style: caps.style,
+  };
+}
+
+function buildCapabilitiesPayload() {
+  const modelCaps = runtimeModelCapabilities(ACTIVE_CHAT_RUNTIME);
+  return {
+    provider_mode: PROVIDER_MODE,
+    active_chat_runtime: ACTIVE_CHAT_RUNTIME,
+    model_capabilities: modelCaps,
+    options: {
+      incognito: true,
+      resume: true,
+      tool_lifecycle_metadata: true,
+      structured_error_metadata: true,
+    },
+    agents: AGENTS.map((a) => ({ id: a.id, name: a.name, function: a.function, mode: a.mode })),
+  };
 }
 
 function extractSessionIdFromEvent(ev) {
@@ -1573,14 +2179,28 @@ function emitRunConversationInit(run, context, { sessionId, model }) {
   ensureRunConversation(run, context, sessionId);
   if (model) run.meta.model = model;
   if (!run.initEmitted) {
+    const effectiveModel = run.modelSelection?.effective_model || run.meta.model || null;
     if (context.convId) emitRunEvent(run, 'conversation', { id: context.convId });
-    emitRunEvent(run, 'init', { session_id: run.meta.session_id, model: run.meta.model, incognito: context.incognito });
+    emitRunEvent(run, 'init', {
+      session_id: run.meta.session_id,
+      model: run.meta.model,
+      model_requested: run.modelSelection?.requested_model,
+      model_effective: effectiveModel,
+      model_forwarded: run.modelSelection?.model_forwarded,
+      model_style: run.modelSelection?.model_style,
+      incognito: context.incognito,
+    });
     run.initEmitted = true;
   }
 }
 
 function emitAssistantResult(run, selectedAgent, text, { errorText } = {}) {
   const cleanText = String(text || '').trim();
+  const safeErrorText = redactSensitiveText(errorText || '');
+  const errorMeta = run.meta.is_error
+    ? (run.lastErrorMeta || classifyErrorMetadata(safeErrorText || cleanText || 'runtime error', { fallbackCode: 'result_error' }))
+    : null;
+  if (errorMeta) run.lastErrorMeta = errorMeta;
   run.pendingAssistant = {
     t: 'assistant',
     ts: new Date().toISOString(),
@@ -1605,14 +2225,33 @@ function emitAssistantResult(run, selectedAgent, text, { errorText } = {}) {
     output_tokens: run.meta.output_tokens,
     total_tokens: run.meta.total_tokens,
     is_error: run.meta.is_error,
-    error_text: run.meta.is_error ? (errorText || (cleanText ? undefined : 'runtime error')) : undefined,
+    error_text: run.meta.is_error ? (safeErrorText || (cleanText ? undefined : 'runtime error')) : undefined,
+    category: errorMeta?.category,
+    code: errorMeta?.code,
+    permission_required: Boolean(errorMeta?.permission_required),
+    error: errorMeta || undefined,
   });
   emitRunEvent(run, 'gate', { issues: CONTENT_AGENTS.has(selectedAgent) ? lintText(cleanText) : [] });
   run.resultEmitted = true;
 }
 
 function startClaudeChatRun({ run, context, resumeId, model, agent }) {
-  const effectiveModel = resolveEffectiveChatModel(model);
+  const claudeDiagnostics = resolveBinaryCommand(CLAUDE_BIN, 'claude');
+  if (!claudeDiagnostics.resolvedPath) {
+    emitStderrEvent(run, `Claude Code setup required: ${claudeDiagnostics.reason || 'configured path is not executable'}`, {
+      code: 'setup_required',
+      error: {
+        category: 'setup_required',
+        code: 'claude_setup_required',
+        message: `Claude Code setup required: ${claudeDiagnostics.reason || 'configured path is not executable'}`,
+        permission_required: false,
+      },
+    });
+    run.meta.is_error = true;
+    finalizeRun(run, { code: -1, isError: true });
+    return;
+  }
+  const effectiveModel = resolveChatModelSelection(model, 'claude').effective_model;
   const runMessage = context.incognito
     ? `[Incognito turn] Do not write memory files, daily notes, or run logs for this turn, and do not store anything about this exchange anywhere.\n\n${context.message}`
     : context.message;
@@ -1634,14 +2273,36 @@ function startClaudeChatRun({ run, context, resumeId, model, agent }) {
   delete env.CLAUDE_CODE_ENTRYPOINT;
   delete env.CLAUDE_CODE_SSE_PORT;
 
-  const child = spawn(CLAUDE_BIN, args, { cwd: ROOT, env });
+  // Interactive permissions: register the run with the bridge and inject a
+  // PreToolUse hook (merged with the project's settings, so SessionStart etc.
+  // still run) that pauses non-safe tools and asks the user in the UI.
+  if (INTERACTIVE_PERMISSIONS && fs.existsSync(PERMISSION_HOOK_PATH)) {
+    run.permRunId = run.conversationId || `perm_${crypto.randomBytes(9).toString('hex')}`;
+    run.permToken = crypto.randomBytes(24).toString('hex');
+    PERM_RUN_REGISTRY.set(run.permRunId, run);
+    const hookCommand = `node ${JSON.stringify(PERMISSION_HOOK_PATH)}`;
+    const settings = {
+      hooks: {
+        PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: hookCommand, timeout: Math.ceil(PERMISSION_TIMEOUT_MS / 1000) + 15 }] }],
+      },
+    };
+    args.push('--settings', JSON.stringify(settings));
+    env.CHAT_PERM_URL = `http://127.0.0.1:${PORT}`;
+    env.CHAT_PERM_TOKEN = run.permToken;
+    env.CHAT_PERM_RUN_ID = run.permRunId;
+    env.CHAT_PERM_TIMEOUT_MS = String(PERMISSION_TIMEOUT_MS);
+    env.CHAT_PERM_SAFE_TOOLS = PERMISSION_SAFE_TOOLS.join(',');
+    env.CHAT_PERM_PROJECT_DIR = ROOT;
+  }
+
+  const child = spawn(claudeDiagnostics.resolvedPath, args, { cwd: ROOT, env });
   run.child = child;
   child.stdin.end();
 
   let buffer = '';
 
   child.on('error', (err) => {
-    emitRunEvent(run, 'stderr', { text: `spawn error: ${err.message}` });
+    emitStderrEvent(run, `spawn error: ${err.message}`, { code: 'spawn_error' });
     finalizeRun(run, { code: -1, isError: true });
   });
 
@@ -1655,7 +2316,7 @@ function startClaudeChatRun({ run, context, resumeId, model, agent }) {
         try {
           forwardLine(line);
         } catch (err) {
-          emitRunEvent(run, 'stderr', { text: 'chat persistence failed during run initialization' });
+          emitStderrEvent(run, 'chat persistence failed during run initialization', { code: 'chat_init_failed' });
           run.meta.is_error = true;
           finalizeRun(run, { code: -1, isError: true });
           try { run.child.kill('SIGTERM'); } catch {}
@@ -1665,7 +2326,7 @@ function startClaudeChatRun({ run, context, resumeId, model, agent }) {
   });
 
   child.stderr.on('data', (chunk) => {
-    if (run.active) emitRunEvent(run, 'stderr', { text: String(chunk) });
+    if (run.active) emitStderrEvent(run, String(chunk), { code: 'stderr' });
   });
 
   child.on('close', (code) => {
@@ -1700,10 +2361,33 @@ function startClaudeChatRun({ run, context, resumeId, model, agent }) {
       const blocks = ev.message?.content || [];
       for (const b of blocks) {
         if (b.type === 'tool_use') {
-          const toolEvent = { name: b.name, sub: isSub, detail: toolDetail(b) };
-          emitRunEvent(run, 'tool', toolEvent);
-          if (context.convId) run.pendingToolEvents.push({ t: 'tool', ts: new Date().toISOString(), ...toolEvent });
+          emitToolLifecycle(run, {
+            id: String(b.id || '').trim() || undefined,
+            name: b.name,
+            sub: isSub,
+            parent_id: isSub ? String(ev.parent_tool_use_id || '').trim() || undefined : undefined,
+            detail: toolDetail(b),
+            input: toolInputPreview(b.name, b.input || {}),
+            status: 'running',
+          });
         }
+      }
+      return;
+    }
+
+    if (ev.type === 'user') {
+      const blocks = ev.message?.content || [];
+      for (const b of blocks) {
+        if (b.type !== 'tool_result') continue;
+        const toolId = String(b.tool_use_id || b.toolUseId || '').trim();
+        const errorText = typeof b.content === 'string' ? b.content : (typeof b.error === 'string' ? b.error : '');
+        const error = b.is_error ? classifyErrorMetadata(errorText || 'tool error', { fallbackCode: 'tool_error' }) : null;
+        emitToolLifecycle(run, {
+          id: toolId || undefined,
+          status: b.is_error ? (error?.permission_required ? 'permission_required' : 'error') : 'completed',
+          result: b.is_error ? undefined : toolResultPreview(b.content),
+          error,
+        });
       }
       return;
     }
@@ -1727,6 +2411,16 @@ function startClaudeChatRun({ run, context, resumeId, model, agent }) {
         ),
         is_error: Boolean(ev.is_error),
       };
+      if (run.meta.is_error) {
+        const resultError = classifyErrorMetadata(String(text || run.lastErrorText || ''), { fallbackCode: 'result_error' });
+        run.lastErrorMeta = resultError;
+      }
+      finalizeRunningTools(run, {
+        status: run.meta.is_error
+          ? (run.lastErrorMeta?.permission_required ? 'permission_required' : 'error')
+          : 'completed',
+        error: run.meta.is_error ? run.lastErrorMeta : null,
+      });
       emitAssistantResult(run, context.selectedAgent, text, {
         errorText: run.meta.is_error && !run.finalText ? text : undefined,
       });
@@ -1736,16 +2430,35 @@ function startClaudeChatRun({ run, context, resumeId, model, agent }) {
 
 function startOpenCodeChatRun({ run, context, resumeId, model }) {
   const opencodeDiagnostics = resolveBinaryCommand(OPENCODE_BIN, 'opencode');
-  const opencodeCmd = opencodeDiagnostics.resolvedPath || OPENCODE_BIN;
+  if (!opencodeDiagnostics.resolvedPath) {
+    emitStderrEvent(run, `OpenCode setup required: ${opencodeDiagnostics.reason || 'configured path is not executable'}`, {
+      code: 'setup_required',
+      error: {
+        category: 'setup_required',
+        code: 'opencode_setup_required',
+        message: `OpenCode setup required: ${opencodeDiagnostics.reason || 'configured path is not executable'}`,
+        permission_required: false,
+      },
+    });
+    run.meta.is_error = true;
+    finalizeRun(run, { code: -1, isError: true });
+    return;
+  }
+  const opencodeCmd = opencodeDiagnostics.resolvedPath;
   const runMessage = context.incognito
     ? `[Incognito turn] Do not write memory files, daily notes, or run logs for this turn, and do not store anything about this exchange anywhere.\n\n${context.message}`
     : context.message;
   const args = ['run', runMessage, '--format', 'json'];
   if (context.selectedAgent && context.selectedAgent !== 'danny') args.push('--agent', context.selectedAgent);
   if (resumeId) args.push('--session', resumeId);
-  if (shouldUseOpenCodeModel(model)) args.push('--model', model);
+  if (String(model || '').includes('/')) args.push('--model', model);
 
-  const env = buildChatChildEnv();
+  const env = prepareOpenCodeEnvironment({
+    env: buildChatChildEnv(),
+    workspaceRoot: ROOT,
+    providerSettings: readProviderSettingsForRuntime(),
+    testRootOverride: CHAT_STORAGE_TEST_ROOT,
+  });
   const child = spawn(opencodeCmd, args, { cwd: ROOT, env });
   run.child = child;
   child.stdin.end();
@@ -1754,7 +2467,7 @@ function startOpenCodeChatRun({ run, context, resumeId, model }) {
   run.stepFinished = false;
 
   child.on('error', (err) => {
-    emitRunEvent(run, 'stderr', { text: `spawn error: ${err.message}` });
+    emitStderrEvent(run, `spawn error: ${err.message}`, { code: 'spawn_error' });
     run.meta.is_error = true;
     finalizeRun(run, { code: -1, isError: true });
   });
@@ -1769,7 +2482,7 @@ function startOpenCodeChatRun({ run, context, resumeId, model }) {
         try {
           forwardLine(line);
         } catch (err) {
-          emitRunEvent(run, 'stderr', { text: 'chat persistence failed during run initialization' });
+          emitStderrEvent(run, 'chat persistence failed during run initialization', { code: 'chat_init_failed' });
           run.meta.is_error = true;
           finalizeRun(run, { code: -1, isError: true });
           try { run.child.kill('SIGTERM'); } catch {}
@@ -1779,7 +2492,7 @@ function startOpenCodeChatRun({ run, context, resumeId, model }) {
   });
 
   child.stderr.on('data', (chunk) => {
-    if (run.active) emitRunEvent(run, 'stderr', { text: String(chunk) });
+    if (run.active) emitStderrEvent(run, String(chunk), { code: 'stderr' });
   });
 
   child.on('close', (code) => {
@@ -1822,13 +2535,35 @@ function startOpenCodeChatRun({ run, context, resumeId, model }) {
 
     if (eventType === 'tool_use') {
       const name = String(ev.part?.tool || ev.name || ev.tool_name || ev.tool || 'tool').trim();
-      const detailSource = ev.part?.state ?? ev.detail ?? ev.input ?? ev.args ?? ev.payload;
-      let detail = '';
-      if (typeof detailSource === 'string') detail = detailSource;
-      else if (detailSource && typeof detailSource === 'object') detail = JSON.stringify(detailSource).slice(0, 180);
-      const toolEvent = { name, sub: false, detail };
-      emitRunEvent(run, 'tool', toolEvent);
-      if (context.convId) run.pendingToolEvents.push({ t: 'tool', ts: new Date().toISOString(), ...toolEvent });
+      // OpenCode carries the tool arguments on part.state.input (or a bare
+      // input/args field). Derive a clean label + input preview instead of
+      // dumping the whole state object as JSON into the trace.
+      const rawState = ev.part?.state ?? ev.detail ?? ev.input ?? ev.args ?? ev.payload;
+      let toolInput = {};
+      if (rawState && typeof rawState === 'object') {
+        toolInput = (rawState.input && typeof rawState.input === 'object') ? rawState.input
+          : (rawState.args && typeof rawState.args === 'object') ? rawState.args
+          : rawState;
+      }
+      const detail = typeof rawState === 'string' ? rawState : toolDetailFromInput(name, toolInput);
+      const inputPreview = typeof rawState === 'string' ? '' : toolInputPreview(name, toolInput);
+      const stateText = (rawState && typeof rawState === 'object' && typeof rawState.status === 'string')
+        ? rawState.status.toLowerCase()
+        : String(rawState || ev.state || '').toLowerCase();
+      const status = stateText.includes('error')
+        ? 'error'
+        : (stateText.includes('complete') || stateText.includes('done') || stateText.includes('finish')
+          ? 'completed'
+          : 'running');
+      emitToolLifecycle(run, {
+        id: String(ev.part?.id || ev.id || '').trim() || undefined,
+        name,
+        sub: false,
+        detail,
+        input: inputPreview,
+        result: (status === 'completed' && rawState && typeof rawState === 'object') ? toolResultPreview(rawState.output ?? rawState.result) : undefined,
+        status,
+      });
       return;
     }
 
@@ -1836,7 +2571,12 @@ function startOpenCodeChatRun({ run, context, resumeId, model }) {
       const errorText = extractOpenCodeErrorText(ev);
       if (errorText) {
         run.lastErrorText = errorText;
-        emitRunEvent(run, 'stderr', { text: errorText });
+        const error = classifyErrorMetadata(errorText, { fallbackCode: 'opencode_error' });
+        emitStderrEvent(run, errorText, { error });
+        finalizeRunningTools(run, {
+          status: error.permission_required ? 'permission_required' : 'error',
+          error,
+        });
       }
       run.meta.is_error = true;
       return;
@@ -1855,6 +2595,17 @@ function startOpenCodeChatRun({ run, context, resumeId, model }) {
         ...usage,
         is_error: Boolean(run.meta.is_error || ev.is_error || ev.error),
       };
+      if (run.meta.is_error) {
+        run.lastErrorMeta = classifyErrorMetadata(String(run.lastErrorText || ev.error || ev.message || ''), {
+          fallbackCode: 'step_finish_error',
+        });
+      }
+      finalizeRunningTools(run, {
+        status: run.meta.is_error
+          ? (run.lastErrorMeta?.permission_required ? 'permission_required' : 'error')
+          : 'completed',
+        error: run.meta.is_error ? run.lastErrorMeta : null,
+      });
       const text = String(run.finalText || ev.result?.text || ev.result?.message || ev.message || run.lastErrorText || '').trim();
       if (text) emitAssistantResult(run, context.selectedAgent, text, { errorText: run.lastErrorText });
       return;
@@ -1870,7 +2621,8 @@ async function handleChat(req, res) {
   const legacySessionId = typeof payload.sessionId === 'string' ? payload.sessionId.trim() : '';
   const requestedConvId = typeof payload.conversationId === 'string' && SAFE_ID.test(payload.conversationId.trim())
     ? payload.conversationId.trim() : '';
-  const model = resolveEffectiveChatModel(payload.model);
+  const modelSelection = resolveChatModelSelection(payload.model, ACTIVE_CHAT_RUNTIME);
+  const model = modelSelection.effective_model;
   const agent = resolveAgent(payload.agent);
   const selectedAgent = agent.id;
   const mode = selectedAgent === 'danny' ? 'danny' : 'direct_specialist';
@@ -1916,6 +2668,7 @@ async function handleChat(req, res) {
     selectedAgent,
     mode,
     model,
+    modelSelection,
     incognito,
     conversationId: context.convId || null,
     seq: 0,
@@ -1926,14 +2679,23 @@ async function handleChat(req, res) {
     stopRequested: false,
     historyFlushed: false,
     pendingToolEvents: [],
+    pendingErrorEvents: [],
     pendingAssistant: null,
     finalText: '',
     tokenUsage: {},
+    toolStates: new Map(),
+    toolCounter: 0,
+    permRunId: null,
+    permToken: null,
+    permCounter: 0,
+    pendingPermissions: new Map(), // permissionId -> { id, toolName, input, res, callId, decided, timer }
+    sessionAllowed: new Set(), // lowercased tool names the user chose to allow for the whole run
     logged: false,
     processClosed: false,
     initEmitted: false,
     resultEmitted: false,
     lastErrorText: '',
+    lastErrorMeta: null,
     meta: {
       session_id: resumeId || null,
       model,
@@ -1950,6 +2712,18 @@ async function handleChat(req, res) {
   };
   addSubscriber(run, res);
   if (!incognito && context.convId) RUN_REGISTRY.set(context.convId, run);
+
+  if (modelSelection.fallback_reason === 'unsupported_alias') {
+    emitStderrEvent(run, `Unsupported model alias "${modelSelection.requested_model}" for ${ACTIVE_CHAT_RUNTIME}; using ${modelSelection.effective_model}.`, {
+      code: 'unsupported_model_alias',
+      error: {
+        category: 'configuration',
+        code: 'unsupported_model_alias',
+        message: `Unsupported model alias "${modelSelection.requested_model}"; using ${modelSelection.effective_model}.`,
+        permission_required: false,
+      },
+    });
+  }
 
   if (ACTIVE_CHAT_RUNTIME === 'opencode') {
     startOpenCodeChatRun({ run, context, resumeId, model });
@@ -2104,6 +2878,16 @@ const server = http.createServer((req, res) => {
     if (!requireTrustedLocalJsonMutation(req, res)) return;
     return void handleStop(req, res);
   }
+  // Called by the local PreToolUse hook process (per-run token, no browser
+  // origin) — must not go through the browser-origin guard.
+  if (req.method === 'POST' && url.pathname === '/api/chat/permission-request') {
+    return void handlePermissionRequest(req, res);
+  }
+  if (req.method === 'POST' && url.pathname === '/api/chat/permission-decision') {
+    if (!requireTrustedLocalJsonMutation(req, res)) return;
+    return void handlePermissionDecision(req, res);
+  }
+  if (req.method === 'GET' && url.pathname === '/api/capabilities') return listCapabilities(res);
   if (req.method === 'GET' && url.pathname === '/api/agents') return listAgents(res);
   if (req.method === 'GET' && url.pathname === '/api/sessions') return listSessions(res, url.searchParams.get('all') === '1');
   if (req.method === 'GET' && url.pathname === '/api/sessions/search') return searchSessions(res, url.searchParams.get('q'));
@@ -2117,14 +2901,15 @@ const server = http.createServer((req, res) => {
     return void patchSession(req, res, 'archived');
   }
   if (req.method === 'GET' && url.pathname === '/api/health') {
+    const cliDiagnostics = inspectCliTargets();
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       ok: true,
       port: PORT,
       provider_mode: PROVIDER_MODE,
       active_chat_runtime: ACTIVE_CHAT_RUNTIME,
-      claude_bin: CLAUDE_BIN,
-      opencode_bin: OPENCODE_BIN,
+      claude_bin: cliDiagnostics.resolvedCommands?.claude || null,
+      opencode_bin: cliDiagnostics.resolvedCommands?.opencode || null,
       diagnostics: getHealthDiagnostics(),
     }));
     return;
@@ -2256,10 +3041,11 @@ server.on('upgrade', (req, socket, head) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
+  const cliDiagnostics = inspectCliTargets();
   console.log(`Steadymade AI OS Chat → http://localhost:${PORT}`);
   console.log(`provider mode: ${PROVIDER_MODE} (active normal chat runtime: ${ACTIVE_CHAT_RUNTIME})`);
-  console.log(`claude binary: ${CLAUDE_BIN}`);
-  console.log(`opencode binary: ${OPENCODE_BIN}`);
+  console.log(`claude binary: ${cliDiagnostics.resolvedCommands?.claude || `setup required (${cliDiagnostics.commands?.claude?.reason || 'not configured'})`}`);
+  console.log(`opencode binary: ${cliDiagnostics.resolvedCommands?.opencode || `setup required (${cliDiagnostics.commands?.opencode?.reason || 'not configured'})`}`);
   if (!CHAT_CLI_BRIDGE_ENABLED) {
     console.log('CLI bridge: disabled (set CHAT_CLI_BRIDGE_ENABLED=1 to enable)');
   }

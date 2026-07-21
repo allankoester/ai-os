@@ -8,6 +8,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { deriveUserTypePolicy, getAppSettingsFile, readAppSettings } from '../interface/app-settings.mjs';
 import { inspectRuntimeGate } from './start-runtime-gate.mjs';
+import { buildProviderRuntimeDiagnostics } from '../runtime/managed-runtime.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PROVIDER_SETTINGS_FILE = path.join(ROOT, 'interface', 'provider-settings.json');
@@ -46,12 +47,14 @@ function readProviderSettings() {
     }
     return {
       runtimeMode: typeof parsed.runtimeMode === 'string' ? parsed.runtimeMode.trim() : '',
+      claudeBin: typeof parsed.claudeBin === 'string' ? parsed.claudeBin.trim() : '',
       opencodeBin: typeof parsed.opencodeBin === 'string' ? parsed.opencodeBin.trim() : '',
+      opencodeConfigPath: typeof parsed.opencodeConfigPath === 'string' ? parsed.opencodeConfigPath.trim() : '',
       cliBridgeEnabled: typeof parsed.cliBridgeEnabled === 'boolean' ? parsed.cliBridgeEnabled : null,
       envVault,
     };
   } catch {
-    return { runtimeMode: '', opencodeBin: '', cliBridgeEnabled: null, envVault: {} };
+    return { runtimeMode: '', claudeBin: '', opencodeBin: '', opencodeConfigPath: '', cliBridgeEnabled: null, envVault: {} };
   }
 }
 
@@ -259,20 +262,27 @@ async function runPreflightChecks() {
 
   const providerSettings = readProviderSettings();
   const mode = resolveProviderMode(providerSettings.runtimeMode);
-  const claude = resolveBinary(process.env.CLAUDE_BIN || 'claude', 'claude');
-  const opencode = resolveBinary(providerSettings.opencodeBin || process.env.OPENCODE_BIN || 'opencode', 'opencode');
-  const hasAnthropicKey = Boolean(String(providerSettings.envVault.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY || '').trim());
-  const providerReady = mode === 'opencode'
-    ? Boolean(opencode.resolvedPath)
-    : Boolean(claude.resolvedPath) && (mode !== 'anthropic-api' || hasAnthropicKey);
-  const providerMessage = providerReady
-    ? `Provider ${mode} local readiness passed`
-    : (mode === 'opencode'
-      ? opencode.reason
-      : (mode === 'anthropic-api' && !hasAnthropicKey
-        ? 'ANTHROPIC_API_KEY is missing'
-        : claude.reason));
-  add('provider-local-readiness', providerReady ? 'pass' : 'fail', providerReady ? providerMessage : `Provider ${mode} local readiness failed: ${providerMessage}`);
+  const providerDiagnostics = buildProviderRuntimeDiagnostics({
+    workspaceRoot: ROOT,
+    providerSettings,
+    env: {
+      ...process.env,
+      ...(providerSettings.envVault || {}),
+    },
+    testRootOverride: process.env.STEADYMADE_STORAGE_KERNEL_TEST_ROOT || null,
+  });
+  const providerFailure = providerDiagnostics.blockingFailures[0];
+  add(
+    'provider-local-readiness',
+    providerDiagnostics.ready ? 'pass' : 'fail',
+    providerDiagnostics.ready
+      ? `Provider ${mode} local readiness passed`
+      : `Provider ${mode} local readiness failed: ${providerFailure?.message || 'setup required'}`,
+  );
+  const managedConfigCheck = (providerDiagnostics.checks || []).find((check) => check.id === 'opencode-managed-config');
+  if (managedConfigCheck) {
+    add('provider-opencode-managed-config', 'warn', managedConfigCheck.message, { blocking: false });
+  }
 
   const blockingFailures = checks.filter((entry) => entry.status === 'fail' && entry.blocking);
   return {
@@ -320,8 +330,14 @@ async function main() {
   if (process.env.STEADYMADE_PROVIDER_MODE === undefined && providerSettings.runtimeMode) {
     env.STEADYMADE_PROVIDER_MODE = providerSettings.runtimeMode;
   }
+  if (process.env.CLAUDE_BIN === undefined && providerSettings.claudeBin) {
+    env.CLAUDE_BIN = providerSettings.claudeBin;
+  }
   if (process.env.OPENCODE_BIN === undefined && providerSettings.opencodeBin) {
     env.OPENCODE_BIN = providerSettings.opencodeBin;
+  }
+  if (process.env.OPENCODE_CONFIG === undefined && providerSettings.opencodeConfigPath) {
+    env.OPENCODE_CONFIG = providerSettings.opencodeConfigPath;
   }
   if (process.env.CHAT_CLI_BRIDGE_ENABLED === undefined && providerSettings.cliBridgeEnabled !== null) {
     env.CHAT_CLI_BRIDGE_ENABLED = providerSettings.cliBridgeEnabled ? '1' : '0';

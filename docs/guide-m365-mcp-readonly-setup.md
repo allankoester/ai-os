@@ -1,14 +1,20 @@
-# Microsoft 365 MCP (Local, Work-Account-Only, Read-only) Setup
+# Microsoft 365 MCP (Work-Account-Only, Read-only) Setup
 
-This repo now includes a local MCP server at `mcp/m365/server.mjs` for delegated
+This guide is only for the read-only server.
+
+For calendar-read + SharePoint write operations, use:
+
+- `docs/guide-m365-mcp-write-setup.md`
+
+This repo includes an MCP server at `mcp/m365/server.mjs` for delegated
 Microsoft Graph **read-only** access.
 
-Scope in this v1:
+Scope in this profile:
 
 - local use only (no scheduler/headless support in this iteration)
 - delegated user context only
 - work-account tenant only
-- read-only tools only (mail/tasks/files/sharepoint listing/read)
+- read-only tools only (profile/mail/tasks/OneDrive reads)
 - no generic Graph proxy tool
 - no client secret required
 
@@ -24,17 +30,16 @@ Scope in this v1:
 
 ## 1) Register a least-privilege Entra app
 
-Use the helper script:
+Use the helper script in read-only mode:
 
 ```bash
-bash scripts/m365-app-registration.sh
+M365_APP_PROFILE=readonly bash scripts/m365-app-registration.sh
 ```
 
 Optional environment flags:
 
 - `M365_APP_NAME` custom app registration display name
 - `M365_TENANT_ID` explicit tenant id (otherwise current `az account` tenant)
-- `M365_INCLUDE_SITES_READ_ALL=0` to skip SharePoint site search scope
 
 The script creates/updates a public-client app (`AzureADMyOrg`) with delegated
 Graph scopes:
@@ -48,10 +53,6 @@ Baseline:
 - `Mail.Read`
 - `Tasks.Read`
 - `Files.Read`
-
-Optional:
-
-- `Sites.Read.All` (SharePoint site search/listing)
 
 ## 2) Admin consent (tenant-dependent)
 
@@ -80,14 +81,14 @@ Materialized `.mcp.json` entry is local-command based (no `npx -y`):
 }
 ```
 
-## 4) Local non-secret config (shell/session)
+## 4) Non-secret config (shell/session)
 
 Set non-secret env vars in your shell profile or session:
 
 ```bash
 export M365_TENANT_ID="<tenant-id>"
 export M365_CLIENT_ID="<app-id>"
-export M365_SCOPES="openid profile offline_access User.Read Mail.Read Tasks.Read Files.Read Sites.Read.All"
+export M365_SCOPES="openid profile offline_access User.Read Mail.Read Tasks.Read Files.Read"
 ```
 
 ## 5) Sign in interactively (native default)
@@ -104,7 +105,14 @@ silently using the stored refresh token.
 
 Use `m365_auth_disconnect` to clear in-memory token + keychain cache.
 
-## Tool surface (read-only)
+## 6) Re-login required after scope changes
+
+If app scopes were changed, re-consent the session:
+
+1. `m365_auth_disconnect`
+2. `m365_auth_login`
+
+## Tool surface (read-only server)
 
 - `m365_auth_status`
 - `m365_auth_login`
@@ -116,7 +124,5 @@ Use `m365_auth_disconnect` to clear in-memory token + keychain cache.
 - `m365_tasks_list`
 - `m365_files_list`
 - `m365_files_get`
-- `m365_sharepoint_search_sites`
-- `m365_sharepoint_list_drives`
 
 No write/mutate tools are exposed.

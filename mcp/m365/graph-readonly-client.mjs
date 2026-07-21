@@ -78,12 +78,6 @@ export function createGraphReadonlyClient({ tokenProvider, fetchImpl = fetch } =
     };
   }
 
-  function normalizeSiteSearchQuery(query) {
-    const raw = String(query ?? '*').trim();
-    if (!raw || raw === '*' || raw === '"*"') return '"*"';
-    return raw;
-  }
-
   return {
     async getMe() {
       return await graphGet('/me', {
@@ -156,28 +150,5 @@ export function createGraphReadonlyClient({ tokenProvider, fetchImpl = fetch } =
       });
     },
 
-    async searchSites({ query = '*', top = 10 } = {}) {
-      const limit = toPositiveInt(top, 10, 50);
-      const search = normalizeSiteSearchQuery(query);
-      const data = await graphGet('/sites', {
-        search,
-        $top: limit,
-        $select: 'id,name,displayName,webUrl,siteCollection',
-      });
-      return {
-        value: Array.isArray(data.value) ? data.value : [],
-      };
-    },
-
-    async listSiteDrives({ siteId }) {
-      const id = assertSafeId(siteId, 'siteId');
-      const data = await graphGet(`/sites/${id}/drives`, {
-        $top: 50,
-        $select: 'id,name,description,webUrl,driveType,createdDateTime,lastModifiedDateTime',
-      });
-      return {
-        value: Array.isArray(data.value) ? data.value : [],
-      };
-    },
   };
 }

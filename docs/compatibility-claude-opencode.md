@@ -101,7 +101,7 @@ Safe usage for governed actions:
 3. Keep OpenCode optional for compatible reading of `CLAUDE.md` fallback,
    without introducing app-local `AGENTS.md`.
 
-## Local MCP integration note (Microsoft 365 read-only)
+## Local MCP integration note (Microsoft 365)
 
 - Built-in plugin id: `m365-readonly`
 - Materialized command: `node mcp/m365/server.mjs` (fixed local path)
@@ -110,4 +110,11 @@ Safe usage for governed actions:
 - Auth design target: OAuth Authorization Code + PKCE (S256), work-account
   tenant only, no client secret for local public-client flow
 
+- Built-in plugin id: `m365-write`
+- Materialized command: `node mcp/m365-write/server.mjs`
+- Scope: fixed calendar-read + SharePoint read/write tools only (no generic
+  Graph proxy)
+- Mutation safety: each write tool requires explicit `confirm=true`
+
 Setup details: `docs/guide-m365-mcp-readonly-setup.md`
+Setup details (write server): `docs/guide-m365-mcp-write-setup.md`

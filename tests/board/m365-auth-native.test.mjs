@@ -63,6 +63,24 @@ test('m365 token provider status does not expose fallback auth modes', async () 
   assert.equal(status.tokenSource, 'none');
 });
 
+test('m365 token provider default readonly scopes exclude calendar/sharepoint scopes', async () => {
+  const provider = createM365TokenProvider({ env: {} });
+  const status = await provider.getStatus();
+
+  assert.deepEqual(status.scopes, [
+    'openid',
+    'profile',
+    'offline_access',
+    'User.Read',
+    'Mail.Read',
+    'Tasks.Read',
+    'Files.Read',
+  ]);
+  assert.equal(status.scopes.includes('Calendars.Read'), false);
+  assert.equal(status.scopes.includes('Sites.Selected'), false);
+  assert.equal(status.scopes.includes('Sites.Read.All'), false);
+});
+
 test('m365 token provider requires native login and ignores fallback env vars', async () => {
   const provider = createM365TokenProvider({
     env: {
@@ -76,4 +94,28 @@ test('m365 token provider requires native login and ignores fallback env vars', 
     () => provider.getAccessToken(),
     /not authenticated\. Run m365_auth_login to sign in\./,
   );
+});
+
+test('m365 token provider supports write server env key overrides', async () => {
+  const provider = createM365TokenProvider({
+    env: {
+      M365_WRITE_TENANT_ID: 'tenant-123',
+      M365_WRITE_CLIENT_ID: 'client-456',
+      M365_WRITE_SCOPES: 'openid profile offline_access Calendars.Read Sites.Selected',
+    },
+    tenantIdEnvKey: 'M365_WRITE_TENANT_ID',
+    clientIdEnvKey: 'M365_WRITE_CLIENT_ID',
+    scopesEnvKey: 'M365_WRITE_SCOPES',
+  });
+
+  const status = await provider.getStatus();
+  assert.equal(status.tenantConfigured, true);
+  assert.equal(status.clientIdConfigured, true);
+  assert.deepEqual(status.scopes, [
+    'openid',
+    'profile',
+    'offline_access',
+    'Calendars.Read',
+    'Sites.Selected',
+  ]);
 });

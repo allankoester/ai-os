@@ -5,7 +5,7 @@ const stageEl = document.getElementById('stage');
 const chatEl = document.getElementById('chat');
 const inputEl = document.getElementById('input');
 const sendBtn = document.getElementById('send');
-const addTaskBtn = document.getElementById('addTask');
+
 const statusEl = document.getElementById('status');
 const sessEl = document.getElementById('sess');
 const modelSel = document.getElementById('model');
@@ -41,6 +41,7 @@ const MOBILE_MEDIA = window.matchMedia('(max-width: 720px)');
 const SIDEBAR_MIN = 180;
 const SIDEBAR_MAX = 560;
 
+
 const state = {
   conversationId: null,
   incognitoSessionId: null,
@@ -55,6 +56,53 @@ const state = {
   live: null,
   uiMode: 'chat',
 };
+
+const queuePanel = document.getElementById('queuePanel');
+const queueList = document.getElementById('queueList');
+const queueCount = document.getElementById('queueCount');
+const clearQueueBtn = document.getElementById('clearQueue');
+
+state.messageQueue = [];
+
+function renderQueue() {
+  if (state.messageQueue.length === 0) {
+    queuePanel.classList.add('hidden');
+    return;
+  }
+  queuePanel.classList.remove('hidden');
+  queueCount.textContent = state.messageQueue.length;
+  queueList.innerHTML = '';
+  state.messageQueue.forEach((msg, idx) => {
+    const el = document.createElement('div');
+    el.className = 'queue-item';
+    el.innerHTML = `
+      <div class="queue-item-text">${esc(msg.text)}</div>
+      <div class="queue-item-meta">${esc(msg.agent)}</div>
+      <button class="queue-item-remove" data-idx="${idx}">×</button>
+    `;
+    el.querySelector('.queue-item-remove').addEventListener('click', () => {
+      state.messageQueue.splice(idx, 1);
+      renderQueue();
+    });
+    queueList.appendChild(el);
+  });
+}
+
+clearQueueBtn.addEventListener('click', () => {
+  state.messageQueue = [];
+  renderQueue();
+});
+
+function processQueue() {
+  if (!state.running && state.messageQueue.length > 0) {
+    const next = state.messageQueue.shift();
+    renderQueue();
+    inputEl.value = next.text;
+    agentSel.value = next.agent;
+    modelSel.value = next.model;
+    send();
+  }
+}
 
 const cliState = {
   bridgeEnabled: false,
@@ -375,49 +423,304 @@ function prettyServer(server) {
     .trim() || 'MCP';
 }
 
-// Classify a tool event into a typed trace token so the chat can visually
-// distinguish agent hand-offs, skills, MCP tools and routine file/web calls.
+// Classify a tool event into a typed trace token. Case-insensitive so both the
+// Claude runtime (PascalCase names) and OpenCode (lowercase) resolve the same.
 function classifyTool(d) {
   const name = String(d.name || '');
+  const key = name.toLowerCase();
   const detail = String(d.detail || '');
-  // Only a real Task call is an agent hand-off. Tools that a subagent runs
-  // (d.sub) keep their own type and are shown indented under the hand-off.
-  if (name === 'Task') {
+  if (key === 'task') {
     const [who, ...rest] = detail.split(' · ');
     const agentName = prettyAgent(who);
-    return { kind: 'agent', type: 'AGENT', target: agentName, note: rest.join(' · '), initial: (agentName[0] || 'A').toUpperCase() };
+    return { kind: 'agent', type: 'DELEGATE', target: agentName, note: rest.join(' · '), initial: (agentName[0] || 'A').toUpperCase() };
   }
-  if (name === 'Skill') return { kind: 'skill', type: 'SKILL', target: detail || 'skill' };
-  if (name.startsWith('mcp__')) {
+  if (key === 'skill') return { kind: 'skill', type: 'SKILL', target: detail || 'skill' };
+  if (key.startsWith('mcp__')) {
     const parts = name.slice(5).split('__');
-    return { kind: 'mcp', type: 'MCP', target: prettyServer(parts[0]), note: parts.slice(1).join(' ').replace(/_/g, ' ') };
+    const server = prettyServer(parts[0]);
+    const method = parts.slice(1).join('__');
+    return { kind: 'mcp', type: 'MCP', target: method ? `${server} · ${method}` : server };
   }
-  if (name === 'Read' || name === 'Glob') return { kind: 'read', type: 'READ', target: detail || name };
-  if (name === 'Grep') return { kind: 'read', type: 'SEARCH', target: detail || 'grep' };
-  if (name === 'Write' || name === 'Edit') return { kind: 'edit', type: name.toUpperCase(), target: detail };
-  if (name === 'WebFetch' || name === 'WebSearch') return { kind: 'web', type: 'WEB', target: detail || name };
-  if (name === 'Bash') return { kind: 'bash', type: 'RUN', target: detail };
+  if (key === 'read' || key === 'glob' || key === 'notebookread') return { kind: 'read', type: 'READ', target: detail || name };
+  if (key === 'grep') return { kind: 'read', type: 'SEARCH', target: detail || 'grep' };
+  if (key === 'write' || key === 'edit' || key === 'multiedit' || key === 'notebookedit') return { kind: 'edit', type: name.toUpperCase(), target: detail };
+  if (key === 'webfetch' || key === 'websearch') return { kind: 'web', type: 'WEB', target: detail || name };
+  if (key === 'bash') return { kind: 'bash', type: 'RUN', target: detail };
+  if (key === 'todowrite') return { kind: 'tool', type: 'TODO', target: detail || 'update task list' };
   return { kind: 'tool', type: (name || 'TOOL').toUpperCase(), target: detail };
 }
 
-function clearActiveTrace(activity) {
-  if (activity) activity.querySelectorAll('.trace-item.active').forEach((el) => el.classList.remove('active'));
+// A trace is one collapsible activity block per assistant turn. The head is
+// always visible and shows the *current* step (refreshing as steps change) or,
+// when done, a one-line summary. Expanding reveals the full step timeline;
+// sub-agent tool calls nest under their Task; permission prompts appear inline.
+function statusInfo(status) {
+  switch (String(status || 'running')) {
+    case 'completed': return { cls: 'st-done', icon: '<span class="st-glyph ok">✓</span>' };
+    case 'error': return { cls: 'st-error', icon: '<span class="st-glyph bad">✕</span>' };
+    case 'permission_required': return { cls: 'st-blocked', icon: '<span class="st-glyph warn">⊘</span>' };
+    case 'awaiting_permission': return { cls: 'st-awaiting', icon: '<span class="st-glyph warn">!</span>' };
+    default: return { cls: 'st-running', icon: '<span class="spinner"></span>' };
+  }
 }
 
-function addToolChip(activity, d, { active = false } = {}) {
-  const c = classifyTool(d);
-  const item = document.createElement('span');
-  item.className = `trace-item ti-${c.kind}${d.sub ? ' sub' : ''}`;
-  const glyph = c.kind === 'agent'
-    ? `<span class="ti-avatar">${esc(c.initial)}</span>`
-    : '<span class="ti-dot"></span>';
-  const note = c.note ? `<span class="ti-note">${esc(c.note)}</span>` : '';
-  item.innerHTML = `${glyph}<span class="ti-type">${esc(c.type)}</span><span class="ti-target">${esc(c.target)}</span>${note}`;
-  if (active) {
-    clearActiveTrace(activity);
-    item.classList.add('active');
+function durLabel(d) {
+  return d.duration_ms != null ? `${(d.duration_ms / 1000).toFixed(1)}s` : '';
+}
+
+function ensureTraceForActivity(activity) {
+  if (activity.__trace) return activity.__trace;
+  const el = document.createElement('div');
+  el.className = 'trace';
+  el.innerHTML = `
+    <button type="button" class="trace-head" aria-expanded="false">
+      <span class="th-icon"></span>
+      <span class="th-label"></span>
+      <span class="th-badge"></span>
+      <span class="th-caret" aria-hidden="true">▸</span>
+    </button>
+    <div class="trace-steps"></div>`;
+  const trace = {
+    el,
+    headEl: el.querySelector('.trace-head'),
+    iconEl: el.querySelector('.th-icon'),
+    labelEl: el.querySelector('.th-label'),
+    badgeEl: el.querySelector('.th-badge'),
+    stepsEl: el.querySelector('.trace-steps'),
+    steps: new Map(),
+    perms: new Map(),
+    stepCounter: 0,
+    done: false,
+  };
+  trace.headEl.addEventListener('click', () => setTraceOpen(trace, !trace.el.classList.contains('open')));
+  activity.appendChild(el);
+  activity.__trace = trace;
+  return trace;
+}
+
+function setTraceOpen(trace, open) {
+  trace.el.classList.toggle('open', open);
+  trace.headEl.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+function stepCallId(d) {
+  return String(d.id || d.call_id || d.callId || '').trim() || `anon_${Math.random().toString(36).slice(2)}`;
+}
+
+function upsertStep(trace, d) {
+  const callId = stepCallId(d);
+  let step = trace.steps.get(callId);
+  if (!step) {
+    const el = document.createElement('div');
+    el.className = 'trace-step';
+    el.innerHTML = `
+      <div class="step-row">
+        <span class="step-n"></span>
+        <span class="step-status"></span>
+        <span class="step-type"></span>
+        <span class="step-target"></span>
+        <span class="step-dur"></span>
+        <span class="step-caret" aria-hidden="true">▸</span>
+      </div>
+      <div class="step-body"></div>`;
+    step = {
+      callId,
+      index: ++trace.stepCounter,
+      data: {},
+      el,
+      rowEl: el.querySelector('.step-row'),
+      bodyEl: el.querySelector('.step-body'),
+      substepsEl: null,
+      parentId: d.parent_id ? String(d.parent_id) : null,
+    };
+    step.rowEl.addEventListener('click', () => {
+      if (step.el.classList.contains('no-body')) return;
+      step.el.classList.toggle('expanded');
+    });
+    trace.steps.set(callId, step);
+    const parent = step.parentId ? trace.steps.get(step.parentId) : null;
+    if (parent) {
+      if (!parent.substepsEl) {
+        parent.substepsEl = document.createElement('div');
+        parent.substepsEl.className = 'trace-substeps';
+        parent.el.appendChild(parent.substepsEl);
+        parent.el.classList.add('has-substeps');
+      }
+      parent.substepsEl.appendChild(el);
+    } else {
+      trace.stepsEl.appendChild(el);
+    }
   }
-  activity.appendChild(item);
+  step.data = { ...step.data, ...d };
+  renderStep(step);
+  updateHead(trace);
+  return step;
+}
+
+function renderStep(step) {
+  const d = step.data;
+  const c = classifyTool(d);
+  const st = statusInfo(d.status);
+  step.el.className = `trace-step ti-${c.kind} ${st.cls}${step.parentId ? ' sub' : ''}`;
+  step.rowEl.querySelector('.step-n').textContent = step.index;
+  step.rowEl.querySelector('.step-status').innerHTML = st.icon;
+  step.rowEl.querySelector('.step-type').textContent = c.type;
+  step.rowEl.querySelector('.step-target').textContent = c.target || '';
+  step.rowEl.querySelector('.step-dur').textContent = durLabel(d);
+  const parts = [];
+  if (c.note) parts.push(`<div class="sb-note">${esc(c.note)}</div>`);
+  if (d.input) parts.push(`<div class="sb-block"><div class="sb-h">Input</div><pre>${esc(d.input)}</pre></div>`);
+  if (d.error && d.error.message) {
+    parts.push(`<div class="sb-block sb-err"><div class="sb-h">${esc(d.error.category || 'Error')}</div><pre>${esc(d.error.message)}</pre></div>`);
+  } else if (d.result) {
+    parts.push(`<div class="sb-block"><div class="sb-h">Result</div><pre>${esc(d.result)}</pre></div>`);
+  }
+  step.bodyEl.innerHTML = parts.join('');
+  if (!parts.length) step.el.classList.add('no-body');
+}
+
+function currentStep(trace) {
+  let active = null;
+  for (const step of trace.steps.values()) {
+    const s = String(step.data.status || 'running');
+    if (s === 'running' || s === 'awaiting_permission') active = step;
+  }
+  return active;
+}
+
+// The full identity of a step for the head/summary: agent hand-offs read
+// "Delegating to X"; sub-agent tool calls are prefixed with the running agent
+// ("Explorer › MCP m365-readonly · m365_auth_status") so it is always clear
+// which agent is working.
+function stepLabel(trace, step) {
+  const c = classifyTool(step.data);
+  let label = c.kind === 'agent' ? `Delegating to ${c.target}` : (c.target ? `${c.type} ${c.target}` : c.type);
+  if (step.parentId) {
+    const parent = trace.steps.get(step.parentId);
+    const who = parent ? classifyTool(parent.data).target : 'Agent';
+    label = `${who} › ${label}`;
+  }
+  return label;
+}
+
+function updateHead(trace) {
+  const pending = [...trace.perms.values()].find((p) => p.status === 'pending');
+  const steps = [...trace.steps.values()];
+  const total = steps.length;
+  if (pending) {
+    trace.el.classList.add('needs-action');
+    trace.iconEl.innerHTML = '<span class="st-glyph warn">!</span>';
+    trace.labelEl.textContent = 'Action required';
+    trace.badgeEl.textContent = pending.tool ? `Allow ${pending.tool}?` : 'Permission needed';
+    trace.badgeEl.hidden = false;
+    setTraceOpen(trace, true);
+    return;
+  }
+  trace.el.classList.remove('needs-action');
+  trace.badgeEl.hidden = true;
+  if (!trace.done) {
+    // Live turn: overwrite the head each cycle with the current step (or the
+    // most recent one while the model works between tools) + its number. Never
+    // fall back to the done-summary while the turn is still running.
+    const active = currentStep(trace) || steps[total - 1];
+    trace.iconEl.innerHTML = '<span class="spinner"></span>';
+    trace.labelEl.innerHTML = active
+      ? `<span class="th-step">Step ${active.index}</span> · ${esc(stepLabel(trace, active))}`
+      : 'Working…';
+    return;
+  }
+  // Done: lead with the last concrete step, then a muted count.
+  const hasError = steps.some((s) => String(s.data.status) === 'error' || String(s.data.status) === 'permission_required');
+  trace.iconEl.innerHTML = hasError ? '<span class="st-glyph bad">✕</span>' : '<span class="st-glyph ok">✓</span>';
+  const last = steps[total - 1];
+  const agents = steps.filter((s) => classifyTool(s.data).kind === 'agent').length;
+  const countBits = [`${total} step${total === 1 ? '' : 's'}`];
+  if (agents) countBits.push(`${agents} agent${agents === 1 ? '' : 's'}`);
+  if (last) {
+    trace.labelEl.innerHTML = `${esc(stepLabel(trace, last))} <span class="th-count">· ${countBits.join(' · ')}</span>`;
+  } else {
+    trace.labelEl.textContent = countBits.join(' · ');
+  }
+}
+
+function finalizeTrace(activity) {
+  const trace = activity && activity.__trace;
+  if (!trace) return;
+  trace.done = true;
+  updateHead(trace);
+}
+
+// Inline Allow / Allow-for-run / Deny prompt for a gated tool call.
+function applyPermission(activity, d) {
+  const trace = ensureTraceForActivity(activity);
+  const permId = String(d.id || '');
+  if (!permId) return;
+  if (d.status === 'pending') {
+    const typeLabel = classifyTool({ name: d.tool, detail: d.detail }).type;
+    const rec = trace.perms.get(permId) || { id: permId, status: 'pending' };
+    rec.status = 'pending';
+    rec.tool = typeLabel;
+    rec.runId = d.run_id || rec.runId || null;
+    trace.perms.set(permId, rec);
+    rec.el = buildPermPrompt(trace, rec, d);
+    setTraceOpen(trace, true);
+    updateHead(trace);
+  } else {
+    const rec = trace.perms.get(permId);
+    if (rec) {
+      rec.status = d.status;
+      if (rec.el) {
+        rec.el.classList.add('resolved', d.status);
+        const actions = rec.el.querySelector('.perm-actions');
+        if (actions) actions.innerHTML = `<span class="perm-result ${d.status}">${d.status === 'allowed' ? '✓ Allowed' : '✕ Denied'}</span>`;
+      }
+    }
+    updateHead(trace);
+  }
+}
+
+function buildPermPrompt(trace, rec, d) {
+  const step = d.call_id ? trace.steps.get(String(d.call_id)) : null;
+  let wrap = rec.el;
+  if (!wrap) {
+    wrap = document.createElement('div');
+    wrap.className = 'perm-prompt';
+    const target = d.detail ? ` <code>${esc(d.detail)}</code>` : '';
+    wrap.innerHTML = `
+      <div class="pp-head"><span class="pp-badge">Permission</span> Danny wants to run <b>${esc(rec.tool || d.tool || 'a tool')}</b>${target}</div>
+      ${d.input ? `<pre class="pp-input">${esc(d.input)}</pre>` : ''}
+      <div class="perm-actions">
+        <button type="button" class="pp-btn pp-allow">Allow once</button>
+        <button type="button" class="pp-btn pp-always">Allow for this run</button>
+        <button type="button" class="pp-btn pp-deny">Deny</button>
+      </div>`;
+    const decide = async (decision, scope, btn) => {
+      wrap.querySelectorAll('button').forEach((b) => (b.disabled = true));
+      if (btn) btn.classList.add('busy');
+      try {
+        await apiJson('/api/chat/permission-decision', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ runId: rec.runId, conversationId: state.conversationId, permissionId: rec.id, decision, scope }),
+        });
+      } catch (err) {
+        wrap.querySelectorAll('button').forEach((b) => (b.disabled = false));
+        if (btn) btn.classList.remove('busy');
+        const note = wrap.querySelector('.pp-error') || wrap.appendChild(Object.assign(document.createElement('div'), { className: 'pp-error' }));
+        note.textContent = `Could not send decision: ${err.message || err}`;
+      }
+    };
+    wrap.querySelector('.pp-allow').addEventListener('click', (e) => decide('allow', 'once', e.currentTarget));
+    wrap.querySelector('.pp-always').addEventListener('click', (e) => decide('allow', 'always', e.currentTarget));
+    wrap.querySelector('.pp-deny').addEventListener('click', (e) => decide('deny', 'once', e.currentTarget));
+    if (step) {
+      step.el.classList.add('expanded', 'awaiting-perm');
+      step.el.appendChild(wrap);
+    } else {
+      trace.stepsEl.prepend(wrap);
+    }
+  }
+  return wrap;
 }
 
 function addMetaLine(shell, d) {
@@ -442,37 +745,13 @@ function canAddTaskHandoff() {
   return Boolean(state.conversationId);
 }
 
-function updateAddTaskButtonState() {
-  if (!addTaskBtn) return;
-  const enabled = canAddTaskHandoff();
-  addTaskBtn.disabled = !enabled;
-  if (!enabled) {
-    addTaskBtn.title = incogEl.checked ? 'Unavailable in incognito mode' : 'Open or start a conversation first';
-  } else {
-    addTaskBtn.title = 'Send selected/current text to Projects as task draft';
-  }
-}
+
 
 function boundedText(raw) {
   return String(raw || '').trim().slice(0, 4000);
 }
 
-function sendAddTaskHandoff() {
-  if (!canAddTaskHandoff()) return;
-  const source = String(inputEl.value || '');
-  const hasSelection = Number.isInteger(inputEl.selectionStart)
-    && Number.isInteger(inputEl.selectionEnd)
-    && inputEl.selectionEnd > inputEl.selectionStart;
-  const selectedText = hasSelection ? boundedText(source.slice(inputEl.selectionStart, inputEl.selectionEnd)) : '';
-  const composerText = boundedText(source);
-  if (!selectedText && !composerText) return;
-  window.parent.postMessage({
-    type: 'steadymade-chat-add-task',
-    conversationId: state.conversationId,
-    selectedText,
-    composerText,
-  }, trustedParentOrigin());
-}
+
 
 function setBusy(busy) {
   sendBtn.classList.toggle('stop', busy);
@@ -612,7 +891,7 @@ function setCliHint(text, kind = '') {
 function ensureTerminal() {
   if (cliState.term) return true;
   if (!window.Terminal || !window.FitAddon || !window.FitAddon.FitAddon) {
-    cliState.unsupportedReason = 'Embedded terminal assets unavailable. Please reinstall dependencies and reload.';
+    cliState.unsupportedReason = 'Local PTY terminal assets unavailable. Please reinstall dependencies and reload.';
     setCliHint(cliState.unsupportedReason, 'warn');
     return false;
   }
@@ -703,15 +982,15 @@ function updateTerminalControls() {
   if (termStopBtn) termStopBtn.disabled = !running;
 
   if (!cliState.bridgeEnabled) {
-    setCliHint('CLI bridge is disabled. Enable it in Settings → AI Provider and restart.', 'warn');
+    setCliHint('Local PTY disabled. Enable it in Settings → AI Provider and restart.', 'warn');
   } else if (cliState.unsupportedReason) {
-    setCliHint(cliState.unsupportedReason, 'warn');
+    setCliHint(`Provider not ready: ${cliState.unsupportedReason}`, 'warn');
   } else if (!active) {
-    setCliHint(`Ready. Provider target: ${cliState.provider}. Create a session to start the embedded terminal.`, '');
+    setCliHint(`Local PTY ready. Provider target: ${cliState.provider}. Create a session to start the terminal.`, '');
   } else if (!active.running) {
-    setCliHint(`Session ${active.id.slice(0, 8)} exited${active.exitCode != null ? ` (code ${active.exitCode})` : ''}.`, 'warn');
+    setCliHint(`Local PTY session ${active.id.slice(0, 8)} exited${active.exitCode != null ? ` (code ${active.exitCode})` : ''}.`, 'warn');
   } else {
-    setCliHint(`Connected to ${active.target} session ${active.id.slice(0, 8)}${active.pid ? ` (pid ${active.pid})` : ''}.`, 'ok');
+    setCliHint(`Local WebSocket connected to PTY. Provider: ${active.target} (session ${active.id.slice(0, 8)}).`, 'ok');
   }
 }
 
@@ -783,7 +1062,7 @@ function connectTerminalWebSocket() {
   };
 
   ws.onerror = () => {
-    setCliHint('Embedded terminal websocket error. Check local bridge settings and retry.', 'warn');
+    setCliHint('Local PTY websocket error. Check local bridge settings and retry.', 'warn');
   };
 
   ws.onclose = () => {
@@ -922,6 +1201,22 @@ function renderConvList(items, { searchMode = false } = {}) {
   }
 }
 
+
+async function loadCapabilities() {
+  try {
+    const caps = await apiJson('/api/capabilities');
+    if (caps && caps.models) {
+      modelSel.innerHTML = '<option value="default">Default</option>';
+      for (const m of caps.models) {
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.textContent = m.name || m.id;
+        modelSel.appendChild(opt);
+      }
+    }
+  } catch(e) {}
+}
+
 async function loadAgents() {
   const { agents } = await apiJson('/api/agents');
   state.agents = agents;
@@ -962,7 +1257,7 @@ function renderEvents(events, session) {
       turnAgent = e.agent || turnAgent;
       addUserMsg(e.text || '');
     } else if (e.t === 'tool') {
-      addToolChip(ensureShell().querySelector('.activity'), e);
+      upsertStep(ensureTraceForActivity(ensureShell().querySelector('.activity')), e);
     } else if (e.t === 'assistant') {
       const row = ensureShell();
       row.querySelector('.bubble').innerHTML = e.text ? renderMd(e.text) : '<em>(no text)</em>';
@@ -1018,7 +1313,7 @@ function handleStreamEvent(ev, d, streamAgentId) {
         state.conversationId = d.id;
         state.streamConversationId = d.id;
         localStorage.setItem(CONV_KEY, d.id);
-        updateAddTaskButtonState();
+        
       }
       break;
     case 'init':
@@ -1042,15 +1337,24 @@ function handleStreamEvent(ev, d, streamAgentId) {
     }
     case 'tool': {
       const live = ensureLive(streamAgentId || agentSel.value || 'danny');
-      addToolChip(live.activity, d, { active: true });
+      upsertStep(ensureTraceForActivity(live.activity), d);
+      scrollDown();
+      break;
+    }
+    case 'permission': {
+      const live = ensureLive(streamAgentId || agentSel.value || 'danny');
+      applyPermission(live.activity, d);
       scrollDown();
       break;
     }
     case 'result': {
       const live = ensureLive(streamAgentId || agentSel.value || 'danny');
-      clearActiveTrace(live.activity);
+      finalizeTrace(live.activity);
       if (live.raw) live.bubble.innerHTML = renderMd(live.raw);
-      else if (d.error_text) live.bubble.innerHTML = `<em>${esc(d.error_text)}</em>`;
+      else if (d.error_text || d.error) {
+        let errStr = typeof d.error === 'object' ? JSON.stringify(d.error) : String(d.error || d.error_text);
+        live.bubble.innerHTML = `<em>${esc(errStr)}</em>`;
+      }
       addMetaLine(live.shell, d);
       scrollDown();
       break;
@@ -1068,10 +1372,17 @@ function handleStreamEvent(ev, d, streamAgentId) {
       break;
     }
     case 'stderr':
-      console.warn('[chat]', d.text);
+      if (state.live) {
+        const note = document.createElement('div');
+        note.className = 'trace-syslog';
+        note.textContent = String(d.text || '');
+        state.live.activity.appendChild(note);
+        scrollDown();
+      }
       break;
     case 'done':
-      if (state.live) clearActiveTrace(state.live.activity);
+      setTimeout(processQueue, 500);
+      if (state.live) finalizeTrace(state.live.activity);
       state.live = null;
       state.running = false;
       state.abort = null;
@@ -1140,7 +1451,7 @@ async function loadConversation(id) {
   try {
     const { session, events } = await apiJson(`/api/session?id=${encodeURIComponent(id)}`);
     state.conversationId = id;
-    updateAddTaskButtonState();
+    
     localStorage.setItem(CONV_KEY, id);
     selectAgent(session.agent || 'danny');
     sessEl.textContent = `Conversation ${id.slice(0, 8)} · ${session.turns || 0} turns`;
@@ -1159,7 +1470,14 @@ async function loadConversation(id) {
 async function send() {
   if (state.uiMode !== 'chat') return;
   const text = inputEl.value.trim();
-  if (!text || state.running) return;
+  if (!text) return;
+  if (state.running) {
+    state.messageQueue.push({ text, agent: agentSel.value, model: modelSel.value });
+    renderQueue();
+    inputEl.value = '';
+    autosize();
+    return;
+  }
 
   addUserMsg(text);
   inputEl.value = '';
@@ -1226,7 +1544,7 @@ function resetConversation() {
   detachStream();
   state.conversationId = null;
   state.incognitoSessionId = null;
-  updateAddTaskButtonState();
+  
   if (incogEl.checked) {
     incogEl.checked = false;
     incogEl.parentElement.classList.remove('on');
@@ -1244,6 +1562,7 @@ function resetConversation() {
   updateTerminalControls();
   const params = new URLSearchParams(location.search);
   await loadAgents();
+  await loadCapabilities();
   applyPreset(params.get('agent'), params.get('msg'));
   await loadSessions();
   const stored = localStorage.getItem(CONV_KEY);
@@ -1253,7 +1572,7 @@ function resetConversation() {
 
   const savedMode = localStorage.getItem(UI_MODE_KEY);
   setUiMode(savedMode === 'cli' ? 'cli' : 'chat');
-  updateAddTaskButtonState();
+  
 })();
 
 window.addEventListener('message', (e) => {
@@ -1319,13 +1638,13 @@ incogEl.addEventListener('change', () => {
   state.incognitoSessionId = null;
   if (incogEl.checked) {
     state.conversationId = null;
-    updateAddTaskButtonState();
+    
     sessEl.textContent = 'Incognito — leaves no trace';
     showWelcome();
     renderConvList(state.sessions);
   } else {
     sessEl.textContent = '';
-    updateAddTaskButtonState();
+    
     showWelcome();
   }
   statusEl.textContent = 'ready';
@@ -1349,7 +1668,7 @@ inputEl.addEventListener('keydown', (e) => {
 });
 inputEl.addEventListener('input', autosize);
 newBtn.addEventListener('click', resetConversation);
-if (addTaskBtn) addTaskBtn.addEventListener('click', sendAddTaskHandoff);
+
 viewChatBtn.addEventListener('click', () => {
   if (cliState.modeLocked) return;
   setUiMode('chat');

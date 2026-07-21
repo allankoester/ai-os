@@ -10,8 +10,8 @@ the same change set.
 
 ## Last Verified Snapshot
 
-- Date: 2026-07-20
-- Validation: `node scripts/validate.mjs` (passed, 243 checks)
+- Date: 2026-07-21
+- Validation: `node scripts/validate.mjs` (passed, 274 checks)
 - Scope verified: docs, interface, scheduler, knowledge contract, scripts,
   personal-assistant layer (memory, chat history, learning loop, skill
   versioning, promotion pipeline)
@@ -40,11 +40,17 @@ the same change set.
 - Usage telemetry stream remains canonical JSONL in `runs/usage.jsonl` (with legacy compatibility read path for `runs/chat-usage.jsonl`)
 - Scheduler run logs are machine-local files in `scheduler/logs/`
 - Headless execution path is implemented via `claude -p`
-- Local Microsoft 365 MCP read-only integration baseline is implemented:
-  - local MCP server: `mcp/m365/server.mjs`
-  - plugin materialization: built-in `m365-readonly` in `interface/plugins.mjs`
-  - setup guide + Azure CLI app-registration helper:
-    `docs/guide-m365-mcp-readonly-setup.md`, `scripts/m365-app-registration.sh`
+- Local Microsoft 365 MCP integration is implemented with split read-only and
+  write-capable servers:
+  - read-only MCP server: `mcp/m365/server.mjs` (GET-only surface)
+  - write-capable MCP server: `mcp/m365-write/server.mjs` (calendar read +
+    SharePoint read/write with explicit `confirm=true` write gate)
+  - plugin materialization: built-in `m365-readonly` and `m365-write` in
+    `interface/plugins.mjs`
+  - setup guides + Azure CLI app-registration helper:
+    `docs/guide-m365-mcp-readonly-setup.md`,
+    `docs/guide-m365-mcp-write-setup.md`,
+    `scripts/m365-app-registration.sh`
   - explicit boundary: separate from app-only Graph backend in
     `interface/storage/graph-storage.mjs`
 
@@ -132,9 +138,9 @@ Roadmap baseline references:
 | 4 | VM execution runtime and common harness | planned | Local SQLite core is implemented; VM runtime rollout remains planned |
 | 5 | Enterprise connectors/policy | planned | Not implemented |
 
-Connector checkpoint note (2026-07-20): a local, delegated, read-only Microsoft
-365 MCP baseline is now implemented for interactive sessions; scheduler/headless
-connector execution and full native PKCE token lifecycle remain follow-up scope.
+Connector checkpoint note (2026-07-21): local delegated Microsoft 365 MCP now
+ships as split profiles (`m365-readonly` and `m365-write`) for interactive
+sessions; scheduler/headless connector execution remains follow-up scope.
 
 ### Desktop packaging track (new spec drafted 2026-07-13)
 

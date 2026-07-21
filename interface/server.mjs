@@ -48,6 +48,14 @@ import {
   getUsageProjectionHealth,
   rebuildUsageProjectionShadow,
 } from './storage/runtime/usage-projection.mjs';
+import {
+  buildProviderRuntimeDiagnostics,
+  importOpenCodeConfigIntoManagedRuntime,
+  inspectOpenCodeConfigImport,
+  prepareOpenCodeEnvironment,
+  resolveManagedCliTargets,
+  resolveProviderRuntimeMode,
+} from '../runtime/managed-runtime.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..'); // project root: steadymade-ai-os
@@ -66,6 +74,11 @@ const API_TOKEN = process.env.STEADYMADE_INTERFACE_TOKEN || '';
 const BOARD_INTERNAL_TOKEN = process.env.BOARD_INTERNAL_TOKEN || '';
 
 const pluginManager = createPluginManager({ rootDir: ROOT });
+try {
+  await pluginManager.syncProjections();
+} catch (err) {
+  console.warn(`[plugins] failed to materialize provider projections at startup: ${err?.message || err}`);
+}
 const skillHub = createSkillHub({
   rootDir: ROOT,
   listEnabledPlugins: () => pluginManager.list().filter((p) => p.enabled).map((p) => p.id),
@@ -238,7 +251,10 @@ const MCP_TEST_ENV_ALLOWLIST = [
 ];
 const DEFAULT_PROVIDER_SETTINGS = Object.freeze({
   runtimeMode: 'claude-subscription',
+  claudeBin: '',
   opencodeBin: '',
+  opencodeConfigPath: '',
+  opencodeConfigImportSourcePath: '',
   cliBridgeEnabled: false,
   envVault: [],
   updatedAt: null,
@@ -489,7 +505,10 @@ function toProviderSettingsResponse(rawSettings) {
     }));
   return {
     runtimeMode: rawSettings.runtimeMode,
+    claudeBin: rawSettings.claudeBin,
     opencodeBin: rawSettings.opencodeBin,
+    opencodeConfigPath: rawSettings.opencodeConfigPath,
+    opencodeConfigImportSourcePath: rawSettings.opencodeConfigImportSourcePath,
     cliBridgeEnabled: rawSettings.cliBridgeEnabled,
     envVault: envVaultEntries,
     updatedAt: rawSettings.updatedAt || null,
@@ -537,75 +556,45 @@ function resolveEnvVaultMap(bodyEnvVault, existingMap) {
 
 function sanitizeProviderSettings(body) {
   const runtimeMode = String(body?.runtimeMode || '').trim();
+  const claudeBin = String(body?.claudeBin || '').trim();
   const opencodeBin = String(body?.opencodeBin || '').trim();
+  const opencodeConfigPath = String(body?.opencodeConfigPath || '').trim();
+  const opencodeConfigImportSourcePath = String(body?.opencodeConfigImportSourcePath || '').trim();
   const cliBridgeEnabled = body?.cliBridgeEnabled;
   const envVaultRaw = body?.envVault;
   const envVault = Array.isArray(envVaultRaw)
     ? resolveEnvVaultMap(envVaultRaw, {})
     : sanitizeEnvVaultMap(envVaultRaw);
   return {
-    runtimeMode: PROVIDER_RUNTIME_MODES.has(runtimeMode) ? runtimeMode : DEFAULT_PROVIDER_SETTINGS.runtimeMode,
+    runtimeMode: resolveProviderRuntimeMode(runtimeMode),
+    claudeBin: claudeBin.slice(0, 1024),
     opencodeBin: opencodeBin.slice(0, 1024),
+    opencodeConfigPath: opencodeConfigPath.slice(0, 1024),
+    opencodeConfigImportSourcePath: opencodeConfigImportSourcePath.slice(0, 1024),
     cliBridgeEnabled: typeof cliBridgeEnabled === 'boolean' ? cliBridgeEnabled : DEFAULT_PROVIDER_SETTINGS.cliBridgeEnabled,
     envVault,
   };
 }
 
-function resolveRuntimeMode(rawMode) {
-  const mode = String(rawMode || '').trim().toLowerCase();
-  return PROVIDER_RUNTIME_MODES.has(mode) ? mode : DEFAULT_PROVIDER_SETTINGS.runtimeMode;
-}
-
-function expandHome(rawPath) {
-  const value = String(rawPath || '').trim();
-  if (!value) return '';
-  if (value === '~') return os.homedir();
-  if (value.startsWith('~/')) return path.join(os.homedir(), value.slice(2));
-  return value;
-}
-
-function resolveBinary(command, fallbackName) {
-  const configured = String(command || '').trim() || fallbackName;
-  const expanded = expandHome(configured);
-  const hasPath = expanded.includes(path.sep);
-  const candidates = hasPath
-    ? [path.resolve(expanded), path.resolve(ROOT, expanded)]
-    : String(process.env.PATH || '').split(path.delimiter).filter(Boolean).map((dir) => path.join(dir, expanded));
-  for (const candidate of [...new Set(candidates)]) {
-    try {
-      fs.accessSync(candidate, fs.constants.X_OK);
-      return { resolvedPath: candidate, reason: null };
-    } catch {
-      // continue
-    }
-  }
-  return {
-    resolvedPath: null,
-    reason: hasPath ? `configured path is not executable: ${configured}` : `${configured} binary not found in PATH`,
-  };
-}
-
 function providerLocalDiagnostics(rawSettings) {
-  const mode = resolveRuntimeMode(rawSettings.runtimeMode);
-  const checks = [];
-  const add = (id, ok, category, message) => checks.push({ id, status: ok ? 'pass' : 'fail', category: ok ? 'success' : category, message });
-
-  const claude = resolveBinary(process.env.CLAUDE_BIN || 'claude', 'claude');
-  const opencode = resolveBinary(rawSettings.opencodeBin || process.env.OPENCODE_BIN || 'opencode', 'opencode');
-  if (mode === 'opencode') {
-    add('opencode-binary', Boolean(opencode.resolvedPath), 'missing_binary', opencode.resolvedPath ? `OpenCode binary found at ${opencode.resolvedPath}` : opencode.reason);
-  } else {
-    add('claude-binary', Boolean(claude.resolvedPath), 'missing_binary', claude.resolvedPath ? `Claude binary found at ${claude.resolvedPath}` : claude.reason);
-  }
-  if (mode === 'anthropic-api') {
-    const apiKey = String(rawSettings?.envVault?.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY || '').trim();
-    add('anthropic-api-key', Boolean(apiKey), 'missing_config', apiKey ? 'ANTHROPIC_API_KEY is configured' : 'ANTHROPIC_API_KEY is missing');
-  }
+  const diagnostics = buildProviderRuntimeDiagnostics({
+    workspaceRoot: ROOT,
+    providerSettings: rawSettings,
+    env: process.env,
+    testRootOverride: process.env.STEADYMADE_STORAGE_KERNEL_TEST_ROOT || null,
+  });
   return {
-    runtimeMode: mode,
-    ready: checks.every((c) => c.status === 'pass'),
-    checks,
-    blockingFailures: checks.filter((c) => c.status === 'fail'),
+    runtimeMode: diagnostics.runtimeMode,
+    ready: diagnostics.ready,
+    checks: diagnostics.checks,
+    blockingFailures: diagnostics.blockingFailures,
+    opencodeConfigImport: diagnostics.runtimeMode === 'opencode'
+      ? inspectOpenCodeConfigImport({
+        workspaceRoot: ROOT,
+        providerSettings: rawSettings,
+        testRootOverride: process.env.STEADYMADE_STORAGE_KERNEL_TEST_ROOT || null,
+      })
+      : null,
   };
 }
 
@@ -635,18 +624,40 @@ async function runProviderDeepTest(rawSettings) {
   }
 
   const timeoutMs = 7000;
-  const command = mode === 'opencode'
-    ? resolveBinary(rawSettings.opencodeBin || process.env.OPENCODE_BIN || 'opencode', 'opencode').resolvedPath
-    : resolveBinary(process.env.CLAUDE_BIN || 'claude', 'claude').resolvedPath;
+  const targets = resolveManagedCliTargets({
+    workspaceRoot: ROOT,
+    providerSettings: rawSettings,
+    env: process.env,
+    testRootOverride: process.env.STEADYMADE_STORAGE_KERNEL_TEST_ROOT || null,
+  });
+  const command = mode === 'opencode' ? targets.opencode.resolvedPath : targets.claude.resolvedPath;
+  if (!command) {
+    const missingReason = mode === 'opencode' ? targets.opencode.reason : targets.claude.reason;
+    return {
+      ok: false,
+      runtimeMode: mode,
+      category: 'setup_required',
+      detail: missingReason || `${mode} setup required`,
+      durationMs: Date.now() - started,
+    };
+  }
   const args = mode === 'opencode'
     ? ['run', 'Return exactly OK.', '--format', 'json']
     : ['-p', 'Return exactly OK.', '--output-format', 'stream-json', '--permission-mode', 'default'];
   const secrets = Object.values(rawSettings.envVault || {}).filter((v) => typeof v === 'string' && v);
+  const spawnEnv = mode === 'opencode'
+    ? prepareOpenCodeEnvironment({
+      env: { ...process.env, ...(rawSettings.envVault || {}) },
+      workspaceRoot: ROOT,
+      providerSettings: rawSettings,
+      testRootOverride: process.env.STEADYMADE_STORAGE_KERNEL_TEST_ROOT || null,
+    })
+    : { ...process.env, ...(rawSettings.envVault || {}) };
 
   return await new Promise((resolve) => {
     const child = spawn(command, args, {
       cwd: ROOT,
-      env: { ...process.env, ...(rawSettings.envVault || {}) },
+      env: spawnEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';
@@ -886,14 +897,104 @@ async function testMcpPlugin(plugin) {
   });
 }
 
+// Extract a { id, name, config } MCP descriptor from raw Claude CLI output.
+// Handles the `--output-format json` envelope ({ result: "...text..." }) and
+// tolerates surrounding prose / code fences around the JSON object.
+function extractGeneratedMcp(stdout) {
+  let text = String(stdout || '');
+  try {
+    const env = JSON.parse(text);
+    if (env && typeof env === 'object' && typeof env.result === 'string') text = env.result;
+  } catch { /* stdout was not a JSON envelope — use as-is */ }
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  let obj;
+  try { obj = JSON.parse(text.slice(start, end + 1)); } catch { return null; }
+  if (!obj || typeof obj !== 'object' || !obj.config || typeof obj.config !== 'object' || Array.isArray(obj.config)) return null;
+  const rawId = String(obj.id || '').trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+  return {
+    id: /^[a-z0-9][a-z0-9-]{1,40}$/.test(rawId) ? rawId : '',
+    name: String(obj.name || '').trim().slice(0, 80),
+    config: obj.config,
+  };
+}
+
+// Draft an MCP server config from a natural-language description or pasted docs
+// by running the local Claude CLI one-shot. Returns { ok, id, name, config } or
+// { errors }. Never returns real secrets — the prompt requires ${ENV} placeholders.
+async function generateMcpConfigFromText(description) {
+  const text = String(description || '').trim();
+  if (!text) return { errors: ['description is empty'] };
+  if (text.length > 8000) return { errors: ['description too long (max 8000 chars)'] };
+
+  const raw = await readProviderSettingsRaw();
+  const targets = resolveManagedCliTargets({
+    workspaceRoot: ROOT,
+    providerSettings: raw,
+    env: process.env,
+    testRootOverride: process.env.STEADYMADE_STORAGE_KERNEL_TEST_ROOT || null,
+  });
+  const command = targets.claude.resolvedPath;
+  if (!command) return { errors: ['Claude CLI setup required: ' + (targets.claude.reason || 'configured path is not executable')] };
+
+  const prompt = [
+    'You configure a single MCP server entry for a Claude Code .mcp.json file.',
+    'From the server documentation or description below, produce ONE JSON object and nothing else.',
+    'Shape: {"id": "kebab-case-id", "name": "Human Name", "config": { ... }}.',
+    'For a local/stdio server: config = {"command": string, "args": [strings], "env": {"KEY": "${KEY}"}}.',
+    'For a remote HTTP server: config = {"type": "streamable-http", "url": string, "headers": {"Authorization": "Bearer ${TOKEN}"}}.',
+    'Never invent real secret values — always use ${ENV_NAME} placeholders for tokens, keys and passwords.',
+    'Output only the JSON object: no markdown code fences, no commentary, no explanation.',
+    '',
+    'DESCRIPTION / DOCS:',
+    text,
+  ].join('\n');
+
+  const args = ['-p', prompt, '--output-format', 'json', '--permission-mode', 'default'];
+  const secrets = Object.values(raw.envVault || {}).filter((v) => typeof v === 'string' && v);
+  const spawnEnv = { ...process.env, ...(raw.envVault || {}) };
+
+  return await new Promise((resolve) => {
+    const started = Date.now();
+    const child = spawn(command, args, { cwd: ROOT, env: spawnEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      try { child.kill('SIGTERM'); } catch {}
+      setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 500).unref();
+    }, 45000);
+
+    child.stdout.on('data', (chunk) => { stdout += String(chunk || ''); });
+    child.stderr.on('data', (chunk) => { stderr += String(chunk || ''); });
+    child.on('error', (err) => {
+      clearTimeout(timeout);
+      resolve({ errors: ['generation failed: ' + truncateOutput(maskSecretsInText(err.message || String(err), secrets), 200)] });
+    });
+    child.on('close', (code) => {
+      clearTimeout(timeout);
+      if (timedOut) return resolve({ errors: ['generation timed out'] });
+      if (code !== 0) return resolve({ errors: ['generation failed: ' + truncateOutput(maskSecretsInText(stderr || `claude exited with code ${code}`, secrets), 200)] });
+      const parsed = extractGeneratedMcp(stdout);
+      if (!parsed) return resolve({ errors: ['could not parse an MCP config from the model output — try the Manual tab'] });
+      return resolve({ ok: true, ...parsed, durationMs: Date.now() - started });
+    });
+  });
+}
+
 function validateProviderSettings(body) {
   const errors = [];
   if (!body || typeof body !== 'object') errors.push('body must be an object');
-  if (!PROVIDER_RUNTIME_MODES.has(String(body?.runtimeMode || ''))) {
+  if (body?.runtimeMode !== undefined && !PROVIDER_RUNTIME_MODES.has(String(body?.runtimeMode || ''))) {
     errors.push('runtimeMode must be one of: claude-subscription, anthropic-api, opencode');
   }
-  if (typeof body?.opencodeBin !== 'string') errors.push('opencodeBin must be a string');
-  if (typeof body?.cliBridgeEnabled !== 'boolean') errors.push('cliBridgeEnabled must be a boolean');
+  if (body?.claudeBin !== undefined && typeof body?.claudeBin !== 'string') errors.push('claudeBin must be a string');
+  if (body?.opencodeBin !== undefined && typeof body?.opencodeBin !== 'string') errors.push('opencodeBin must be a string');
+  if (body?.opencodeConfigPath !== undefined && typeof body?.opencodeConfigPath !== 'string') errors.push('opencodeConfigPath must be a string');
+  if (body?.opencodeConfigImportSourcePath !== undefined && typeof body?.opencodeConfigImportSourcePath !== 'string') errors.push('opencodeConfigImportSourcePath must be a string');
+  if (body?.cliBridgeEnabled !== undefined && typeof body?.cliBridgeEnabled !== 'boolean') errors.push('cliBridgeEnabled must be a boolean');
   if (body?.envVault !== undefined) {
     if (!Array.isArray(body.envVault)) {
       errors.push('envVault must be an array');
@@ -1648,6 +1749,21 @@ async function handleApi(req, res, url) {
     });
   }
 
+  const isLocalApiReadAuthorized = () => {
+    if (API_TOKEN) {
+      if (!tokenValid) {
+        send(401, { ok: false, error: { code: 'unauthorized', message: 'unauthorized' } });
+        return false;
+      }
+      return true;
+    }
+    if (!isLoopbackHost(HOST) || !isLoopbackRemoteAddress(req.socket?.remoteAddress) || !trustedLocal) {
+      send(401, { ok: false, error: { code: 'unauthorized', message: 'unauthorized' } });
+      return false;
+    }
+    return true;
+  };
+
   if (url.pathname === '/api/usage' && req.method === 'GET') {
     return send(200, await readUsageLog());
   }
@@ -1788,9 +1904,12 @@ async function handleApi(req, res, url) {
     const existing = await readProviderSettingsRaw();
     const sanitized = sanitizeProviderSettings(body);
     const settings = {
-      runtimeMode: sanitized.runtimeMode,
-      opencodeBin: sanitized.opencodeBin,
-      cliBridgeEnabled: sanitized.cliBridgeEnabled,
+      runtimeMode: body?.runtimeMode === undefined ? existing.runtimeMode : sanitized.runtimeMode,
+      claudeBin: body?.claudeBin === undefined ? existing.claudeBin : sanitized.claudeBin,
+      opencodeBin: body?.opencodeBin === undefined ? existing.opencodeBin : sanitized.opencodeBin,
+      opencodeConfigPath: body?.opencodeConfigPath === undefined ? existing.opencodeConfigPath : sanitized.opencodeConfigPath,
+      opencodeConfigImportSourcePath: body?.opencodeConfigImportSourcePath === undefined ? existing.opencodeConfigImportSourcePath : sanitized.opencodeConfigImportSourcePath,
+      cliBridgeEnabled: body?.cliBridgeEnabled === undefined ? existing.cliBridgeEnabled : sanitized.cliBridgeEnabled,
       envVault: body.envVault === undefined
         ? { ...(existing.envVault || {}) }
         : resolveEnvVaultMap(body.envVault, existing.envVault || {}),
@@ -1798,6 +1917,7 @@ async function handleApi(req, res, url) {
     };
     await fsp.writeFile(PROVIDER_SETTINGS_FILE, JSON.stringify(settings, null, 2), { encoding: 'utf8', mode: 0o600 });
     try { await fsp.chmod(PROVIDER_SETTINGS_FILE, 0o600); } catch {}
+    await pluginManager.syncProjections();
     const responseSettings = toProviderSettingsResponse(settings);
     return send(200, {
       ok: true,
@@ -1810,6 +1930,55 @@ async function handleApi(req, res, url) {
   if (url.pathname === '/api/provider-settings/diagnostics' && req.method === 'GET') {
     const raw = await readProviderSettingsRaw();
     return send(200, { diagnostics: providerLocalDiagnostics(raw) });
+  }
+
+  if (url.pathname === '/api/provider-settings/opencode-config-import' && req.method === 'GET') {
+    if (!isLocalApiReadAuthorized()) return;
+    const raw = await readProviderSettingsRaw();
+    const status = inspectOpenCodeConfigImport({
+      workspaceRoot: ROOT,
+      providerSettings: raw,
+      testRootOverride: process.env.STEADYMADE_STORAGE_KERNEL_TEST_ROOT || null,
+    });
+    return send(200, {
+      ok: true,
+      status,
+      diagnostics: status.diagnostics,
+    });
+  }
+
+  if (url.pathname === '/api/provider-settings/opencode-config-import' && req.method === 'POST') {
+    if (!isLocalApiReadAuthorized()) return;
+    const body = await readBody(req, { maxBytes: 16 * 1024 });
+    const mode = String(body?.mode || 'initial').trim().toLowerCase();
+    if (mode !== 'initial' && mode !== 'refresh') {
+      return send(400, { ok: false, error: 'mode must be "initial" or "refresh"' });
+    }
+    const raw = await readProviderSettingsRaw();
+    const result = importOpenCodeConfigIntoManagedRuntime({
+      workspaceRoot: ROOT,
+      providerSettings: raw,
+      mode,
+      testRootOverride: process.env.STEADYMADE_STORAGE_KERNEL_TEST_ROOT || null,
+    });
+    if (!result.ok) {
+      return send(422, {
+        ok: false,
+        code: result.code,
+        message: result.message,
+        diagnostics: result.inspection?.diagnostics || [],
+      });
+    }
+    return send(200, {
+      ok: true,
+      mode: result.mode,
+      importedAt: result.importedAt,
+      targetPath: result.targetPath,
+      sourcePath: result.sourcePath,
+      sourceFile: result.sourceFile,
+      backupPath: result.backupPath,
+      redactedKeys: result.redactedKeys,
+    });
   }
 
   if (url.pathname === '/api/provider-settings/deep-test' && req.method === 'POST') {
@@ -2031,6 +2200,22 @@ async function handleApi(req, res, url) {
     return send(result.errors ? 400 : 200, result);
   }
 
+  // ad-hoc MCP connectivity test for an unsaved config (setup wizard)
+  if (url.pathname === '/api/plugins/test-config' && req.method === 'POST') {
+    const body = await readBody(req);
+    const config = body && typeof body.config === 'object' && body.config && !Array.isArray(body.config) ? body.config : null;
+    if (!config) return send(400, { errors: ['config object required'] });
+    const result = await testMcpPlugin({ config });
+    return send(result.errors ? 400 : 200, result);
+  }
+
+  // AI-assisted MCP config drafting from a description / pasted docs (setup wizard)
+  if (url.pathname === '/api/plugins/generate-mcp' && req.method === 'POST') {
+    const body = await readBody(req);
+    const result = await generateMcpConfigFromText(body?.description);
+    return send(result.errors ? 400 : 200, result);
+  }
+
   const pluginMatch = url.pathname.match(/^\/api\/plugins\/([a-z0-9-]+)$/);
   if (pluginMatch && req.method === 'PUT') {
     const result = await pluginManager.update(pluginMatch[1], await readBody(req));
@@ -2183,7 +2368,7 @@ server.listen(PORT, HOST, () => {
   console.log(`Knowledge backend: ${knowledgeStorage.kind} (${knowledgeStorage.root})`);
   console.log(`Runtime mode: ${knowledgeConfig.runtime}`);
   if (API_TOKEN) console.log('API auth: enabled for mutating /api/* calls via x-steadymade-token or Authorization: Bearer <token>');
-  const claudeBin = resolveClaudeBin();
+  const claudeBin = resolveClaudeBin({ rootDir: ROOT });
   console.log(claudeBin
     ? `Scheduler: claude CLI at ${claudeBin}`
     : 'Scheduler: WARNING — claude CLI not found, jobs will fail (set CLAUDE_BIN)');

@@ -7,6 +7,7 @@
 - `docs/ai-os-migration-status.md`
 - `docs/guide-how-to-start.md`
 - `docs/guide-m365-mcp-readonly-setup.md`
+- `docs/guide-m365-mcp-write-setup.md`
 - `docs/runbook-stage1-onboarding.md`
 - `docs/runbook-team-operations.md`
 - `docs/policy-knowledge-sync.md`

@@ -60,20 +60,6 @@ test('m365 graph readonly listTaskLists omits $select and returns useful fields 
   });
 });
 
-test('m365 graph readonly searchSites normalizes wildcard search to quoted value', async () => {
-  const searches = [];
-  const client = makeClient(async (url) => {
-    const parsed = new URL(url);
-    searches.push(parsed.searchParams.get('search'));
-    return okJson({ value: [] });
-  });
-
-  await client.searchSites();
-  await client.searchSites({ query: '*' });
-
-  assert.deepEqual(searches, ['"*"', '"*"']);
-});
-
 test('m365 graph readonly getDriveItem does not request pre-authorized download URL fields', async () => {
   let calledUrl;
   const client = makeClient(async (url) => {
@@ -87,4 +73,24 @@ test('m365 graph readonly getDriveItem does not request pre-authorized download 
   const select = calledUrl.searchParams.get('$select');
   assert.ok(select);
   assert.equal(select.includes('@microsoft.graph.downloadUrl'), false);
+});
+
+test('m365 graph readonly client only performs GET requests', async () => {
+  const methods = [];
+  const client = makeClient(async (url, init) => {
+    methods.push(String(init?.method || ''));
+    const pathname = new URL(url).pathname;
+    if (pathname.endsWith('/me')) return okJson({ id: 'me' });
+    return okJson({ value: [] });
+  });
+
+  await client.getMe();
+  await client.listMailMessages({ folder: 'inbox', top: 1 });
+  await client.listTaskLists();
+  await client.listDriveItems({ top: 1 });
+
+  assert.ok(methods.length >= 4);
+  for (const method of methods) {
+    assert.equal(method, 'GET');
+  }
 });

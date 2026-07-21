@@ -54,15 +54,24 @@
         <section id="cliPanel" class="cli-panel hidden" aria-live="polite">
           <div class="terminal-stage">
             <div id="termEmpty" class="term-empty">No terminal session yet. Click Start to launch the current provider target.</div>
-            <div id="terminalHost" class="terminal-host" aria-label="Embedded terminal"></div>
+            <div id="terminalHost" class="terminal-host" aria-label="Local PTY terminal"></div>
           </div>
         </section>
+
+        
+        <div id="queuePanel" class="queue-panel hidden">
+          <div class="queue-header">
+            <span>Queued (<span id="queueCount">0</span>)</span>
+            <button id="clearQueue" class="btn-clear">Clear Queue</button>
+          </div>
+          <div id="queueList" class="queue-list"></div>
+        </div>
 
         <footer class="composer-wrap">
           <div class="composer">
             <textarea id="input" rows="1" placeholder="Message Danny…"></textarea>
             <div class="composer-right">
-              <button id="addTask" type="button" title="Send selected/current text to Projects as task draft">Add task</button>
+              
               <select id="model" title="Model">
                 <option value="default">Default</option>
                 <option value="sonnet">Sonnet</option>

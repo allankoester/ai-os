@@ -5,9 +5,8 @@
 
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
-import { spawn, execSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createSchedulerStorage } from './storage/runtime/scheduler-storage.mjs';
 import {
@@ -15,6 +14,10 @@ import {
   ensureRuntimeSubdirectory,
   resolveRuntimeRoot,
 } from './storage/runtime/storage-kernel.mjs';
+import {
+  prepareOpenCodeEnvironment,
+  resolveManagedCliTargets,
+} from '../runtime/managed-runtime.mjs';
 
 const TICK_MS = 20_000;
 const MAX_RUNS_KEPT = 200;
@@ -36,29 +39,14 @@ const SCHEDULER_OPENCODE_CONFIG_CONTENT = process.env.SCHEDULER_OPENCODE_CONFIG_
     },
   });
 
-// Locate the Claude Code CLI. The binary is not always on PATH (e.g. when the
-// CLI ships inside the VS Code extension), so try in order:
-// 1. CLAUDE_BIN env var  2. PATH  3. local install  4. newest VS Code extension
-export function resolveClaudeBin() {
-  if (process.env.CLAUDE_BIN && fs.existsSync(process.env.CLAUDE_BIN)) return process.env.CLAUDE_BIN;
-  try {
-    const found = execSync('command -v claude', { encoding: 'utf8', shell: '/bin/sh' }).trim();
-    if (found) return found;
-  } catch { /* not on PATH */ }
-  const home = os.homedir();
-  const local = path.join(home, '.claude', 'local', 'claude');
-  if (fs.existsSync(local)) return local;
-  const extDir = path.join(home, '.vscode', 'extensions');
-  try {
-    const candidates = fs.readdirSync(extDir)
-      .filter((d) => d.startsWith('anthropic.claude-code-'))
-      .sort()
-      .reverse()
-      .map((d) => path.join(extDir, d, 'resources', 'native-binary', 'claude'))
-      .filter((p) => fs.existsSync(p));
-    if (candidates.length) return candidates[0];
-  } catch { /* no vscode extensions dir */ }
-  return null;
+export function resolveClaudeBin({ rootDir = process.cwd(), providerSettings = null } = {}) {
+  const target = resolveManagedCliTargets({
+    workspaceRoot: rootDir,
+    providerSettings: providerSettings || {},
+    env: process.env,
+    testRootOverride: process.env.STEADYMADE_STORAGE_KERNEL_TEST_ROOT || null,
+  }).claude;
+  return target.resolvedPath || null;
 }
 
 // ---------- cron (standard 5 fields: min hour dom mon dow) ----------
@@ -388,19 +376,31 @@ export function createScheduler({ rootDir, onRunEvent = null, resolveRuntimeCont
       ? runtimeSettings.envVault
       : {};
     const secretValues = [];
-    const env = { ...process.env };
+    let env = { ...process.env };
     for (const [key, value] of Object.entries(envVault)) {
       const asString = String(value ?? '');
       env[key] = asString;
       if (asString) secretValues.push(asString);
     }
-    if (!env.OPENCODE_CONFIG && !env.OPENCODE_CONFIG_CONTENT) {
-      env.OPENCODE_CONFIG_CONTENT = String(SCHEDULER_OPENCODE_CONFIG_CONTENT);
+    const targets = resolveManagedCliTargets({
+      workspaceRoot: rootDir,
+      providerSettings: runtimeSettings || {},
+      env,
+      testRootOverride: testRuntimeRoot,
+    });
+    if (runtimeMode === 'opencode') {
+      env = prepareOpenCodeEnvironment({
+        env,
+        workspaceRoot: rootDir,
+        providerSettings: runtimeSettings || {},
+        testRootOverride: testRuntimeRoot,
+        configContent: String(SCHEDULER_OPENCODE_CONFIG_CONTENT),
+      });
     }
     return {
       runtimeMode,
       env,
-      opencodeBin: String(runtimeSettings?.opencodeBin || '').trim() || 'opencode',
+      targets,
       secretValues,
     };
   }
@@ -413,10 +413,22 @@ export function createScheduler({ rootDir, onRunEvent = null, resolveRuntimeCont
     const runtimeMode = runtime.runtimeMode === 'opencode' ? 'opencode' : runtime.runtimeMode;
     const usesClaudeDriver = runtimeMode === 'claude-subscription' || runtimeMode === 'anthropic-api';
     const usesOpenCodeDriver = runtimeMode === 'opencode';
-    const claudeBin = usesClaudeDriver ? resolveClaudeBin() : null;
-    const execBin = usesOpenCodeDriver ? runtime.opencodeBin : claudeBin;
+    const claudeBin = usesClaudeDriver ? runtime.targets?.claude?.resolvedPath : null;
+    const opencodeBin = usesOpenCodeDriver ? runtime.targets?.opencode?.resolvedPath : null;
+    const execBin = usesOpenCodeDriver ? opencodeBin : claudeBin;
     if (usesClaudeDriver && !claudeBin) {
-      return { error: 'Claude Code CLI not found — install it or set CLAUDE_BIN to the binary path' };
+      return {
+        error: runtime.targets?.claude?.reason
+          ? `Claude Code setup required: ${runtime.targets.claude.reason}`
+          : 'Claude Code setup required',
+      };
+    }
+    if (usesOpenCodeDriver && !opencodeBin) {
+      return {
+        error: runtime.targets?.opencode?.reason
+          ? `OpenCode setup required: ${runtime.targets.opencode.reason}`
+          : 'OpenCode setup required',
+      };
     }
     if (!execBin) {
       return { error: `runtime mode ${runtimeMode} is not supported by scheduler` };

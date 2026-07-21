@@ -60,6 +60,42 @@ Embedded chat runtime used by the interface Chat view.
 - Tool allowlist is intentionally narrow by default (`Task,Read,Glob,Grep,Skill,WebFetch`).
 - Broad write/edit/bash permissions are not granted silently.
 
+## Interactive permissions
+
+A `PreToolUse` hook (`chat/permission-hook.mjs`) gates every tool call so the
+user stays in control of anything beyond safe reads:
+
+- Safe, read-only tools (`CHAT_PERMISSION_SAFE_TOOLS`, defaults to the allowlist
+  plus `WebSearch,TodoWrite,NotebookRead,BashOutput`) are auto-approved locally
+  with no round trip.
+- Anything else pauses the run and asks the user in the chat UI (**Allow once /
+  Allow for this run / Deny**). The hook blocks on `POST /api/chat/permission-request`
+  (localhost, per-run token) until the user decides via `POST /api/chat/permission-decision`;
+  the tool card shows an `awaiting_permission` state meanwhile.
+- Writes to `memory/MEMORY.md` are always denied, even with approval
+  (memory-poisoning defense), independent of `--disallowedTools`.
+- On timeout (`CHAT_PERMISSION_TIMEOUT_MS`, default 5 min), run stop, or run end,
+  pending requests are auto-denied — a headless run never silently performs a
+  gated action.
+- The hook is injected via `--settings` (merged with the project's settings, so
+  `SessionStart` etc. still run) and is enabled by default; set
+  `CHAT_INTERACTIVE_PERMISSIONS=0` to fall back to the previous behavior
+  (non-allowlisted tools simply fail).
+
+Because this widens what the runtime can do (with per-action user approval), it
+is a security-relevant surface — have Simon review permission/hook changes
+before committing (see the root `CLAUDE.md`).
+
+## Activity trace (UI)
+
+The chat renders each turn's tool calls as one collapsible **trace**: the head
+always shows the current step (refreshing as work proceeds) or a summary when
+done; expanding reveals the full step timeline with per-step input/result,
+sub-agent tool calls nested under their `Task`, live status (running / done /
+error / awaiting permission), and inline permission prompts. Server tool events
+carry `detail` (short label), `input`/`result` previews, `status`, `parent_id`
+(sub-agent nesting) and `permission_id`.
+
 ## Usage logging
 
 Each turn appends JSONL usage metadata to:

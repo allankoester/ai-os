@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_NAME="${M365_APP_NAME:-Steadymade AI OS MCP (Local Read-only)}"
+APP_PROFILE="${M365_APP_PROFILE:-readonly}"
+if [[ "${APP_PROFILE}" != "readonly" && "${APP_PROFILE}" != "write" ]]; then
+  echo "M365_APP_PROFILE must be 'readonly' or 'write'" >&2
+  exit 1
+fi
+
+DEFAULT_APP_NAME="Steadymade AI OS MCP (${APP_PROFILE})"
+APP_NAME="${M365_APP_NAME:-${DEFAULT_APP_NAME}}"
 TENANT_ID="${M365_TENANT_ID:-}"
-INCLUDE_SITES_SCOPE="${M365_INCLUDE_SITES_READ_ALL:-1}"
 
 if ! command -v az >/dev/null 2>&1; then
   echo "Azure CLI (az) is required." >&2
@@ -23,9 +29,10 @@ fi
 
 GRAPH_APP_ID="00000003-0000-0000-c000-000000000000"
 
-SCOPE_NAMES=(openid profile offline_access User.Read Mail.Read Tasks.Read Files.Read)
-if [[ "${INCLUDE_SITES_SCOPE}" == "1" ]]; then
-  SCOPE_NAMES+=(Sites.Read.All)
+if [[ "${APP_PROFILE}" == "readonly" ]]; then
+  SCOPE_NAMES=(openid profile offline_access User.Read Mail.Read Tasks.Read Files.Read)
+else
+  SCOPE_NAMES=(openid profile offline_access Calendars.Read Sites.Selected)
 fi
 
 echo "Resolving Microsoft Graph delegated scope IDs..."
@@ -64,14 +71,24 @@ fi
 
 echo
 echo "App registration ready."
+echo "  profile:   ${APP_PROFILE}"
 echo "  tenant id: ${TENANT_ID}"
 echo "  app id:    ${APP_ID}"
 echo
 echo "Next steps (manual):"
 echo "  1) Admin consent (if required by tenant):"
 echo "     https://login.microsoftonline.com/${TENANT_ID}/adminconsent?client_id=${APP_ID}"
-echo "  2) Configure local MCP env vars (non-secret):"
-echo "     M365_TENANT_ID=${TENANT_ID}"
-echo "     M365_CLIENT_ID=${APP_ID}"
-echo "     M365_SCOPES=openid profile offline_access User.Read Mail.Read Tasks.Read Files.Read$( [[ "${INCLUDE_SITES_SCOPE}" == "1" ]] && printf ' Sites.Read.All' )"
-echo "  3) Start MCP and run tool m365_auth_login (native browser PKCE flow)."
+if [[ "${APP_PROFILE}" == "readonly" ]]; then
+  echo "  2) Configure MCP env vars for m365-readonly (non-secret):"
+  echo "     M365_TENANT_ID=${TENANT_ID}"
+  echo "     M365_CLIENT_ID=${APP_ID}"
+  echo "     M365_SCOPES=openid profile offline_access User.Read Mail.Read Tasks.Read Files.Read"
+  echo "  3) Restart runtime and run m365_auth_login on m365-readonly."
+else
+  echo "  2) Configure MCP env vars for m365-write (non-secret):"
+  echo "     M365_WRITE_TENANT_ID=${TENANT_ID}"
+  echo "     M365_WRITE_CLIENT_ID=${APP_ID}"
+  echo "     M365_WRITE_SCOPES=openid profile offline_access Calendars.Read Sites.Selected"
+  echo "  3) Restart runtime and run m365_write_auth_login on m365-write."
+fi
+echo "  4) If scopes changed for an existing app/session, run auth disconnect and login again to force fresh consent."

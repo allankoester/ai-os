@@ -35,13 +35,37 @@
     }
   },
   "mcp": {
+    "context7": {
+      "type": "local",
+      "enabled": true,
+      "command": [
+        "npx",
+        "-y",
+        "@upstash/context7-mcp"
+      ]
+    },
+    "m365-readonly": {
+      "type": "local",
+      "enabled": true,
+      "command": [
+        "node",
+        "mcp/m365/server.mjs"
+      ]
+    },
+    "m365-write": {
+      "type": "local",
+      "enabled": true,
+      "command": [
+        "node",
+        "mcp/m365-write/server.mjs"
+      ]
+    },
     "twenty": {
       "type": "remote",
       "url": "https://crm.smapas.com/mcp",
       "enabled": true,
-      "oauth": false,
       "headers": {
-        "Authorization": "Bearer {env:TWENTY_API_KEY}"
+        "Authorization": "Bearer ${TWENTY_API_KEY}"
       }
     }
   },

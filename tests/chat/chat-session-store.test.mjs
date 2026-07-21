@@ -378,6 +378,79 @@ test('reconciles append/index gap after interrupted metadata transaction', async
   }
 });
 
+test('persists enriched tool/error transcript metadata while keeping history compatibility', async () => {
+  const env = await setupRoots('tool-error-metadata');
+  const store = createChatSessionStore({
+    workspaceRoot: env.workspaceRoot,
+    chatDir: env.chatDir,
+    historyDir: env.historyDir,
+    testRuntimeRoot: env.runtimeRoot,
+  });
+
+  try {
+    store.createSessionFromFirstTurn({
+      conversationId: 'conv_meta',
+      message: 'metadata test',
+      selectedAgent: 'danny',
+      sessionId: 'ses_meta_1',
+      userEntry: { t: 'user', ts: '2026-07-21T10:00:00.000Z', text: 'metadata test', agent: 'danny' },
+    });
+
+    store.persistRunCompletion({
+      conversationId: 'conv_meta',
+      selectedAgent: 'danny',
+      sessionId: 'ses_meta_2',
+      toolEntries: [
+        {
+          t: 'tool',
+          ts: '2026-07-21T10:00:01.000Z',
+          id: 'tool_1',
+          name: 'Read',
+          detail: 'demo.txt',
+          status: 'running',
+          started_at: '2026-07-21T10:00:01.000Z',
+        },
+        {
+          t: 'tool',
+          ts: '2026-07-21T10:00:02.000Z',
+          id: 'tool_1',
+          name: 'Read',
+          detail: 'demo.txt',
+          status: 'permission_required',
+          started_at: '2026-07-21T10:00:01.000Z',
+          completed_at: '2026-07-21T10:00:02.000Z',
+          duration_ms: 1000,
+          error: { category: 'permission_required', code: 'permission_required', message: 'approval required', permission_required: true },
+        },
+        {
+          t: 'error',
+          ts: '2026-07-21T10:00:02.500Z',
+          text: 'approval required',
+          error: { category: 'permission_required', code: 'permission_required', message: 'approval required', permission_required: true },
+        },
+      ],
+      assistantEntry: {
+        t: 'assistant',
+        ts: '2026-07-21T10:00:03.000Z',
+        text: 'Please approve tool usage.',
+        meta: { session_id: 'ses_meta_2', is_error: true },
+      },
+    });
+
+    const history = store.readHistory('conv_meta');
+    assert.equal(history.length, 5);
+    assert.equal(history[0].t, 'user');
+    assert.equal(history[1].t, 'tool');
+    assert.equal(history[2].status, 'permission_required');
+    assert.equal(history[2].error?.category, 'permission_required');
+    assert.equal(history[3].t, 'error');
+    assert.equal(history[4].t, 'assistant');
+  } finally {
+    store.close();
+    await fs.rm(env.root, { recursive: true, force: true });
+  }
+});
+
 function nowIsoForTest() {
   return new Date().toISOString();
 }
