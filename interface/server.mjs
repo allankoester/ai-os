@@ -2474,6 +2474,142 @@ function interfaceSecurityHeaders() {
   };
 }
 
+function requestPathname(req) {
+  try {
+    return new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`).pathname || '/';
+  } catch {
+    return '/';
+  }
+}
+
+function isChatBootstrapRequest(req) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return false;
+  const pathname = requestPathname(req);
+  return pathname === '/' || pathname === '/index.html';
+}
+
+function looksLikeInterfaceShellHtml(html) {
+  const text = String(html || '');
+  if (!text) return false;
+  if (/Steadymade AI OS\s+—\s+Operating Interface/i.test(text)) return true;
+  return text.includes('class="topstrip"') && text.includes('id="app"') && text.includes('data-view="chat"');
+}
+
+function sendChatHostRecursionDiagnostic(res) {
+  const html = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Chat host routing error</title></head>
+<body style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:20px;line-height:1.45">
+  <h1 style="margin:0 0 8px">Chat host routing error (recursion guard)</h1>
+  <p style="margin:0 0 10px">The <code>chat.localhost</code> request resolved to the interface shell instead of the chat shell. Rendering this inside the interface iframe would recurse.</p>
+  <p style="margin:0">Restart with <code>node scripts/start.mjs</code> and verify host routing for <code>chat.localhost:${NUMERIC_PORT}</code>.</p>
+</body></html>`;
+  res.writeHead(508, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'X-Steadymade-Chat-Guard': 'recursion-detected',
+    ...interfaceSecurityHeaders(),
+  });
+  res.end(html);
+}
+
+function guardChatBootstrapResponse(req, res, delegate) {
+  const originalWriteHead = res.writeHead.bind(res);
+  const originalWrite = res.write.bind(res);
+  const originalEnd = res.end.bind(res);
+  const originalSetHeader = res.setHeader.bind(res);
+  const originalGetHeader = res.getHeader.bind(res);
+  const originalRemoveHeader = res.removeHeader.bind(res);
+
+  let statusCode = 200;
+  const headers = new Map();
+  const chunks = [];
+  let totalBytes = 0;
+  let completed = false;
+  const maxCaptureBytes = 1024 * 1024;
+
+  const normalizeHeaderEntries = (obj) => {
+    if (!obj || typeof obj !== 'object') return;
+    for (const [key, value] of Object.entries(obj)) headers.set(String(key).toLowerCase(), value);
+  };
+
+  const restore = () => {
+    res.writeHead = originalWriteHead;
+    res.write = originalWrite;
+    res.end = originalEnd;
+    res.setHeader = originalSetHeader;
+    res.getHeader = originalGetHeader;
+    res.removeHeader = originalRemoveHeader;
+  };
+
+  const flushCaptured = () => {
+    const finalHeaders = {};
+    for (const [key, value] of headers.entries()) finalHeaders[key] = value;
+    originalWriteHead(statusCode, finalHeaders);
+    if (req.method === 'HEAD') {
+      originalEnd();
+      return;
+    }
+    originalEnd(Buffer.concat(chunks));
+  };
+
+  const finalize = () => {
+    if (completed) return;
+    completed = true;
+    restore();
+    const contentType = String(headers.get('content-type') || '').toLowerCase();
+    const isHtml = contentType.includes('text/html');
+    const bodyText = Buffer.concat(chunks).toString('utf8');
+    if (statusCode === 200 && isHtml && looksLikeInterfaceShellHtml(bodyText)) {
+      sendChatHostRecursionDiagnostic(res);
+      return;
+    }
+    flushCaptured();
+  };
+
+  res.setHeader = (name, value) => {
+    headers.set(String(name).toLowerCase(), value);
+    return res;
+  };
+  res.getHeader = (name) => headers.get(String(name).toLowerCase());
+  res.removeHeader = (name) => {
+    headers.delete(String(name).toLowerCase());
+  };
+  res.writeHead = (code, reasonOrHeaders, maybeHeaders) => {
+    if (Number.isFinite(Number(code))) statusCode = Number(code);
+    if (reasonOrHeaders && typeof reasonOrHeaders === 'object' && !Array.isArray(reasonOrHeaders)) {
+      normalizeHeaderEntries(reasonOrHeaders);
+    } else if (maybeHeaders && typeof maybeHeaders === 'object' && !Array.isArray(maybeHeaders)) {
+      normalizeHeaderEntries(maybeHeaders);
+    }
+    return res;
+  };
+  res.write = (chunk, encoding, callback) => {
+    const cb = typeof encoding === 'function' ? encoding : callback;
+    if (chunk != null) {
+      const buffer = Buffer.isBuffer(chunk)
+        ? chunk
+        : Buffer.from(String(chunk), typeof encoding === 'string' ? encoding : undefined);
+      totalBytes += buffer.length;
+      if (totalBytes <= maxCaptureBytes) chunks.push(buffer);
+    }
+    if (typeof cb === 'function') cb();
+    return true;
+  };
+  res.end = (chunk, encoding, callback) => {
+    if (chunk != null) res.write(chunk, encoding);
+    finalize();
+    if (typeof callback === 'function') callback();
+    return res;
+  };
+
+  try {
+    delegate();
+  } catch (err) {
+    restore();
+    throw err;
+  }
+}
+
 // ---------- server ----------
 
 const server = http.createServer(async (req, res) => {
@@ -2484,6 +2620,9 @@ const server = http.createServer(async (req, res) => {
       return res.end(JSON.stringify({ error: 'unknown host' }));
     }
     if (hostClass.kind === 'chat') {
+      if (isChatBootstrapRequest(req)) {
+        return guardChatBootstrapResponse(req, res, () => chatRuntime.requestHandler(req, res));
+      }
       return chatRuntime.requestHandler(req, res);
     }
 

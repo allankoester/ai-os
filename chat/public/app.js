@@ -56,6 +56,7 @@ const state = {
   seqByConversation: {},
   live: null,
   uiMode: 'chat',
+  embeddedMode: false,
 };
 
 const queuePanel = document.getElementById('queuePanel');
@@ -118,9 +119,27 @@ const cliState = {
   resizeObserver: null,
 };
 
+function parseEmbeddedSignalFromUrl() {
+  const params = new URLSearchParams(location.search || '');
+  const raw = String(params.get('embedded') || params.get('embed') || '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
+function setEmbeddedMode(enabled) {
+  const next = Boolean(enabled);
+  state.embeddedMode = next;
+  document.body.classList.toggle('embedded-mode', next);
+  layoutEl.classList.toggle('embedded-mode', next);
+  if (next) {
+    cliState.modeLocked = true;
+    if (state.uiMode !== 'chat') setUiMode('chat');
+  }
+}
+
 if (window.parent !== window) {
   cliState.modeLocked = true;
 }
+setEmbeddedMode(parseEmbeddedSignalFromUrl());
 
 function trustedParentOrigin() {
   try {
@@ -857,7 +876,7 @@ function setUiMode(mode) {
   localStorage.setItem(UI_MODE_KEY, next);
   viewChatBtn.classList.toggle('active', next === 'chat');
   viewCliBtn.classList.toggle('active', next === 'cli');
-  layoutEl.classList.toggle('cli-mode', next === 'cli');
+  layoutEl.classList.toggle('cli-mode', next === 'cli' && !state.embeddedMode);
   const modeSwitch = viewChatBtn?.closest('.view-switch');
   if (modeSwitch) modeSwitch.classList.toggle('hidden', cliState.modeLocked);
   chatHeaderEl.classList.toggle('hidden', next !== 'chat');
@@ -1590,6 +1609,7 @@ window.addEventListener('message', (e) => {
     || data.type === 'steadymade-mode'
     || data.type === 'steadymade-provider'
   ) {
+    if (data.embedded === true) setEmbeddedMode(true);
     const mode = String(data.chatMode || data.mode || '').toLowerCase();
     if (mode === 'cli' || mode === 'chat') {
       setUiMode(mode);

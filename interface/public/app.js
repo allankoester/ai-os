@@ -114,7 +114,8 @@ const deptById = (id) => DEPARTMENTS.find((d) => d.id === id);
 const agentAccess = (a, folder) => a.access.some((acc) => folder === acc || folder.startsWith(acc + '/'));
 
 const CHAT_PORT = location.port || (location.protocol === 'https:' ? '443' : '80');
-const CHAT_URL = `${location.protocol}//chat.localhost:${CHAT_PORT}`;
+const CHAT_ORIGIN = `${location.protocol}//chat.localhost:${CHAT_PORT}`;
+const CHAT_EMBED_URL = `${CHAT_ORIGIN}/?embedded=1&embed_source=interface`;
 const CHAT_AGENT_MAP = {
   danny: 'danny',
   atlas: 'atlas',
@@ -6695,7 +6696,7 @@ function chatSlug(agentId) {
 }
 
 window.addEventListener('message', (e) => {
-  if (e.origin !== CHAT_URL) return;
+  if (e.origin !== CHAT_ORIGIN) return;
   if (e.source !== chatFrameState.frame?.contentWindow) return;
   const data = e.data || {};
   if (data.type === 'steadymade-chat-ready') {
@@ -6716,13 +6717,14 @@ function chatRuntimeConfigPayload() {
     providerMode,
     provider,
     cliBridgeEnabled: Boolean(uiState.providerSettings?.cliBridgeEnabled),
+    embedded: true,
   };
 }
 
 function postToChat(msg, kind = 'runtime') {
   if (!msg) return;
   if (chatFrameState.ready && chatFrameState.frame?.contentWindow) {
-    chatFrameState.frame.contentWindow.postMessage(msg, CHAT_URL);
+    chatFrameState.frame.contentWindow.postMessage(msg, CHAT_ORIGIN);
     return;
   }
   if (kind === 'preset') chatFrameState.pendingPreset = msg;
@@ -6732,11 +6734,11 @@ function postToChat(msg, kind = 'runtime') {
 function flushPendingChatMessages() {
   if (!chatFrameState.ready || !chatFrameState.frame?.contentWindow) return;
   if (chatFrameState.pendingRuntimeConfig) {
-    chatFrameState.frame.contentWindow.postMessage(chatFrameState.pendingRuntimeConfig, CHAT_URL);
+    chatFrameState.frame.contentWindow.postMessage(chatFrameState.pendingRuntimeConfig, CHAT_ORIGIN);
     chatFrameState.pendingRuntimeConfig = null;
   }
   if (chatFrameState.pendingPreset) {
-    chatFrameState.frame.contentWindow.postMessage(chatFrameState.pendingPreset, CHAT_URL);
+    chatFrameState.frame.contentWindow.postMessage(chatFrameState.pendingPreset, CHAT_ORIGIN);
     chatFrameState.pendingPreset = null;
   }
 }
@@ -6751,15 +6753,31 @@ function renderChat() {
 
   if (!chatFrameState.frame) {
     markChatReady(false);
+    const handshakeDeadlineMs = 4500;
     holder.innerHTML = `<div class="chat-offline-note">
-      <strong>Chat runtime:</strong> embedded from <code>${esc(CHAT_URL)}</code>.
-      Waiting for chat runtime handshake from <code>chat.localhost</code>. If this persists, restart with <code>node scripts/start.mjs</code>.
+      <strong>Chat runtime:</strong> embedded from <code>${esc(CHAT_EMBED_URL)}</code>.
+      Waiting for chat runtime handshake from <code>${esc(CHAT_ORIGIN)}</code>.<br>
+      If this persists, confirm host routing for <code>chat.localhost</code> and restart with <code>node scripts/start.mjs</code>.
     </div>`;
     const frame = document.createElement('iframe');
     frame.className = 'chat-frame';
-    frame.src = CHAT_URL;
+    frame.src = CHAT_EMBED_URL;
     frame.title = 'Steadymade Danny Chat';
     frame.allow = 'clipboard-write';
+    frame.addEventListener('error', () => {
+      const note = holder.querySelector('.chat-offline-note');
+      if (!note || chatFrameState.ready) return;
+      note.innerHTML = `<strong>Chat runtime failed to load.</strong><br>
+        Tried <code>${esc(CHAT_EMBED_URL)}</code>.<br>
+        Check local host mapping (<code>chat.localhost</code>) and interface routing guard output, then restart <code>node scripts/start.mjs</code>.`;
+    });
+    setTimeout(() => {
+      const note = holder.querySelector('.chat-offline-note');
+      if (!note || chatFrameState.ready || chatFrameState.frame !== frame) return;
+      note.innerHTML = `<strong>Chat handshake timeout.</strong><br>
+        No <code>steadymade-chat-ready</code> message from <code>${esc(CHAT_ORIGIN)}</code> after ${Math.round(handshakeDeadlineMs / 1000)}s.<br>
+        This often means chat-host routing is stale/misconfigured or returned a non-chat shell.`;
+    }, handshakeDeadlineMs);
     holder.appendChild(frame);
     chatFrameState.frame = frame;
   }

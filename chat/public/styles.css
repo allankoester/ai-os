@@ -21,6 +21,18 @@
 html, body { height: 100%; }
 body { display: flex; flex-direction: column; font-family: var(--fb); background: var(--surface); color: var(--text); }
 
+body.embedded-mode .topbar {
+  display: none;
+}
+
+body.embedded-mode .chat {
+  padding-top: 16px;
+}
+
+body.embedded-mode .composer-wrap {
+  padding-top: 10px;
+}
+
 .topbar {
   display: flex;
   justify-content: space-between;
@@ -768,4 +780,3 @@ select#model:focus { background-color: var(--panel); color: var(--text); outline
 .queue-item-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 80%; }
 .queue-item-meta { font-size: 10px; color: var(--muted); font-family: var(--fm); }
 .queue-item-remove { background: none; border: none; color: var(--warn); cursor: pointer; font-size: 14px; padding: 0 5px; }
-
