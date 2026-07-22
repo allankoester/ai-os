@@ -5,6 +5,7 @@ export const PROJECT_VISIBILITIES = new Set(['private', 'team']);
 export const ACTIVITY_STATUSES = new Set(['active', 'paused', 'archived']);
 export const ACTIVITY_VISIBILITIES = new Set(['private', 'team']);
 export const TASK_STATUSES = new Set(['backlog', 'todo', 'in_progress', 'needs_review', 'blocked', 'done']);
+export const TASK_DESK_SCOPES = new Set(['my_desk']);
 export const PRIORITIES = new Set(['low', 'medium', 'high']);
 export const WORK_TYPES = new Set(['feature', 'bug', 'tech_debt', 'spike']);
 export const ASSIGNEE_TYPES = new Set(['human', 'agent', 'unassigned']);
@@ -23,6 +24,8 @@ export const PATCH_OPS = new Set([
   'set_project_id',
   'set_activity_id',
   'set_assignee',
+  'assign_to_me',
+  'set_task_list_id',
   'set_workflow_id',
   'set_subtasks',
   'set_due_at',

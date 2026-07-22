@@ -4,7 +4,8 @@ Embedded chat runtime used by the interface Chat view.
 
 - Server: `chat/server.mjs`
 - UI: `chat/public/*`
-- Default URL: `http://localhost:4012` (configurable via `CHAT_PORT`)
+- Default embedded URL: `http://chat.localhost:4011` (single runtime listener from `interface/server.mjs`)
+- Standalone compatibility still works via `node chat/server.mjs` (`CHAT_PORT` override)
 
 ## Behavior
 
@@ -51,8 +52,8 @@ Embedded chat runtime used by the interface Chat view.
   usage log keeps cost numbers only (no session id) and the Claude Code
   CLI's own transcript of the turn is deleted after the run as a best-effort
   cleanup (not an absolute guarantee).
-- The server binds `127.0.0.1` only — it must never be exposed to the LAN
-  (it drives Claude with project permissions and has no auth).
+- In unified mode, host routing is strict: only `chat.localhost:<port>` serves chat
+  endpoints; unknown hosts are rejected by the interface runtime.
 
 ## Safety defaults
 
@@ -110,4 +111,5 @@ Fields include timestamp, session_id, selected agent/mode, model, duration, cost
 node chat/server.mjs
 ```
 
-`scripts/start.mjs` will also start this runtime automatically when present and when the chat port is free.
+Normal startup launches `interface/server.mjs` only; chat is composed into that
+single listener through host routing.

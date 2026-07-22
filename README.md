@@ -34,6 +34,12 @@ The interface runs locally at:
 http://localhost:4011
 ```
 
+Chat is embedded cross-origin at the same runtime port via host routing:
+
+```txt
+http://chat.localhost:4011
+```
+
 ### macOS — double-click
 
 Open `scripts/` in Finder and double-click:

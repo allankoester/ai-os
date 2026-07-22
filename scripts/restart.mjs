@@ -13,8 +13,8 @@ function sleep(ms) {
 
 async function main() {
   // Give /api/restart enough time to send its HTTP response and for the current
-  // interface process/supervisor to exit. Then clear both interface and chat
-  // ports before relaunching through scripts/start.mjs, which owns both runtimes.
+  // interface process/supervisor to exit. Then clear the single runtime port and
+  // relaunch through scripts/start.mjs.
   await sleep(delayMs);
 
   spawnSync(process.execPath, ['scripts/stop.mjs'], {

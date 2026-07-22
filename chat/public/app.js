@@ -32,9 +32,10 @@ const CONV_KEY = 'steadymade_chat_conversation';
 const SIDEBAR_WIDTH_KEY = 'steadymade_chat_sidebar_width';
 const UI_MODE_KEY = 'steadymade_chat_ui_mode';
 const TERMINAL_TARGETS = new Set(['claude', 'opencode']);
+const PARENT_PORT = location.port || (location.protocol === 'https:' ? '443' : '80');
 const TRUSTED_PARENT_ORIGINS = new Set([
-  `${location.protocol}//localhost:4011`,
-  `${location.protocol}//127.0.0.1:4011`,
+  `${location.protocol}//localhost:${PARENT_PORT}`,
+  `${location.protocol}//127.0.0.1:${PARENT_PORT}`,
 ]);
 
 const MOBILE_MEDIA = window.matchMedia('(max-width: 720px)');
@@ -126,9 +127,9 @@ function trustedParentOrigin() {
     const ref = document.referrer ? new URL(document.referrer).origin : '';
     if (TRUSTED_PARENT_ORIGINS.has(ref)) return ref;
   } catch {}
-  const sameHost = `${location.protocol}//${location.hostname}:4011`;
+  const sameHost = `${location.protocol}//${location.hostname}:${PARENT_PORT}`;
   if (TRUSTED_PARENT_ORIGINS.has(sameHost)) return sameHost;
-  return `${location.protocol}//localhost:4011`;
+  return `${location.protocol}//localhost:${PARENT_PORT}`;
 }
 
 function isTrustedParentMessage(event) {

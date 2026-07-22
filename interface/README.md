@@ -11,6 +11,11 @@ node interface/server.mjs
 # → http://localhost:4011
 ```
 
+Unified runtime topology (single listener on port `4011`):
+
+- `http://localhost:4011` (and `http://127.0.0.1:4011`) → interface APIs/static
+- `http://chat.localhost:4011` → embedded chat APIs/static/SSE/terminal WS
+
 The server binds to `127.0.0.1` by default (local machine only).
 
 No dependencies, no build step. Requires Node 22+.

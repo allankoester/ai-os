@@ -100,9 +100,10 @@ failures.
 - onboarding user type is configured
 - git is required only for collaborator user type
 - selected provider local readiness (binary/config only)
-- interface/chat ports are checked (`4011`, `4012`)
+- runtime port is checked (`4011`)
 
-If port `4011` is already in use, stop the running instance first.
+If port `4011` is already in use, stop the running instance first. Chat is
+served via `http://chat.localhost:4011` on the same listener.
 
 Deep provider execution tests are on-demand in **Settings -> AI Provider** and
 are separate from startup preflight.

@@ -106,6 +106,7 @@ const BOARD_MIGRATIONS = [
         assignee_type TEXT NOT NULL,
         assignee_id TEXT,
         human_assignee_label TEXT,
+        task_list_id TEXT,
         workflow_id TEXT,
         subtasks_json TEXT NOT NULL,
         component_tags_json TEXT NOT NULL DEFAULT '[]',
@@ -134,6 +135,23 @@ const BOARD_MIGRATIONS = [
       CREATE INDEX IF NOT EXISTS idx_board_tasks_scope_activity ON board_tasks(scope, activity_id, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_board_tasks_scope_status ON board_tasks(scope, status, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_board_tasks_scope_assignee ON board_tasks(scope, assignee_id, updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS board_task_lists (
+        scope TEXT NOT NULL,
+        id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        owner_id TEXT NOT NULL,
+        ordering INTEGER NOT NULL DEFAULT 0,
+        version INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        created_by TEXT,
+        updated_at TEXT NOT NULL,
+        updated_by TEXT,
+        PRIMARY KEY (scope, id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_board_task_lists_scope_owner ON board_task_lists(scope, owner_id, ordering ASC, updated_at DESC);
 
       CREATE TABLE IF NOT EXISTS board_task_relevant_links (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -375,6 +393,33 @@ const BOARD_MIGRATIONS = [
       ensureBoardTasksActivityIndex(db);
     },
   },
+  {
+    version: 4105,
+    name: 'board_task_lists_private_v1',
+    apply(db) {
+      ensureTableColumns(db, 'board_tasks', {
+        task_list_id: 'TEXT',
+      });
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS board_task_lists (
+          scope TEXT NOT NULL,
+          id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          description TEXT,
+          owner_id TEXT NOT NULL,
+          ordering INTEGER NOT NULL DEFAULT 0,
+          version INTEGER NOT NULL,
+          created_at TEXT NOT NULL,
+          created_by TEXT,
+          updated_at TEXT NOT NULL,
+          updated_by TEXT,
+          PRIMARY KEY (scope, id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_board_task_lists_scope_owner ON board_task_lists(scope, owner_id, ordering ASC, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_board_tasks_scope_task_list ON board_tasks(scope, task_list_id, updated_at DESC);
+      `);
+    },
+  },
 ];
 
 function nowIso() {
@@ -562,6 +607,7 @@ function ensureBoardTasksNullableProjectAndActivity(db) {
       assignee_type TEXT NOT NULL,
       assignee_id TEXT,
       human_assignee_label TEXT,
+      task_list_id TEXT,
       workflow_id TEXT,
       subtasks_json TEXT NOT NULL,
       component_tags_json TEXT NOT NULL DEFAULT '[]',
@@ -589,10 +635,11 @@ function ensureBoardTasksNullableProjectAndActivity(db) {
   const selectCols = cols.map((col) => String(col.name));
   const hasCol = (name) => selectCols.includes(name);
   const activityExpr = hasCol('activity_id') ? 'activity_id' : 'NULL AS activity_id';
+  const taskListExpr = hasCol('task_list_id') ? 'task_list_id' : 'NULL AS task_list_id';
   db.exec(`
     INSERT INTO board_tasks_v2 (
       scope, id, schema_version, project_id, activity_id, title, description, status, priority,
-      work_type, assignee_type, assignee_id, human_assignee_label, workflow_id, subtasks_json,
+      work_type, assignee_type, assignee_id, human_assignee_label, task_list_id, workflow_id, subtasks_json,
       component_tags_json, sprint, story_points, completion_percent, dependencies_json, external_links_json, custom_fields_json, due_at,
       review_json, blocked_json, visibility, version, created_at, created_by, updated_at, updated_by
     )
@@ -610,6 +657,7 @@ function ensureBoardTasksNullableProjectAndActivity(db) {
       assignee_type,
       assignee_id,
       human_assignee_label,
+      ${taskListExpr},
       workflow_id,
       subtasks_json,
       component_tags_json,
@@ -637,6 +685,7 @@ function ensureBoardTasksNullableProjectAndActivity(db) {
   db.exec('CREATE INDEX IF NOT EXISTS idx_board_tasks_scope_activity ON board_tasks(scope, activity_id, updated_at DESC);');
   db.exec('CREATE INDEX IF NOT EXISTS idx_board_tasks_scope_status ON board_tasks(scope, status, updated_at DESC);');
   db.exec('CREATE INDEX IF NOT EXISTS idx_board_tasks_scope_assignee ON board_tasks(scope, assignee_id, updated_at DESC);');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_board_tasks_scope_task_list ON board_tasks(scope, task_list_id, updated_at DESC);');
 }
 
 function applyBoardMigrations(db) {
@@ -676,6 +725,9 @@ function normalizeTaskForPersistence(task) {
     custom_fields: task?.custom_fields && typeof task.custom_fields === 'object' && !Array.isArray(task.custom_fields)
       ? task.custom_fields
       : {},
+    task_list_id: task?.task_list_id === null || task?.task_list_id === undefined || task?.task_list_id === ''
+      ? null
+      : String(task.task_list_id),
     execution: {
       ...execution,
       attempts: Array.isArray(execution.attempts) ? execution.attempts : [],
@@ -784,6 +836,22 @@ function activityRowToEntity(row) {
   };
 }
 
+function taskListRowToEntity(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description || null,
+    owner_id: row.owner_id,
+    ordering: Number.isFinite(Number(row.ordering)) ? Number(row.ordering) : 0,
+    version: Number(row.version) || 1,
+    created_at: row.created_at,
+    created_by: row.created_by || null,
+    updated_at: row.updated_at,
+    updated_by: row.updated_by || null,
+  };
+}
+
 function taskRowToEntity(row, related) {
   if (!row) return null;
   const activeArtifacts = (related?.artifacts || []).filter((a) => !a.deleted_at);
@@ -852,6 +920,7 @@ function taskRowToEntity(row, related) {
     assignee_type: row.assignee_type,
     assignee_id: row.assignee_id,
     human_assignee_label: row.human_assignee_label,
+    task_list_id: row.task_list_id || null,
     workflow_id: row.workflow_id,
     subtasks: fromJson(row.subtasks_json, []) || [],
     component_tags: fromJson(row.component_tags_json, []) || [],
@@ -1682,10 +1751,10 @@ export function createBoardStorage({ rootDir, resolveRoots = null, runtimeRootOv
     db.prepare(`
       INSERT INTO board_tasks (
         scope, id, schema_version, project_id, activity_id, title, description, status, priority,
-        work_type, assignee_type, assignee_id, human_assignee_label, workflow_id, subtasks_json,
+        work_type, assignee_type, assignee_id, human_assignee_label, task_list_id, workflow_id, subtasks_json,
         component_tags_json, sprint, story_points, completion_percent, dependencies_json, external_links_json, custom_fields_json, due_at,
         review_json, blocked_json, visibility, version, created_at, created_by, updated_at, updated_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(scope, id) DO UPDATE SET
         schema_version = excluded.schema_version,
         project_id = excluded.project_id,
@@ -1698,6 +1767,7 @@ export function createBoardStorage({ rootDir, resolveRoots = null, runtimeRootOv
         assignee_type = excluded.assignee_type,
         assignee_id = excluded.assignee_id,
         human_assignee_label = excluded.human_assignee_label,
+        task_list_id = excluded.task_list_id,
         workflow_id = excluded.workflow_id,
         subtasks_json = excluded.subtasks_json,
         component_tags_json = excluded.component_tags_json,
@@ -1730,6 +1800,7 @@ export function createBoardStorage({ rootDir, resolveRoots = null, runtimeRootOv
       String(normalized.assignee_type || 'unassigned'),
       normalized.assignee_id ? String(normalized.assignee_id) : null,
       normalized.human_assignee_label ? String(normalized.human_assignee_label) : null,
+      normalized.task_list_id ? String(normalized.task_list_id) : null,
       normalized.workflow_id ? String(normalized.workflow_id) : null,
       toJson(normalized.subtasks || []),
       toJson(normalized.component_tags || []),
@@ -1889,6 +1960,65 @@ export function createBoardStorage({ rootDir, resolveRoots = null, runtimeRootOv
       };
       return taskRowToEntity(row, related);
     });
+  }
+
+  function privateReadTaskList(id) {
+    const row = db.prepare('SELECT * FROM board_task_lists WHERE scope = ? AND id = ?').get('private', id);
+    return taskListRowToEntity(row);
+  }
+
+  function privateListTaskLists(ownerId) {
+    const rows = db.prepare(
+      'SELECT * FROM board_task_lists WHERE scope = ? AND owner_id = ? ORDER BY ordering ASC, updated_at DESC, id ASC',
+    ).all('private', ownerId);
+    return rows.map((row) => taskListRowToEntity(row));
+  }
+
+  function persistTaskListTx(scope, id, list, expectedVersion) {
+    const existing = db.prepare('SELECT version FROM board_task_lists WHERE scope = ? AND id = ?').get(scope, id);
+    if (Number.isInteger(expectedVersion)) {
+      const current = existing ? Number(existing.version) : null;
+      if (current === null || current !== expectedVersion) {
+        throw boardError(409, 'conflict', 'Version mismatch', { expected: current, got: expectedVersion });
+      }
+    }
+    db.prepare(`
+      INSERT INTO board_task_lists (
+        scope, id, name, description, owner_id, ordering, version,
+        created_at, created_by, updated_at, updated_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(scope, id) DO UPDATE SET
+        name = excluded.name,
+        description = excluded.description,
+        owner_id = excluded.owner_id,
+        ordering = excluded.ordering,
+        version = excluded.version,
+        created_at = excluded.created_at,
+        created_by = excluded.created_by,
+        updated_at = excluded.updated_at,
+        updated_by = excluded.updated_by
+    `).run(
+      scope,
+      id,
+      String(list.name || ''),
+      list.description ? String(list.description) : null,
+      String(list.owner_id || 'unknown'),
+      Number.isInteger(list.ordering) ? list.ordering : 0,
+      Number(list.version) || 1,
+      normalizeIsoDateOrNull(list.created_at) || nowIso(),
+      list.created_by ? String(list.created_by) : null,
+      normalizeIsoDateOrNull(list.updated_at) || nowIso(),
+      list.updated_by ? String(list.updated_by) : null,
+    );
+  }
+
+  function deleteTaskListTx(scope, id) {
+    const cleared = db.prepare('UPDATE board_tasks SET task_list_id = NULL WHERE scope = ? AND task_list_id = ?').run(scope, id);
+    const deleted = db.prepare('DELETE FROM board_task_lists WHERE scope = ? AND id = ?').run(scope, id);
+    return {
+      deleted: Number(deleted.changes || 0),
+      clearedTaskCount: Number(cleared.changes || 0),
+    };
   }
 
   function listCatalogArtifacts({ scope, taskId, attemptId = null, includeDeleted = false }) {
@@ -2394,6 +2524,11 @@ export function createBoardStorage({ rootDir, resolveRoots = null, runtimeRootOv
       detectTeamDivergenceForReadsSync(dirs.tasksDir);
       return listEntitiesSync(dirs.tasksDir);
     },
+    listTaskLists: async (scope, ownerId) => {
+      if (scope !== 'private') return [];
+      assertPrivateAuthorityActive();
+      return privateListTaskLists(String(ownerId || ''));
+    },
     readProject: async (scope, id) => {
       if (scope === 'private') {
         assertPrivateAuthorityActive();
@@ -2419,6 +2554,11 @@ export function createBoardStorage({ rootDir, resolveRoots = null, runtimeRootOv
         if (err?.code === 'ENOENT') return null;
         throw err;
       }
+    },
+    readTaskList: async (scope, id) => {
+      if (scope !== 'private') return null;
+      assertPrivateAuthorityActive();
+      return privateReadTaskList(id);
     },
     readActivityEntity: async (scope, id) => {
       if (scope === 'private') {
@@ -2509,6 +2649,14 @@ export function createBoardStorage({ rootDir, resolveRoots = null, runtimeRootOv
       }
       return entity;
     },
+    writeTaskList: async (scope, id, entity, options = {}) => {
+      if (scope !== 'private') throw boardError(422, 'validation_error', 'task lists support private scope only');
+      const updated = await withPrivateMutation(() => {
+        persistTaskListTx(scope, id, entity, options.expectedVersion ?? null);
+        return entity;
+      });
+      return updated;
+    },
     deleteProject: async (scope, id, options = {}) => {
       if (scope === 'private') {
         const events = Array.isArray(options.events) ? options.events : (options.event ? [options.event] : []);
@@ -2571,6 +2719,10 @@ export function createBoardStorage({ rootDir, resolveRoots = null, runtimeRootOv
         const day = new Date().toISOString().slice(0, 10);
         await writeJsonlAtomic(resolveScopeLogFile(scope, 'audit', day), [options.event]);
       }
+    },
+    deleteTaskList: async (scope, id) => {
+      if (scope !== 'private') throw boardError(422, 'validation_error', 'task lists support private scope only');
+      return withPrivateMutation(() => deleteTaskListTx(scope, id));
     },
     appendActivity: async (scope, record) => {
       if (scope === 'private') {

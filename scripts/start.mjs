@@ -236,11 +236,8 @@ async function runPreflightChecks() {
   add('runtime-dependencies', missingPackages.length ? 'fail' : 'pass', missingPackages.length ? `Missing runtime dependencies: ${missingPackages.join(', ')} (run npm ci)` : 'Runtime dependencies are installed');
 
   const port = Number(process.env.PORT || 4011);
-  const chatPort = Number(process.env.CHAT_PORT || 4012);
   const interfacePortFree = await isPortFree(port);
-  const chatPortFree = await isPortFree(chatPort);
   add('interface-port', interfacePortFree ? 'pass' : 'fail', interfacePortFree ? `Interface port ${port} is free` : `Interface port ${port} is in use (run node scripts/stop.mjs)`);
-  add('chat-port', chatPortFree ? 'pass' : 'warn', chatPortFree ? `Chat port ${chatPort} is free` : `Chat port ${chatPort} is in use (chat startup will be skipped)`, { blocking: false });
 
   const appSettings = await readAppSettings(ROOT);
   const userPolicy = deriveUserTypePolicy(appSettings.userType);
@@ -376,37 +373,14 @@ async function main() {
     env,
   });
 
-  let chatChild = null;
-  const chatPort = Number(process.env.CHAT_PORT || 4012);
-  if (exists('chat/server.mjs')) {
-    const chatFree = await isPortFree(chatPort);
-    if (chatFree) {
-      console.log(`Chat runtime: http://localhost:${chatPort}`);
-      chatChild = spawn(preflight.nodeExecutablePath, ['chat/server.mjs'], {
-        cwd: ROOT,
-        stdio: 'inherit',
-        env,
-      });
-      chatChild.on('exit', (code, signal) => {
-        if (signal) console.error(`Chat runtime stopped by signal ${signal}.`);
-        else if (code) console.error(`Chat runtime exited with code ${code}.`);
-        chatChild = null;
-      });
-    } else {
-      console.log(`Chat runtime: port ${chatPort} already in use, skipping chat startup.`);
-    }
-  }
-
   const forwardSignal = (signal) => {
     if (!child.killed) child.kill(signal);
-    if (chatChild && !chatChild.killed) chatChild.kill(signal);
   };
 
   process.on('SIGINT', () => forwardSignal('SIGINT'));
   process.on('SIGTERM', () => forwardSignal('SIGTERM'));
 
   child.on('exit', (code, signal) => {
-    if (chatChild && !chatChild.killed) chatChild.kill('SIGTERM');
     if (signal) {
       console.error(`Interface stopped by signal ${signal}.`);
       process.exit(1);

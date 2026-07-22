@@ -110,6 +110,28 @@ const boardStorage = createBoardStorage({
   }),
 });
 
+const NUMERIC_PORT = Number(PORT) || 4011;
+const CHAT_HOSTNAME = 'chat.localhost';
+const MAIN_HOSTNAMES = new Set(['localhost', '127.0.0.1']);
+let chatRuntime;
+try {
+  const chatModule = await import('../chat/server.mjs');
+  chatRuntime = chatModule.createChatRuntime({ port: NUMERIC_PORT });
+} catch (err) {
+  console.warn(`[chat] failed to initialize embedded runtime: ${err?.message || err}`);
+  chatRuntime = {
+    requestHandler: (_req, res) => {
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'embedded chat runtime unavailable' }));
+    },
+    upgradeHandler: (_req, socket) => {
+      socket.write('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+    },
+    close: async () => {},
+  };
+}
+
 const storageKernelDiagnostics = createStorageKernelDiagnostics({
   workspaceRoot: ROOT,
   component: 'interface',
@@ -1466,12 +1488,12 @@ async function getSystem() {
 
 async function handleApi(req, res, url) {
   const send = (code, obj) => {
-    res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', ...interfaceSecurityHeaders() });
     res.end(JSON.stringify(obj));
   };
   const sendBoard = (code, data) => send(code, { ok: true, data });
 
-  const isBoardPath = /^\/api\/(board\/metadata|board\/artifacts\/[^/]+(?:\/[^/]+\/.+)?|projects(?:\/[^/]+(?:\/(activity|audit|visibility-migration|dashboard))?)?|activities(?:\/[^/]+)?|tasks(?:\/[^/]+(?:\/(execution\/(run|cancel|retry)|review\/decision))?)?|internal\/tasks\/execution-callback)$/.test(url.pathname);
+  const isBoardPath = /^\/api\/(board\/metadata|board\/artifacts\/[^/]+(?:\/[^/]+\/.+)?|projects(?:\/[^/]+(?:\/(activity|audit|visibility-migration|dashboard))?)?|activities(?:\/[^/]+)?|task-lists(?:\/[^/]+)?|tasks(?:\/[^/]+(?:\/(execution\/(run|cancel|retry)|review\/decision))?)?|internal\/tasks\/execution-callback)$/.test(url.pathname);
   const isInternalExecutionCallbackPath = url.pathname === '/api/internal/tasks/execution-callback';
 
   const mutating = req.method !== 'GET';
@@ -1522,7 +1544,7 @@ async function handleApi(req, res, url) {
 
   try {
     if (url.pathname === '/api/board/metadata' && req.method === 'GET') {
-      return sendBoard(200, await boardService.getMetadata());
+      return sendBoard(200, await boardService.getMetadata(actor));
     }
     if (url.pathname === '/api/projects' && req.method === 'GET') {
       return sendBoard(200, await boardService.listProjects(Object.fromEntries(url.searchParams.entries()), actor));
@@ -1567,6 +1589,13 @@ async function handleApi(req, res, url) {
       const body = await readBody(req, { maxBytes: 256 * 1024 });
       return sendBoard(201, await boardService.createTask(body, actor));
     }
+    if (url.pathname === '/api/task-lists' && req.method === 'GET') {
+      return sendBoard(200, await boardService.listTaskLists(Object.fromEntries(url.searchParams.entries()), actor));
+    }
+    if (url.pathname === '/api/task-lists' && req.method === 'POST') {
+      const body = await readBody(req, { maxBytes: 256 * 1024 });
+      return sendBoard(201, await boardService.createTaskList(body, actor));
+    }
     if (url.pathname === '/api/activities' && req.method === 'GET') {
       return sendBoard(200, await boardService.listActivities(Object.fromEntries(url.searchParams.entries()), actor));
     }
@@ -1597,6 +1626,18 @@ async function handleApi(req, res, url) {
     if (taskMatch && req.method === 'DELETE') {
       const body = await readBody(req, { maxBytes: 256 * 1024 });
       return sendBoard(200, await boardService.deleteTask(taskMatch[1], body, actor));
+    }
+    const taskListMatch = url.pathname.match(/^\/api\/task-lists\/([^/]+)$/);
+    if (taskListMatch && req.method === 'GET') {
+      return sendBoard(200, await boardService.getTaskList(taskListMatch[1], actor));
+    }
+    if (taskListMatch && req.method === 'PATCH') {
+      const body = await readBody(req, { maxBytes: 256 * 1024 });
+      return sendBoard(200, await boardService.patchTaskList(taskListMatch[1], body, actor));
+    }
+    if (taskListMatch && req.method === 'DELETE') {
+      const body = await readBody(req, { maxBytes: 256 * 1024 });
+      return sendBoard(200, await boardService.deleteTaskList(taskListMatch[1], body, actor));
     }
     const taskReviewDecisionMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/review\/decision$/);
     if (taskReviewDecisionMatch && req.method === 'POST') {
@@ -2393,10 +2434,59 @@ function readBody(req, options = {}) {
   });
 }
 
+function parseRequestHost(hostHeaderValue) {
+  const raw = String(hostHeaderValue || '').trim();
+  if (!raw) return null;
+  try {
+    const parsed = new URL(`http://${raw}`);
+    const hostname = String(parsed.hostname || '').toLowerCase();
+    const port = Number(parsed.port || 80);
+    return { hostname, port };
+  } catch {
+    return null;
+  }
+}
+
+function classifyRequestHost(req) {
+  const host = parseRequestHost(req.headers.host);
+  if (!host) return { kind: 'unknown', host: null };
+  if (host.port !== NUMERIC_PORT) return { kind: 'unknown', host };
+  if (host.hostname === CHAT_HOSTNAME) return { kind: 'chat', host };
+  if (MAIN_HOSTNAMES.has(host.hostname)) return { kind: 'main', host };
+  return { kind: 'unknown', host };
+}
+
+function interfaceSecurityHeaders() {
+  const csp = [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:",
+    "font-src 'self' data:",
+    `connect-src 'self' http://${CHAT_HOSTNAME}:${NUMERIC_PORT} ws://${CHAT_HOSTNAME}:${NUMERIC_PORT}`,
+    `frame-src http://${CHAT_HOSTNAME}:${NUMERIC_PORT}`,
+    "frame-ancestors 'self'",
+  ].join('; ');
+  return {
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'same-origin',
+    'Content-Security-Policy': csp,
+  };
+}
+
 // ---------- server ----------
 
 const server = http.createServer(async (req, res) => {
   try {
+    const hostClass = classifyRequestHost(req);
+    if (hostClass.kind === 'unknown') {
+      res.writeHead(421, { 'Content-Type': 'application/json', ...interfaceSecurityHeaders() });
+      return res.end(JSON.stringify({ error: 'unknown host' }));
+    }
+    if (hostClass.kind === 'chat') {
+      return chatRuntime.requestHandler(req, res);
+    }
+
     const url = new URL(req.url, `http://${req.headers.host}`);
     if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url);
 
@@ -2409,16 +2499,28 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, {
       'Content-Type': MIME[path.extname(abs)] || 'application/octet-stream',
       'Cache-Control': 'no-store', // always serve the latest interface files
+      ...interfaceSecurityHeaders(),
     });
     fs.createReadStream(abs).pipe(res);
   } catch (e) {
-    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.writeHead(500, { 'Content-Type': 'application/json', ...interfaceSecurityHeaders() });
     res.end(JSON.stringify({ error: String(e.message || e) }));
   }
 });
 
+server.on('upgrade', (req, socket, head) => {
+  const hostClass = classifyRequestHost(req);
+  if (hostClass.kind === 'chat') {
+    chatRuntime.upgradeHandler(req, socket, head);
+    return;
+  }
+  socket.write('HTTP/1.1 421 Misdirected Request\r\nConnection: close\r\n\r\n');
+  socket.destroy();
+});
+
 server.listen(PORT, HOST, () => {
   console.log(`Steadymade AI OS interface → http://${HOST === '127.0.0.1' ? 'localhost' : HOST}:${PORT}`);
+  console.log(`Steadymade AI OS chat host → http://${CHAT_HOSTNAME}:${PORT}`);
   console.log(`Reading project files from: ${ROOT}`);
   console.log(`Knowledge backend: ${knowledgeStorage.kind} (${knowledgeStorage.root})`);
   console.log(`Runtime mode: ${knowledgeConfig.runtime}`);
@@ -2428,3 +2530,9 @@ server.listen(PORT, HOST, () => {
     ? `Scheduler: claude CLI at ${claudeBin}`
     : 'Scheduler: WARNING — claude CLI not found, jobs will fail (set CLAUDE_BIN)');
 });
+
+const shutdown = async () => {
+  await chatRuntime.close();
+};
+process.on('SIGINT', () => shutdown().finally(() => process.exit(0)));
+process.on('SIGTERM', () => shutdown().finally(() => process.exit(0)));

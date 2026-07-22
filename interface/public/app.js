@@ -113,8 +113,8 @@ const deptById = (id) => DEPARTMENTS.find((d) => d.id === id);
 // an access entry covers the folder itself and every folder nested under it
 const agentAccess = (a, folder) => a.access.some((acc) => folder === acc || folder.startsWith(acc + '/'));
 
-const CHAT_PORT = Number(window.CHAT_PORT || 4012);
-const CHAT_URL = `${location.protocol}//${location.hostname}:${CHAT_PORT}`;
+const CHAT_PORT = location.port || (location.protocol === 'https:' ? '443' : '80');
+const CHAT_URL = `${location.protocol}//chat.localhost:${CHAT_PORT}`;
 const CHAT_AGENT_MAP = {
   danny: 'danny',
   atlas: 'atlas',
@@ -605,8 +605,7 @@ async function openRunLog(runId, runs) {
   }
   const m = run ? runStatusMeta(run.status) : { label: '' };
   openDrawer(`
-    <div class="drawer-head">
-      <button class="drawer-close">✕</button>
+    <div class="drawer-head" style="padding-bottom:8px">
       <div class="drawer-dept">RUN LOG</div>
       <div class="drawer-name">${esc(run ? run.jobName : runId)}</div>
       <div class="drawer-role">${run ? fmtWhen(run.startedAt) + ' · ' + m.label + (run.endedAt ? ' · ' + Math.max(1, Math.round((run.endedAt - run.startedAt) / 1000)) + 's' : '') : ''}</div>
@@ -4945,9 +4944,99 @@ const PRIORITY_OPTIONS = ['low', 'medium', 'high'];
 const deskState = {
   el: null,
   loading: false,
-  filter: 'focus',
+  filter: 'all',
   query: '',
+  seq: 0,
 };
+
+const deskLogic = globalThis.DeskLogic || {};
+const getDeskTaskListId = deskLogic.getDeskTaskListId || ((task) => task?.task_list_id || task?.list_id || null);
+const getDeskCategory = deskLogic.getDeskCategory || ((task) => {
+  if (task?.project_id || task?.activity_id) return 'project';
+  if (getDeskTaskListId(task)) return 'personal';
+  return 'inbox';
+});
+const isDeskTaskCompleted = deskLogic.isDeskTaskCompleted || ((task) => ['done', 'completed', 'delivered'].includes(task?.status));
+const DEFAULT_DESK_FILTERS = deskLogic.DEFAULT_DESK_FILTERS || { type: 'all', time: 'any', priority: 'any', status: 'open' };
+const normalizeDeskFilters = deskLogic.normalizeDeskFilters || ((filters) => ({ ...DEFAULT_DESK_FILTERS, ...(filters || {}) }));
+const filterDeskTasks = deskLogic.filterDeskTasks || ((tasks, { filters = DEFAULT_DESK_FILTERS, query = '' } = {}) => {
+  const normalized = normalizeDeskFilters(filters);
+  const q = String(query || '').trim().toLowerCase();
+  const source = Array.isArray(tasks) ? tasks : [];
+  return source.filter((task) => {
+    const category = task?.project_id || task?.activity_id ? 'project' : (getDeskTaskListId(task) ? 'personal' : 'inbox');
+    if (normalized.type !== 'all' && normalized.type !== category) return false;
+    const waiting = task?.status === 'blocked' || (task?.review?.required && task?.review?.state === 'needs_review');
+    const completed = isDeskTaskCompleted(task);
+    const statusGroup = completed ? 'completed' : (waiting ? 'waiting' : 'open');
+    if (normalized.status !== statusGroup) return false;
+    if (normalized.priority === 'important' && !(task?.priority === 'high' || task?.priority === 'urgent')) return false;
+    if (normalized.time !== 'any') {
+      if (!task?.due_at) return false;
+      const due = new Date(task.due_at);
+      const now = new Date();
+      const sameDay = !Number.isNaN(due.valueOf())
+        && due.getDate() === now.getDate()
+        && due.getMonth() === now.getMonth()
+        && due.getFullYear() === now.getFullYear();
+      const bucket = Number.isNaN(due.valueOf()) ? 'none' : (sameDay ? 'today' : (due < now ? 'overdue' : 'upcoming'));
+      if (bucket !== normalized.time) return false;
+    }
+    if (q && !(String(task?.title || '') + ' ' + String(task?.description || '')).toLowerCase().includes(q)) return false;
+    return true;
+  });
+});
+const deriveDeskFilterState = deskLogic.deriveDeskFilterState || ((tasks, { filters = DEFAULT_DESK_FILTERS, query = '' } = {}) => {
+  const normalized = normalizeDeskFilters(filters);
+  const baseUniverse = filterDeskTasks(tasks, { filters: { ...normalized, time: 'any', priority: 'any' } });
+  const activeTasks = filterDeskTasks(tasks, { filters: normalized, query });
+  return {
+    filters: normalized,
+    baseUniverse,
+    activeTasks,
+    activeCount: activeTasks.length,
+    totalCount: baseUniverse.length,
+  };
+});
+const deriveDeskDashboardCounts = deskLogic.deriveDeskDashboardCounts || ((tasks, { filters = DEFAULT_DESK_FILTERS } = {}) => {
+  const normalized = normalizeDeskFilters(filters);
+  return {
+    typeCounts: {
+      all: filterDeskTasks(tasks, { filters: { ...normalized, type: 'all' } }).length,
+      inbox: filterDeskTasks(tasks, { filters: { ...normalized, type: 'inbox' } }).length,
+      personal: filterDeskTasks(tasks, { filters: { ...normalized, type: 'personal' } }).length,
+      project: filterDeskTasks(tasks, { filters: { ...normalized, type: 'project' } }).length,
+    },
+    timeCounts: {
+      today: filterDeskTasks(tasks, { filters: { ...normalized, time: 'today' } }).length,
+      overdue: filterDeskTasks(tasks, { filters: { ...normalized, time: 'overdue' } }).length,
+    },
+    statusCounts: {
+      waiting: filterDeskTasks(tasks, { filters: { ...normalized, status: 'waiting' } }).length,
+    },
+  };
+});
+const deriveDeskData = deskLogic.deriveDeskData || ((tasks) => ({
+  all: Array.isArray(tasks) ? tasks : [],
+  open: Array.isArray(tasks) ? tasks.filter((task) => !isDeskTaskCompleted(task)) : [],
+  completed: Array.isArray(tasks) ? tasks.filter((task) => isDeskTaskCompleted(task)) : [],
+  byCategory: { inbox: [], personal: [], project: [] },
+  categoryMetrics: {
+    inbox: { today: 0, overdue: 0, waiting: 0 },
+    personal: { today: 0, overdue: 0, waiting: 0 },
+    project: { today: 0, overdue: 0, waiting: 0 },
+  },
+  today: [],
+  overdue: [],
+  upcoming: [],
+  important: [],
+  waiting: [],
+}));
+const groupDeskTasks = deskLogic.groupDeskTasks || ((tasks) => ({
+  inbox: (Array.isArray(tasks) ? tasks : []).filter((task) => getDeskCategory(task) === 'inbox'),
+  personalGroups: [],
+  projectGroups: [],
+}));
 
 const projectState = {
   el: null,
@@ -5186,6 +5275,87 @@ function applyProjectToState(project) {
   const idx = projectState.projects.findIndex((p) => p.id === project.id);
   if (idx >= 0) projectState.projects[idx] = project;
   else projectState.projects.unshift(project);
+}
+
+
+const globalTaskQueues = {};
+
+function getSafePatcher(taskId, getIndicatorFn) {
+  let debounceTimer = null;
+  let syncOps = [];
+  const setIndicator = (stateName) => {
+    const ind = getIndicatorFn ? getIndicatorFn() : null;
+    if (!ind) return;
+    ind.classList.remove('is-saving', 'is-saved', 'is-error');
+    if (stateName === 'saving') {
+      ind.textContent = 'Saving…';
+      ind.classList.add('is-saving');
+    } else if (stateName === 'saved') {
+      ind.textContent = 'Saved';
+      ind.classList.add('is-saved');
+      setTimeout(() => {
+        if (!ind || ind.textContent !== 'Saved') return;
+        ind.classList.remove('is-saving', 'is-saved', 'is-error');
+      }, 1600);
+    } else if (stateName === 'error') {
+      ind.textContent = 'Save failed';
+      ind.classList.add('is-error');
+    }
+  };
+  
+  const trigger = () => {
+    if (!globalTaskQueues[taskId]) globalTaskQueues[taskId] = Promise.resolve();
+    if (syncOps.length === 0) return;
+    const batch = syncOps;
+    syncOps = [];
+    
+    globalTaskQueues[taskId] = globalTaskQueues[taskId].then(async () => {
+      setIndicator('saving');
+      try {
+        const task = projectState.tasks.find(t => t.id === taskId);
+        if (!task) return;
+        const updated = await boardApi(`/api/tasks/${encodeURIComponent(taskId)}`, {
+          method: 'PATCH',
+          body: { version: task.version, ops: batch }
+        });
+        applyTaskToState(updated);
+        setIndicator('saved');
+        if (state.view === 'desk') {
+          const el = document.getElementById('view');
+          if (el) renderDesk(el);
+        }
+        if (state.view === 'projects') paintProjects();
+      } catch (e) {
+        toast((e.message || 'SAVE FAILED').toUpperCase(), true);
+        setIndicator('error');
+        if (e.status === 409 || e.status === 422) refreshProjectsView();
+      }
+    });
+  };
+
+  return {
+    pushChange: (op, valueOrFullOp) => {
+      const opObj = typeof valueOrFullOp === 'object' && valueOrFullOp !== null && !Array.isArray(valueOrFullOp) && valueOrFullOp.type !== undefined
+        ? { op, ...valueOrFullOp } : { op, value: valueOrFullOp };
+      syncOps.push(opObj);
+      trigger();
+    },
+    pushChangeDebounced: (op, valueOrFullOp) => {
+      clearTimeout(debounceTimer);
+      setIndicator('saving');
+      const opObj = typeof valueOrFullOp === 'object' && valueOrFullOp !== null && !Array.isArray(valueOrFullOp) && valueOrFullOp.type !== undefined
+        ? { op, ...valueOrFullOp } : { op, value: valueOrFullOp };
+      debounceTimer = setTimeout(() => {
+        syncOps.push(opObj);
+        trigger();
+      }, 500);
+    },
+    pushOp: (fullOp) => {
+      if (!fullOp || typeof fullOp !== 'object' || !fullOp.op) return;
+      syncOps.push(fullOp);
+      trigger();
+    },
+  };
 }
 
 function applyTaskToState(task) {
@@ -5448,7 +5618,7 @@ function openTaskCreateDrawer(projectId, { prefill = null } = {}) {
   const meta = projectState.metadata || normalizeMetadata({});
   const defaults = meta.defaults || { assignee_type: 'agent', assignee_id: 'danny' };
   const selectedProjectId = projectId || projectState.selectedProjectId || '';
-  const assigneeType = defaults.assignee_type === 'human' ? 'human' : (defaults.assignee_type === 'unassigned' ? 'unassigned' : 'agent');
+  const assigneeType = 'human';
   const agentDefault = defaults.assignee_id || 'danny';
   openDrawer(`
     <div class="drawer-head">
@@ -5509,7 +5679,7 @@ function openTaskCreateDrawer(projectId, { prefill = null } = {}) {
         <div class="form-field" id="task-assignee-agent-wrap"><label>Assignee</label>
           <select id="task-new-assignee-agent">${meta.agents.map((a) => `<option value="${esc(a.id)}" ${a.id === agentDefault ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>
         </div>
-        <div class="form-field hidden" id="task-assignee-human-wrap"><label>Human assignee name</label><input id="task-new-assignee-human-label" placeholder="Full name"></div>
+        <div class="form-field ${assigneeType !== 'human' ? 'hidden' : ''}" id="task-assignee-human-wrap"><label>Human assignee name</label><input id="task-new-assignee-human-label" value="Me" placeholder="Full name"></div>
       </div>
       
       <div class="form-field"><label>External Links</label><textarea id="task-new-links" rows="2" placeholder="Label|URL"></textarea></div>
@@ -5537,10 +5707,16 @@ function openTaskCreateDrawer(projectId, { prefill = null } = {}) {
     else if (loc.startsWith('activity:')) actId = loc.slice(9);
     
     const type = $('#task-new-assignee-type', drawer)?.value || 'agent';
-    let assigneeId = null;
-    let humanAssigneeLabel = null;
-    if (type === 'agent') assigneeId = $('#task-new-assignee-agent', drawer)?.value || defaults.assignee_id || 'danny';
-    if (type === 'human') humanAssigneeLabel = $('#task-new-assignee-human-label', drawer)?.value.trim() || null;
+    let aId = null;
+    let hLabel = null;
+    if (type === 'agent') {
+      aId = $('#task-new-assignee-agent', drawer)?.value || null;
+    } else if (type === 'human') {
+      const val = $('#task-new-assignee-human-label', drawer)?.value.trim() || 'Me';
+      const human = deriveHumanAssignee(null, val);
+      aId = human.assignee_id;
+      hLabel = human.human_assignee_label;
+    }
     
     const tags = $('#task-new-tags', drawer)?.value.split(',').map(s => s.trim()).filter(Boolean) || [];
     const deps = $('#task-new-dependencies', drawer)?.value.split(',').map(s => s.trim()).filter(Boolean) || [];
@@ -5579,8 +5755,8 @@ function openTaskCreateDrawer(projectId, { prefill = null } = {}) {
         external_links: links,
         custom_fields: customFields,
         assignee_type: type,
-        assignee_id: assigneeId,
-        human_assignee_label: humanAssigneeLabel,
+        assignee_id: aId,
+        human_assignee_label: hLabel,
       };
       if (pid) payload.project_id = pid;
       if (actId) payload.activity_id = actId;
@@ -5641,97 +5817,86 @@ async function moveTaskToStatus(task, status) {
   }
 }
 
+
+function deriveHumanAssignee(task, labelInput) {
+  const label = String(labelInput || '').trim();
+  if (!label) return { assignee_id: null, human_assignee_label: null };
+  const meId = String(state.system?.user?.id || '').trim();
+  const meName = String(state.system?.user?.name || '').trim();
+  const lower = label.toLowerCase();
+  const canonicalLabel = ((meId && lower === meId.toLowerCase()) || (meName && lower === meName.toLowerCase()) || lower === 'me')
+    ? (meName || label)
+    : label;
+  const stable = canonicalLabel
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'person';
+  return { assignee_id: `human:${stable}`, human_assignee_label: canonicalLabel };
+}
+
+function parseLinksInput(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return [];
+  return text
+    .split('\n')
+    .map((line) => {
+      const [label, url] = line.split('|');
+      return { label: String(label || '').trim(), url: String(url || '').trim() };
+    })
+    .filter((item) => item.url);
+}
+
+function parseCustomFieldsInput(raw) {
+  const text = String(raw || '').trim();
+  const out = {};
+  if (!text) return out;
+  text.split('\n').forEach((line) => {
+    const [k, ...rest] = line.split('=');
+    if (!k) return;
+    const key = k.trim();
+    if (!key) return;
+    const valueText = rest.join('=').trim();
+    let parsed = valueText;
+    if (valueText === 'true') parsed = true;
+    else if (valueText === 'false') parsed = false;
+    else if (valueText === 'null') parsed = null;
+    else if (valueText !== '' && !Number.isNaN(Number(valueText))) parsed = Number(valueText);
+    out[key] = parsed;
+  });
+  return out;
+}
+
+function openDeskTaskDrawer(taskId) {
+  openTaskDrawer(taskId);
+}
+
 function openTaskDrawer(taskId) {
   const task = projectState.tasks.find((t) => t.id === taskId);
   if (!task) return;
   const project = projectState.projects.find((p) => p.id === task.project_id);
   const meta = projectState.metadata || normalizeMetadata({});
-  const canReview = task.review?.required && task.review?.state === 'needs_review';
+  const patcher = getSafePatcher(task.id, () => document.getElementById('task-save-ind'));
   const artifactEntries = extractAttemptArtifactEntries(task);
-  const updates = task.execution?.execution_updates || [];
-  const initialSubtasks = (task.subtasks || [])
+  const updates = Array.isArray(task.execution?.updates) ? [...task.execution.updates] : [];
+  const canReview = Boolean(task.review?.required);
+
+  let currentSubtasks = (task.subtasks || [])
     .map((st) => ({ ...st }))
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-  let currentSubtasks = initialSubtasks.map((st) => ({ ...st }));
-  const originalSubtasksJson = JSON.stringify(initialSubtasks.map((st) => ({
-    id: st.id,
-    text: st.text,
-    completed: Boolean(st.completed),
-    order: Number.isInteger(st.order) ? st.order : 0,
-  })));
 
   const renderSubtasks = () => {
-    const listHtml = currentSubtasks.length ? currentSubtasks.map((st, i) => `
-      <div class="subtask-row" data-subtask-id="${esc(st.id)}">
-        <input type="checkbox" ${st.completed ? 'checked' : ''} class="subtask-toggle">
-        <input type="text" class="subtask-text ${st.completed ? 'completed' : ''}" value="${esc(st.text)}" placeholder="Subtask text">
-        <button class="btn btn-ghost btn-small subtask-up" ${i === 0 ? 'disabled' : ''}>↑</button>
-        <button class="btn btn-ghost btn-small subtask-down" ${i === currentSubtasks.length - 1 ? 'disabled' : ''}>↓</button>
-        <button class="btn btn-ghost btn-small subtask-del" style="color:var(--apricot-deep)">✕</button>
-      </div>
-    `).join('') : '<div class="stat-note" style="margin-bottom:6px">No subtasks.</div>';
-    
-    return `
-      <div id="subtasks-container">
-        ${listHtml}
-        <button class="btn btn-ghost btn-small" id="btn-add-subtask">+ Add subtask</button>
-      </div>
-    `;
-  };
-
-  const bindSubtasks = (drawer) => {
-    $$('.subtask-row', drawer).forEach((row, i) => {
-      const id = row.dataset.subtaskId;
-      const st = currentSubtasks.find(s => s.id === id);
-      if (!st) return;
-      
-      row.querySelector('.subtask-toggle')?.addEventListener('change', (e) => {
-        st.completed = e.target.checked;
-        const textInput = row.querySelector('.subtask-text');
-        if (textInput) textInput.classList.toggle('completed', st.completed);
-      });
-      row.querySelector('.subtask-text')?.addEventListener('input', (e) => { st.text = e.target.value; });
-      row.querySelector('.subtask-up')?.addEventListener('click', () => {
-        if (i > 0) {
-          const temp = currentSubtasks[i-1];
-          currentSubtasks[i-1] = currentSubtasks[i];
-          currentSubtasks[i] = temp;
-          refreshSubtasks();
-        }
-      });
-      row.querySelector('.subtask-down')?.addEventListener('click', () => {
-        if (i < currentSubtasks.length - 1) {
-          const temp = currentSubtasks[i+1];
-          currentSubtasks[i+1] = currentSubtasks[i];
-          currentSubtasks[i] = temp;
-          refreshSubtasks();
-        }
-      });
-      row.querySelector('.subtask-del')?.addEventListener('click', () => {
-        currentSubtasks = currentSubtasks.filter(s => s.id !== id);
-        refreshSubtasks();
-      });
-    });
-    
-    $('#btn-add-subtask', drawer)?.addEventListener('click', () => {
-      currentSubtasks.push({
-        id: 'st_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-        text: '',
-        completed: false,
-        order: currentSubtasks.length
-      });
-      refreshSubtasks();
-    });
-  };
-
-  const refreshSubtasks = () => {
-    const wrap = $('#subtasks-wrap');
-    if (wrap) {
-      // Re-assign order based on array position
-      currentSubtasks.forEach((st, i) => st.order = i);
-      wrap.innerHTML = renderSubtasks();
-      bindSubtasks(wrap);
-    }
+    const rows = currentSubtasks.length
+      ? currentSubtasks.map((st, i) => `
+          <div class="subtask-row" data-subtask-id="${esc(st.id)}">
+            <input type="checkbox" class="subtask-toggle" ${st.completed ? 'checked' : ''}>
+            <input type="text" class="subtask-text ${st.completed ? 'completed' : ''}" value="${esc(st.text)}" placeholder="Subtask text">
+            <button class="btn btn-ghost btn-small subtask-up" ${i === 0 ? 'disabled' : ''}>↑</button>
+            <button class="btn btn-ghost btn-small subtask-down" ${i === currentSubtasks.length - 1 ? 'disabled' : ''}>↓</button>
+            <button class="btn btn-ghost btn-small subtask-del" style="color:var(--apricot-deep)">✕</button>
+          </div>
+        `).join('')
+      : '<div class="stat-note" style="margin-bottom:6px">No subtasks.</div>';
+    return `${rows}<button class="btn btn-ghost btn-small" id="btn-add-subtask">+ Add subtask</button>`;
   };
 
   openDrawer(`
@@ -5739,57 +5904,46 @@ function openTaskDrawer(taskId) {
       <button class="drawer-close">✕</button>
       <div class="drawer-dept">TASK</div>
       <div class="drawer-name">Edit Task</div>
-      <div class="drawer-role">
-        ${task.project_id ? `Project: ${esc(project?.name || task.project_id)}` : (task.activity_id ? `Activity: ${esc(projectState.activity.find(a => a.id === task.activity_id)?.name || task.activity_id)}` : 'Inbox')}
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;gap:8px;">
+        <div class="drawer-role">${task.project_id ? `Project: ${esc(project?.name || task.project_id)}` : (task.activity_id ? `Activity: ${esc(projectState.activity.find((a) => a.id === task.activity_id)?.name || task.activity_id)}` : 'Inbox')}</div>
+        <div id="task-save-ind" class="task-save-ind">Saved</div>
       </div>
     </div>
     <div class="drawer-body">
       <div class="form-field"><label>Location</label>
-    <select id="task-edit-location">
-      <option value="inbox" ${!task.project_id && !task.activity_id ? 'selected' : ''}>Inbox</option>
-      <optgroup label="Projects">
-        ${projectState.projects.map(p => `<option value="project:${esc(p.id)}" ${task.project_id === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
-      </optgroup>
-      <optgroup label="Activities">
-        ${projectState.activity.map(a => `<option value="activity:${esc(a.id)}" ${task.activity_id === a.id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}
-      </optgroup>
-    </select>
-  </div>
+        <select id="task-edit-location">
+          <option value="inbox" ${!task.project_id && !task.activity_id ? 'selected' : ''}>Inbox</option>
+          <optgroup label="Projects">${projectState.projects.map((p) => `<option value="project:${esc(p.id)}" ${task.project_id === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</optgroup>
+          <optgroup label="Activities">${projectState.activity.map((a) => `<option value="activity:${esc(a.id)}" ${task.activity_id === a.id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</optgroup>
+        </select>
+      </div>
       <div class="form-field"><label>Title</label><input id="task-edit-title" value="${esc(task.title)}" placeholder="Task title"></div>
       <div class="form-field"><label>Instruction</label><textarea id="task-edit-desc" rows="4">${esc(task.description || '')}</textarea></div>
-      
+
       <div class="drawer-grid-2">
-        <div class="form-field"><label>Status</label>
-          <select id="task-edit-status">
-            ${TASK_STATUS_OPTIONS.map((s) => `<option value="${esc(s)}" ${s === task.status ? 'selected' : ''}>${esc(statusLabel(s))}</option>`).join('')}
-          </select>
-        </div>
-        <div class="form-field"><label>Priority</label>
-          <select id="task-edit-priority">${PRIORITY_OPTIONS.map((p) => `<option value="${esc(p)}" ${p === task.priority ? 'selected' : ''}>${esc(statusLabel(p))}</option>`).join('')}</select>
-        </div>
+        <div class="form-field"><label>Status</label><select id="task-edit-status">${TASK_STATUS_OPTIONS.map((s) => `<option value="${esc(s)}" ${s === task.status ? 'selected' : ''}>${esc(statusLabel(s))}</option>`).join('')}</select></div>
+        <div class="form-field"><label>Priority</label><select id="task-edit-priority">${PRIORITY_OPTIONS.map((p) => `<option value="${esc(p)}" ${p === task.priority ? 'selected' : ''}>${esc(statusLabel(p))}</option>`).join('')}</select></div>
       </div>
 
       <div class="drawer-grid-2">
         <div class="form-field"><label>Work Type</label><input id="task-edit-work-type" value="${esc(task.work_type || '')}" placeholder="e.g. feature, bug, doc"></div>
         <div class="form-field"><label>Story Points</label><input id="task-edit-points" type="number" step="0.5" value="${task.story_points ?? ''}"></div>
       </div>
-      
+
       <div class="drawer-grid-2">
         <div class="form-field"><label>Sprint</label><input id="task-edit-sprint" value="${esc(task.sprint || '')}" placeholder="e.g. Sprint 24"></div>
         <div class="form-field"><label>Completion %</label><input id="task-edit-completion" type="number" min="0" max="100" value="${task.completion_percent ?? 0}"></div>
       </div>
 
-      <div class="form-field"><label>Workflow</label>
-        <select id="task-edit-workflow"><option value="">(none)</option>${meta.workflows.map((w) => `<option value="${esc(w)}" ${w === task.workflow_id ? 'selected' : ''}>${esc(w)}</option>`).join('')}</select>
-      </div>
+      <div class="form-field"><label>Workflow</label><select id="task-edit-workflow"><option value="">(none)</option>${meta.workflows.map((w) => `<option value="${esc(w)}" ${w === task.workflow_id ? 'selected' : ''}>${esc(w)}</option>`).join('')}</select></div>
 
       <div class="drawer-grid-2">
         <div class="form-field"><label>Due Date</label><input type="date" id="task-edit-due" value="${esc(isoToLocalDateInput(task.due_at))}"></div>
         <div class="form-field"><label>Dependencies</label><input id="task-edit-dependencies" value="${esc((task.dependencies || []).join(', '))}" placeholder="Comma-separated task IDs"></div>
       </div>
       <div class="form-field"><label>Component Tags</label><input id="task-edit-tags" value="${esc((task.component_tags || []).join(', '))}" placeholder="Comma-separated"></div>
-      <div class="form-field"><label>External Links</label><textarea id="task-edit-links" rows="2" placeholder="Label|URL">${esc((task.external_links || []).map(l => l.label + '|' + l.url).join('\\n'))}</textarea></div>
-      <div class="form-field"><label>Custom Fields</label><textarea id="task-edit-custom" rows="2" placeholder="key=value">${esc(Object.entries(task.custom_fields || {}).map(([k, v]) => k + '=' + v).join('\\n'))}</textarea></div>
+      <div class="form-field"><label>External Links</label><textarea id="task-edit-links" rows="2" placeholder="Label|URL">${esc((task.external_links || []).map((l) => `${l.label || ''}|${l.url || ''}`).join('\n'))}</textarea></div>
+      <div class="form-field"><label>Custom Fields</label><textarea id="task-edit-custom" rows="2" placeholder="key=value">${esc(Object.entries(task.custom_fields || {}).map(([k, v]) => `${k}=${v}`).join('\n'))}</textarea></div>
 
       <div class="drawer-grid-2">
         <div class="form-field"><label>Assignee Type</label>
@@ -5799,25 +5953,13 @@ function openTaskDrawer(taskId) {
             <option value="unassigned" ${task.assignee_type === 'unassigned' ? 'selected' : ''}>Unassigned</option>
           </select>
         </div>
-        <div class="form-field ${task.assignee_type !== 'agent' ? 'hidden' : ''}" id="task-edit-assignee-agent-wrap"><label>Assignee Agent</label>
-          <select id="task-edit-assignee-agent">${meta.agents.map((a) => `<option value="${esc(a.id)}" ${a.id === task.assignee_id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>
-        </div>
-        <div class="form-field ${task.assignee_type !== 'human' ? 'hidden' : ''}" id="task-edit-assignee-human-wrap"><label>Human Assignee Label</label>
-          <input id="task-edit-assignee-human-label" value="${esc(task.human_assignee_label || '')}" placeholder="Optional display name">
-        </div>
+        <div class="form-field ${task.assignee_type !== 'agent' ? 'hidden' : ''}" id="task-edit-assignee-agent-wrap"><label>Assignee Agent</label><select id="task-edit-assignee-agent">${meta.agents.map((a) => `<option value="${esc(a.id)}" ${a.id === task.assignee_id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select></div>
+        <div class="form-field ${task.assignee_type !== 'human' ? 'hidden' : ''}" id="task-edit-assignee-human-wrap"><label>Human Assignee Label</label><input id="task-edit-assignee-human-label" value="${esc(task.human_assignee_label || '')}" placeholder="Full name"></div>
       </div>
+      <div class="drawer-actions" style="margin-top:-8px;margin-bottom:4px;"><button class="btn btn-ghost btn-small" id="task-assign-me">Assign to me</button></div>
 
-      <div class="drawer-section">
-        <div class="section-title">Subtasks</div>
-        <div id="subtasks-wrap">
-          ${renderSubtasks()}
-        </div>
-      </div>
-
-      <div class="drawer-actions" style="margin-bottom:16px;">
-        <button id="task-edit-save" class="btn btn-primary">Save Task</button>
-        <button id="task-edit-delete" class="btn btn-ghost" style="color:var(--apricot-deep)">Delete Task</button>
-      </div>
+      <div class="drawer-section"><div class="section-title">Subtasks</div><div id="subtasks-wrap">${renderSubtasks()}</div></div>
+      <div class="drawer-actions" style="margin-bottom:16px;"><button id="task-edit-delete" class="btn btn-ghost" style="color:var(--apricot-deep)">Delete Task</button></div>
 
       <div class="drawer-section">
         <div class="section-title">Execution Controls</div>
@@ -5827,143 +5969,120 @@ function openTaskDrawer(taskId) {
           <button class="btn btn-ghost btn-small" data-task-retry>Retry</button>
         </div>
         <div>${execStateBadge(task.execution?.state || 'none')}</div>
-        ${artifactEntries.length ? `<div style="margin-top:10px;display:flex;flex-direction:column;gap:6px">
-          ${artifactEntries.slice(0, 12).map((entry) => `<a class="chip" data-task-artifact="${esc(entry.key)}" style="text-decoration:none;display:inline-flex;justify-content:space-between;gap:8px" href="${esc(boardArtifactHref(task.id, entry.attemptId, entry.relPath, entry.artifactId))}" target="_blank" rel="noopener noreferrer"><span>${esc(entry.name)}</span><span class="mono-label">${esc(entry.attemptId.slice(0, 8))}</span></a>`).join('')}
-          ${artifactEntries.length > 12 ? `<span class="stat-note">+${artifactEntries.length - 12} more artifacts on older attempts.</span>` : ''}
-        </div>` : '<div class="stat-note" style="margin-top:10px">No linked artifacts yet.</div>'}
+        ${artifactEntries.length ? `<div style="margin-top:10px;display:flex;flex-direction:column;gap:6px">${artifactEntries.slice(0, 12).map((entry) => `<a class="chip" style="text-decoration:none;display:inline-flex;justify-content:space-between;gap:8px" href="${esc(boardArtifactHref(task.id, entry.attemptId, entry.relPath, entry.artifactId))}" target="_blank" rel="noopener noreferrer"><span>${esc(entry.name)}</span><span class="mono-label">${esc(entry.attemptId.slice(0, 8))}</span></a>`).join('')}${artifactEntries.length > 12 ? `<span class="stat-note">+${artifactEntries.length - 12} more artifacts on older attempts.</span>` : ''}</div>` : '<div class="stat-note" style="margin-top:10px">No linked artifacts yet.</div>'}
       </div>
 
-      ${updates.length ? `<div class="drawer-section"><div class="section-title">Execution Feed</div>
-        <div style="display:flex;flex-direction:column;gap:6px;max-height:200px;overflow-y:auto;padding-right:4px;">
-          ${updates.map(u => `
-            <div style="font-size:11px;padding:6px;background:var(--bg-layer);border-radius:4px;">
-              <div style="display:flex;justify-content:space-between;margin-bottom:2px;color:var(--text-muted)">
-                <span>${esc(u.source || 'system')}</span>
-                <span>${timeAgo(Date.parse(u.timestamp))}</span>
-              </div>
-              <div><strong style="color:var(--text-normal)">${esc(u.state)}:</strong> ${esc(u.summary)}</div>
-            </div>
-          `).join('')}
-        </div>
-      </div>` : ''}
-
+      ${updates.length ? `<div class="drawer-section"><div class="section-title">Execution Feed</div><div style="display:flex;flex-direction:column;gap:6px;max-height:200px;overflow-y:auto;padding-right:4px;">${updates.map((u) => `<div style="font-size:11px;padding:6px;background:var(--bg);border-radius:4px;"><div style="display:flex;justify-content:space-between;margin-bottom:2px;color:var(--muted)"><span>${esc(u.source || 'system')}</span><span>${timeAgo(Date.parse(u.timestamp || Date.now()))}</span></div><div><strong style="color:var(--headline)">${esc(u.state)}:</strong> ${esc(u.summary || '')}</div></div>`).join('')}</div></div>` : ''}
       ${canReview ? `<div class="drawer-section"><div class="section-title">Review</div><div class="tag-row"><button class="btn btn-small" data-review-approve>Approve</button><button class="btn btn-ghost btn-small" data-review-changes>Request changes</button></div></div>` : ''}
     </div>
   `);
-  
-  const drawer = $('#drawer');
-  bindSubtasks(drawer);
 
-  const typeEl = $('#task-edit-assignee-type', drawer);
-  typeEl?.addEventListener('change', () => {
-    const type = typeEl.value;
+  const drawer = $('#drawer');
+  const wireImmediate = (selector, cb) => $(selector, drawer)?.addEventListener('change', cb);
+  const wireDebounced = (selector, cb) => $(selector, drawer)?.addEventListener('input', cb);
+
+  const syncAssigneeVisibility = () => {
+    const type = $('#task-edit-assignee-type', drawer)?.value || 'agent';
     $('#task-edit-assignee-agent-wrap', drawer)?.classList.toggle('hidden', type !== 'agent');
     $('#task-edit-assignee-human-wrap', drawer)?.classList.toggle('hidden', type !== 'human');
-  });
-
-  $('#task-edit-save', drawer)?.addEventListener('click', async () => {
-    const ops = [];
-    const t = $('#task-edit-title', drawer)?.value.trim();
-    const d = $('#task-edit-desc', drawer)?.value.trim();
-    const s = $('#task-edit-status', drawer)?.value;
-    const p = $('#task-edit-priority', drawer)?.value;
-    const w = $('#task-edit-workflow', drawer)?.value || null;
-    const loc = $('#task-edit-location', drawer)?.value || 'inbox';
-    let pId = null;
-    let actId = null;
-        if (loc === 'inbox') {
-      if (task.project_id) ops.push({ op: 'set_project_id', value: null });
-      if (task.activity_id) ops.push({ op: 'set_activity_id', value: null });
-    } else if (loc.startsWith('project:')) {
-      const pid = loc.slice(8);
-      if (task.project_id !== pid) ops.push({ op: 'set_project_id', value: pid });
-      if (task.activity_id) ops.push({ op: 'set_activity_id', value: null });
-    } else if (loc.startsWith('activity:')) {
-      const aid = loc.slice(9);
-      if (task.activity_id !== aid) ops.push({ op: 'set_activity_id', value: aid });
-      if (task.project_id) ops.push({ op: 'set_project_id', value: null });
+  };
+  const pushAssigneeUpdate = (debounced = false) => {
+    const type = $('#task-edit-assignee-type', drawer)?.value || 'agent';
+    let payload = { assignee_type: type, assignee_id: null, human_assignee_label: null };
+    if (type === 'agent') {
+      payload.assignee_id = $('#task-edit-assignee-agent', drawer)?.value || null;
+    } else if (type === 'human') {
+      const human = deriveHumanAssignee(task, $('#task-edit-assignee-human-label', drawer)?.value || '');
+      payload.assignee_id = human.assignee_id;
+      payload.human_assignee_label = human.human_assignee_label;
     }
-    
-    const aType = typeEl?.value;
-    let aId = null;
-    let hLabel = null;
-    
-    if (aType === 'agent') aId = $('#task-edit-assignee-agent', drawer)?.value || null;
-    else if (aType === 'human') {
-      aId = null;
-      hLabel = $('#task-edit-assignee-human-label', drawer)?.value.trim() || null;
-    }
+    if (debounced) patcher.pushChangeDebounced('set_assignee', payload);
+    else patcher.pushChange('set_assignee', payload);
+  };
 
-    const wt = normalizeWorkType($('#task-edit-work-type', drawer)?.value);
-    const tags = $('#task-edit-tags', drawer)?.value.split(',').map(s => s.trim()).filter(Boolean) || [];
-    const sp = $('#task-edit-sprint', drawer)?.value.trim() || null;
-    const pts = $('#task-edit-points', drawer)?.value ? Number($('#task-edit-points', drawer).value) : null;
-    const comp = normalizeCompletionPercent($('#task-edit-completion', drawer)?.value, task.completion_percent ?? 0);
-    const deps = $('#task-edit-dependencies', drawer)?.value.split(',').map(s => s.trim()).filter(Boolean) || [];
-    const linksRaw = $('#task-edit-links', drawer)?.value.trim();
-    const links = linksRaw ? linksRaw.split('\n').map(l => { const [label, url] = l.split('|'); return { label: label?.trim() || '', url: url?.trim() || '' }; }).filter(l => l.url) : [];
-    const customRaw = $('#task-edit-custom', drawer)?.value.trim();
-    const customFields = {};
-    if (customRaw) {
-      customRaw.split('\n').forEach(line => {
-        const [k, ...vArr] = line.split('=');
-        if (k) {
-          const v = vArr.join('=').trim();
-          let parsed = v;
-          if (v === 'true') parsed = true;
-          else if (v === 'false') parsed = false;
-          else if (v === 'null') parsed = null;
-          else if (!isNaN(Number(v)) && v !== '') parsed = Number(v);
-          customFields[k.trim()] = parsed;
-        }
+  const bindSubtasks = () => {
+    const wrap = $('#subtasks-wrap', drawer);
+    if (!wrap) return;
+    wrap.innerHTML = renderSubtasks();
+    $$('.subtask-row', wrap).forEach((row, idx) => {
+      const stId = row.dataset.subtaskId;
+      const st = currentSubtasks.find((x) => x.id === stId);
+      if (!st) return;
+      $('.subtask-toggle', row)?.addEventListener('change', (e) => {
+        st.completed = e.target.checked;
+        patcher.pushChange('set_subtasks', currentSubtasks);
       });
-    }
-
-    if (t && t !== task.title) ops.push({ op: 'set_title', value: t });
-    if (d !== (task.description || '')) ops.push({ op: 'set_description', value: d });
-    if (s && s !== task.status) ops.push({ op: 'set_status', value: s });
-    if (p && p !== task.priority) ops.push({ op: 'set_priority', value: p });
-    if (w !== task.workflow_id) ops.push({ op: 'set_workflow_id', value: w });
-    
-    if (wt !== task.work_type) ops.push({ op: 'set_work_type', value: wt });
-    if (sp !== task.sprint) ops.push({ op: 'set_sprint', value: sp });
-    if (pts !== task.story_points) ops.push({ op: 'set_story_points', value: pts });
-    if (comp !== normalizeCompletionPercent(task.completion_percent, 0)) ops.push({ op: 'set_completion_percent', value: comp });
-    
-    // Arrays and Objects
-    if (JSON.stringify(tags) !== JSON.stringify(task.component_tags || [])) ops.push({ op: 'set_component_tags', value: tags });
-    if (JSON.stringify(deps) !== JSON.stringify(task.dependencies || [])) ops.push({ op: 'set_dependencies', value: deps });
-    if (JSON.stringify(links) !== JSON.stringify(task.external_links || [])) ops.push({ op: 'set_external_links', value: links });
-    if (JSON.stringify(customFields) !== JSON.stringify(task.custom_fields || {})) ops.push({ op: 'set_custom_fields', value: customFields });
-    
-    const newDueYmd = $('#task-edit-due', drawer)?.value || '';
-    if (isoToLocalDateInput(task.due_at) !== newDueYmd) ops.push({ op: 'set_due_at', value: dateToLocalEndISO(newDueYmd) });
-    
-    if (aType !== task.assignee_type || aId !== task.assignee_id || hLabel !== task.human_assignee_label) {
-      ops.push({ op: 'set_assignee', value: { assignee_type: aType, assignee_id: aId, human_assignee_label: hLabel } });
-    }
-
-    // Compare subtasks
-    const cleanCurrent = currentSubtasks
-      .filter((st) => st.text.trim() !== '')
-      .map((st) => ({ id: st.id, text: st.text, completed: Boolean(st.completed), order: st.order }));
-    if (JSON.stringify(cleanCurrent) !== originalSubtasksJson) {
-      ops.push({ op: 'set_subtasks', value: cleanCurrent });
-    }
-
-    if (!ops.length) return closeDrawer();
-
-    try {
-      const updated = await boardApi(`/api/tasks/${encodeURIComponent(task.id)}`, {
-        method: 'PATCH',
-        body: { version: task.version, ops },
+      $('.subtask-text', row)?.addEventListener('input', (e) => {
+        st.text = e.target.value;
+        patcher.pushChangeDebounced('set_subtasks', currentSubtasks);
       });
-      applyTaskToState(updated);
-      closeDrawer();
-      toast('TASK UPDATED');
-      refreshProjectsView();
-    } catch (e) { toast((e.message || 'UPDATE FAILED').toUpperCase(), true); }
+      $('.subtask-up', row)?.addEventListener('click', () => {
+        if (idx <= 0) return;
+        [currentSubtasks[idx - 1], currentSubtasks[idx]] = [currentSubtasks[idx], currentSubtasks[idx - 1]];
+        currentSubtasks.forEach((item, i) => { item.order = i; });
+        bindSubtasks();
+        patcher.pushChange('set_subtasks', currentSubtasks);
+      });
+      $('.subtask-down', row)?.addEventListener('click', () => {
+        if (idx >= currentSubtasks.length - 1) return;
+        [currentSubtasks[idx + 1], currentSubtasks[idx]] = [currentSubtasks[idx], currentSubtasks[idx + 1]];
+        currentSubtasks.forEach((item, i) => { item.order = i; });
+        bindSubtasks();
+        patcher.pushChange('set_subtasks', currentSubtasks);
+      });
+      $('.subtask-del', row)?.addEventListener('click', () => {
+        currentSubtasks = currentSubtasks.filter((item) => item.id !== stId);
+        currentSubtasks.forEach((item, i) => { item.order = i; });
+        bindSubtasks();
+        patcher.pushChange('set_subtasks', currentSubtasks);
+      });
+    });
+    $('#btn-add-subtask', wrap)?.addEventListener('click', () => {
+      currentSubtasks.push({ id: `st_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, text: '', completed: false, order: currentSubtasks.length });
+      bindSubtasks();
+      patcher.pushChange('set_subtasks', currentSubtasks);
+    });
+  };
+
+  wireImmediate('#task-edit-location', (e) => {
+    const val = e.target.value || 'inbox';
+    if (val === 'inbox') {
+      patcher.pushChange('set_project_id', null);
+      patcher.pushChange('set_activity_id', null);
+      return;
+    }
+    if (val.startsWith('project:')) {
+      patcher.pushChange('set_project_id', val.slice(8));
+      patcher.pushChange('set_activity_id', null);
+      return;
+    }
+    if (val.startsWith('activity:')) {
+      patcher.pushChange('set_activity_id', val.slice(9));
+      patcher.pushChange('set_project_id', null);
+    }
   });
+  wireDebounced('#task-edit-title', (e) => patcher.pushChangeDebounced('set_title', e.target.value));
+  wireDebounced('#task-edit-desc', (e) => patcher.pushChangeDebounced('set_description', e.target.value));
+  wireImmediate('#task-edit-status', (e) => patcher.pushChange('set_status', e.target.value));
+  wireImmediate('#task-edit-priority', (e) => patcher.pushChange('set_priority', e.target.value));
+  wireDebounced('#task-edit-work-type', (e) => patcher.pushChangeDebounced('set_work_type', normalizeWorkType(e.target.value)));
+  wireImmediate('#task-edit-points', (e) => patcher.pushChange('set_story_points', e.target.value ? Number(e.target.value) : null));
+  wireDebounced('#task-edit-sprint', (e) => patcher.pushChangeDebounced('set_sprint', e.target.value.trim() || null));
+  wireImmediate('#task-edit-completion', (e) => patcher.pushChange('set_completion_percent', normalizeCompletionPercent(e.target.value, task.completion_percent ?? 0)));
+  wireImmediate('#task-edit-workflow', (e) => patcher.pushChange('set_workflow_id', e.target.value || null));
+  wireImmediate('#task-edit-due', (e) => patcher.pushChange('set_due_at', dateToLocalEndISO(e.target.value || '')));
+  wireDebounced('#task-edit-dependencies', (e) => patcher.pushChangeDebounced('set_dependencies', String(e.target.value || '').split(',').map((s) => s.trim()).filter(Boolean)));
+  wireDebounced('#task-edit-tags', (e) => patcher.pushChangeDebounced('set_component_tags', String(e.target.value || '').split(',').map((s) => s.trim()).filter(Boolean)));
+  wireDebounced('#task-edit-links', (e) => patcher.pushChangeDebounced('set_external_links', parseLinksInput(e.target.value)));
+  wireDebounced('#task-edit-custom', (e) => patcher.pushChangeDebounced('set_custom_fields', parseCustomFieldsInput(e.target.value)));
+
+  wireImmediate('#task-edit-assignee-type', () => {
+    syncAssigneeVisibility();
+    pushAssigneeUpdate(false);
+  });
+  wireImmediate('#task-edit-assignee-agent', () => pushAssigneeUpdate(false));
+  wireDebounced('#task-edit-assignee-human-label', () => pushAssigneeUpdate(true));
+  $('#task-assign-me', drawer)?.addEventListener('click', () => patcher.pushOp({ op: 'assign_to_me' }));
 
   $('#task-edit-delete', drawer)?.addEventListener('click', async () => {
     if (!confirm('Are you sure you want to delete this task? This cannot be undone.')) return;
@@ -5976,7 +6095,9 @@ function openTaskDrawer(taskId) {
       closeDrawer();
       toast('TASK DELETED');
       refreshProjectsView();
-    } catch (e) { toast((e.message || 'DELETE FAILED').toUpperCase(), true); }
+    } catch (e) {
+      toast((e.message || 'DELETE FAILED').toUpperCase(), true);
+    }
   });
 
   $('[data-task-run]', drawer)?.addEventListener('click', () => runTaskExecution(task, 'run'));
@@ -5987,7 +6108,9 @@ function openTaskDrawer(taskId) {
       const updated = await boardApi(`/api/tasks/${encodeURIComponent(task.id)}/review/decision`, { method: 'POST', body: { version: task.version, decision: 'approve' } });
       applyTaskToState(updated);
       openTaskDrawer(task.id);
-    } catch (e) { toast((e.message || 'REVIEW FAILED').toUpperCase(), true); }
+    } catch (e) {
+      toast((e.message || 'REVIEW FAILED').toUpperCase(), true);
+    }
   });
   $('[data-review-changes]', drawer)?.addEventListener('click', async () => {
     const reason = window.prompt('Reason for requested changes (optional):', '') || '';
@@ -5995,8 +6118,13 @@ function openTaskDrawer(taskId) {
       const updated = await boardApi(`/api/tasks/${encodeURIComponent(task.id)}/review/decision`, { method: 'POST', body: { version: task.version, decision: 'request_changes', reason } });
       applyTaskToState(updated);
       openTaskDrawer(task.id);
-    } catch (e) { toast((e.message || 'REVIEW FAILED').toUpperCase(), true); }
+    } catch (e) {
+      toast((e.message || 'REVIEW FAILED').toUpperCase(), true);
+    }
   });
+
+  syncAssigneeVisibility();
+  bindSubtasks();
 }
 
 function paintProjects() {
@@ -6555,6 +6683,13 @@ function paintProjects() {
 
 const chatFrameState = { frame: null, ready: false, pendingRuntimeConfig: null, pendingPreset: null };
 
+function markChatReady(ready) {
+  chatFrameState.ready = Boolean(ready);
+  const holder = document.getElementById('chat-holder');
+  if (!holder) return;
+  if (chatFrameState.ready) holder.querySelector('.chat-offline-note')?.remove();
+}
+
 function chatSlug(agentId) {
   return CHAT_AGENT_MAP[agentId] || 'danny';
 }
@@ -6564,7 +6699,7 @@ window.addEventListener('message', (e) => {
   if (e.source !== chatFrameState.frame?.contentWindow) return;
   const data = e.data || {};
   if (data.type === 'steadymade-chat-ready') {
-    chatFrameState.ready = true;
+    markChatReady(true);
     flushPendingChatMessages();
     return;
   }
@@ -6615,19 +6750,16 @@ function renderChat() {
   if (!holder) return;
 
   if (!chatFrameState.frame) {
-    chatFrameState.ready = false;
+    markChatReady(false);
     holder.innerHTML = `<div class="chat-offline-note">
       <strong>Chat runtime:</strong> embedded from <code>${esc(CHAT_URL)}</code>.
-      If this area stays blank, run <code>node chat/server.mjs</code> or restart with <code>node scripts/start.mjs</code>.
+      Waiting for chat runtime handshake from <code>chat.localhost</code>. If this persists, restart with <code>node scripts/start.mjs</code>.
     </div>`;
     const frame = document.createElement('iframe');
     frame.className = 'chat-frame';
     frame.src = CHAT_URL;
     frame.title = 'Steadymade Danny Chat';
     frame.allow = 'clipboard-write';
-    frame.addEventListener('load', () => {
-      holder.querySelector('.chat-offline-note')?.remove();
-    });
     holder.appendChild(frame);
     chatFrameState.frame = frame;
   }
@@ -6650,93 +6782,54 @@ function renderChat() {
 // ---------------------------------------------------------------- go
 
 async function renderDesk(el) {
-  el.innerHTML = `<div class="desk-shell"><div class="desk-header"><div class="section-title">My Desk</div></div><div class="stat-note">Loading tasks…</div></div>`;
+  deskState.el = el;
+  const seq = ++deskState.seq;
+  el.innerHTML = `<div class="view-pad"><div class="desk-shell"><div class="desk-header"><div class="section-title">My Desk</div></div><div class="stat-note">Loading tasks…</div></div></div>`;
   try {
-    const [tasksData, projectsData, activitiesData] = await Promise.all([
-      fetchBoardListAll('/api/tasks').catch(() => []),
-      projectState.projects.length ? Promise.resolve(projectState.projects) : fetchBoardListAll('/api/projects', { limit: 200 }).catch(() => []),
-      projectState.activity.length ? Promise.resolve(projectState.activity) : fetchBoardListAll('/api/activities', { limit: 200 }).catch(() => [])
+    const [tasksData, projectsData, activitiesData, taskListsData] = await Promise.all([
+      fetchBoardListAll('/api/tasks', { query: { desk_scope: 'my_desk' } }).catch(() => []),
+      fetchBoardListAll('/api/projects', { limit: 200 }).catch(() => []),
+      fetchBoardListAll('/api/activities', { limit: 200 }).catch(() => []),
+      fetchBoardListAll('/api/task-lists', { limit: 200 }).catch(() => [])
     ]);
-    if (projectsData && projectsData.length && !projectState.projects.length) projectState.projects = projectsData;
-    if (activitiesData && activitiesData.length && !projectState.activity.length) projectState.activity = activitiesData;
-    
+    if (seq !== deskState.seq) return;
+
+    projectState.projects = Array.isArray(projectsData) ? projectsData : [];
+    projectState.activity = Array.isArray(activitiesData) ? activitiesData : [];
+    projectState.taskLists = Array.isArray(taskListsData) ? taskListsData : (taskListsData?.items || []);
+
     const allTasks = Array.isArray(tasksData) ? tasksData : (tasksData.items || tasksData.tasks || []);
-    
-    const existingIds = new Set(projectState.tasks.map(t => t.id));
-    for (const t of allTasks) {
-      if (!existingIds.has(t.id)) projectState.tasks.push(t);
-    }
-    
-    const uid = state.system?.user?.id || 'allan'; 
-    const myTasks = allTasks.filter(t => t.assignee_id === uid || (t.review?.required && t.review?.state === 'needs_review') || (!t.project_id && !t.activity_id && !t.assignee_id));
-    
+
+    const byId = new Map(projectState.tasks.map((task) => [task.id, task]));
+    allTasks.forEach((task) => byId.set(task.id, task));
+    projectState.tasks = [...byId.values()];
+
+    const myTasks = allTasks; // desk_scope=my_desk already scopes to assigned desk tasks
     const now = new Date();
-    
-    let inboxTasks = [];
-    let todayTasks = [];
-    let overdueTasks = [];
-    let waitingTasks = [];
-    let completedTasks = [];
-    let upcomingTasks = [];
-    let importantTasks = [];
-    let totalOpen = 0;
-    
-    for (const t of myTasks) {
-      const isDone = ['done', 'completed', 'delivered'].includes(t.status);
-      if (isDone) completedTasks.push(t);
-      else totalOpen++;
-      
-      if (!t.project_id && !t.activity_id) inboxTasks.push(t);
-      if (t.priority === 'high' || t.priority === 'urgent') importantTasks.push(t);
-      
-      if (t.status === 'blocked' || (t.review?.required && t.review?.state === 'needs_review')) {
-        waitingTasks.push(t);
-      }
-      
-      if (t.due_at && !isDone) {
-        const d = new Date(t.due_at);
-        const diff = (d - now) / (1000 * 60 * 60 * 24);
-        if (diff < 0) overdueTasks.push(t);
-        else if (diff <= 1) todayTasks.push(t);
-        else upcomingTasks.push(t);
-      }
-    }
-    
-    const ratioCompleted = completedTasks.length;
-    const totalAll = completedTasks.length + totalOpen;
-    const ratioPercent = totalAll > 0 ? Math.round((ratioCompleted / totalAll) * 100) : 0;
-    
-    state.deskFilter = state.deskFilter || 'focus';
-    
-    const renderFilter = (id, label) => `
-      <button class="desk-filter-chip ${state.deskFilter === id ? 'active' : ''}" data-desk-filter="${id}">${label}</button>
-    `;
-    
-    let displayTasks = [];
-    if (state.deskFilter === 'focus') {
-      displayTasks = [...overdueTasks, ...todayTasks, ...importantTasks.filter(t => !['done','completed','delivered'].includes(t.status))];
-      // deduplicate
-      displayTasks = Array.from(new Map(displayTasks.map(t => [t.id, t])).values());
-    } else if (state.deskFilter === 'inbox') displayTasks = inboxTasks;
-    else if (state.deskFilter === 'today') displayTasks = todayTasks;
-    else if (state.deskFilter === 'upcoming') displayTasks = upcomingTasks;
-    else if (state.deskFilter === 'important') displayTasks = importantTasks;
-    else if (state.deskFilter === 'waiting') displayTasks = waitingTasks;
-    else if (state.deskFilter === 'completed') displayTasks = completedTasks;
-    
+    const derived = deriveDeskData(myTasks, now);
+    state.deskViewMode = state.deskViewMode || 'compact';
+    state.deskFilters = normalizeDeskFilters(state.deskFilters || DEFAULT_DESK_FILTERS);
+    const df = state.deskFilters;
+
+    const rGroup = (grp, val, lbl) => `
+      <button class="desk-filter-btn ${df[grp] === val ? 'active' : ''}" data-desk-filter-group="${grp}" data-desk-filter-value="${val}">${lbl}</button>`;
+
     const qDesk = (state.deskSearch || '').toLowerCase();
-    if (qDesk) {
-      displayTasks = displayTasks.filter(t => (t.title + ' ' + (t.description || '')).toLowerCase().includes(qDesk));
-    }
-    
+    const filteredState = deriveDeskFilterState(myTasks, { filters: df, now, query: qDesk });
+    const displayTasks = filteredState.activeTasks;
+    const dashboardCounts = deriveDeskDashboardCounts(myTasks, { filters: df, now });
+    const activeCount = filteredState.activeCount;
+    const totalCount = filteredState.totalCount;
+
     const renderGroup = (title, arr) => {
-      if (!arr.length) return '';
+      const isDetailed = state.deskViewMode === 'detailed';
       return `
-        <div class="desk-group">
-          <div class="desk-group-header">
+        <details class="desk-group" open>
+          <summary class="desk-group-header" style="cursor:pointer; user-select:none; list-style:none;">
+            <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transition: transform 0.2s;"><polyline points="9 18 15 12 9 6"></polyline></svg>
             ${title} <span class="desk-group-count">(${arr.length})</span>
-          </div>
-          <div class="desk-task-list">
+          </summary>
+          ${arr.length ? `<div class="desk-task-list">
             ${arr.map(t => {
               let ctx = 'Inbox';
               if (t.project_id) {
@@ -6746,63 +6839,146 @@ async function renderDesk(el) {
                 const a = projectState.activity.find(a => a.id === t.activity_id);
                 ctx = a ? a.name : `Activity ${t.activity_id}`;
               }
-              const isDone = ['done', 'completed', 'delivered'].includes(t.status);
+              const isDone = isDeskTaskCompleted(t);
               const isOverdue = t.due_at && Date.parse(t.due_at) < Date.now() && !isDone;
               
+              let dueHtml = '';
+              if (t.due_at) {
+                const d = new Date(t.due_at);
+                const isToday = d.getDate() === now.getDate() && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+                dueHtml = `<span class="desk-task-due ${isOverdue ? 'overdue' : ''} ${!isOverdue && !isDone ? 'upcoming' : ''}">${isToday ? 'Today' : esc(d.toLocaleDateString(undefined, {month:'short', day:'numeric'}))}</span>`;
+              }
+              
+              let subtasksHtml = '';
+              if (isDetailed && t.subtasks && t.subtasks.length > 0) {
+                subtasksHtml = `<div class="desk-task-subtasks">${t.subtasks.map(st => `
+                  <div class="desk-inline-subtask ${st.completed ? 'completed' : ''}" data-subtask-id="${esc(st.id)}">
+                    <input type="checkbox" class="desk-inline-subtask-checkbox" ${st.completed ? 'checked' : ''} tabindex="-1">
+                    <span class="desk-inline-subtask-text">${esc(st.text)}</span>
+                  </div>
+                `).join('')}</div>`;
+              }
+              
               return `
-              <div class="desk-task-row ${isDone ? 'is-completed' : ''}" tabindex="0" role="button" data-desk-task-id="${esc(t.id)}">
-                <input type="checkbox" aria-label="Mark task ${isDone ? 'incomplete' : 'complete'}" class="desk-task-checkbox" ${isDone ? 'checked' : ''} tabindex="-1">
-                <div class="desk-task-content">
-                  <div class="desk-task-title" title="${esc(t.title)}">${esc(t.title)}</div>
-                  <div class="desk-task-meta">
-                    <span class="desk-task-status">${esc(statusLabel(t.status || 'todo'))}</span>
-                    <span class="desk-task-context">${esc(ctx)}</span>
-                    ${t.due_at ? `<span class="desk-task-due ${isOverdue ? 'overdue' : ''} ${!isOverdue && !isDone ? 'upcoming' : ''}">${esc(new Date(t.due_at).toLocaleDateString(undefined, {month:'short', day:'numeric'}))}</span>` : ''}
+              <div class="desk-task-row ${isDone ? 'is-completed' : ''} ${isDetailed ? 'detailed' : ''}" tabindex="0" role="button" data-desk-task-id="${esc(t.id)}">
+                <div class="desk-task-main">
+                  <input type="checkbox" aria-label="Mark task ${isDone ? 'incomplete' : 'complete'}" class="desk-task-checkbox" ${isDone ? 'checked' : ''} tabindex="-1">
+                  <div class="desk-task-content">
+                    <div class="desk-task-title" title="${esc(t.title)}">${esc(t.title)}</div>
+                    <div class="desk-task-meta">
+                      <span class="desk-task-status">${esc(statusLabel(t.status || 'todo'))}</span>
+                      <span class="desk-task-context">${esc(ctx)}</span>
+                      ${getDeskTaskListId(t) && projectState.taskLists ? `<span class="desk-task-context">List: ${esc(projectState.taskLists.find((l) => l.id === getDeskTaskListId(t))?.name || 'Unknown')}</span>` : ''}
+                      ${dueHtml}
+                    </div>
                   </div>
                 </div>
+                ${subtasksHtml}
               </div>`;
             }).join('')}
-          </div>
-        </div>
+          </div>` : ''}
+        </details>
       `;
     };
-    
-    el.innerHTML = `
-      <div class="desk-shell">
-        <div class="desk-metrics">
-          <div class="desk-metric-card ratio-card" tabindex="0" role="button" data-desk-metric="completed">
-            <div class="desk-metric-label">Completion</div>
-            <div class="desk-metric-value">${ratioPercent}%</div>
+
+    const scopedCategory = df.type === 'personal' || df.type === 'project'
+      ? df.type
+      : null;
+    const scopedCategoryTitle = scopedCategory ? ` · ${statusLabel(scopedCategory).toUpperCase()}` : '';
+    const dueTodayCount = dashboardCounts.timeCounts.today;
+    const overdueCount = dashboardCounts.timeCounts.overdue;
+    const waitingCount = dashboardCounts.statusCounts.waiting;
+
+    const grouped = groupDeskTasks(displayTasks, {
+      taskLists: projectState.taskLists,
+      projects: projectState.projects,
+      activities: projectState.activity,
+    });
+
+    const inboxHtml = grouped.inbox.length ? renderGroup('Inbox', grouped.inbox) : '';
+    const personalGroupsHtml = grouped.personalGroups.map((group) => renderGroup(group.name, group.tasks)).join('');
+    const projectGroupsHtml = grouped.projectGroups.map((group) => renderGroup(group.name, group.tasks)).join('');
+    const hasVisibleGroups = Boolean(inboxHtml || personalGroupsHtml || projectGroupsHtml);
+
+    el.innerHTML = `<div class="view-pad"><div class="desk-shell">
+        <div class="desk-stats-grid" style="margin-bottom:0;">
+          <div class="desk-combo-card">
+            <div class="desk-combo-main" tabindex="0" role="button" data-desk-metric="all">
+              <div class="mono-label" >MY TASKS</div>
+              <div class="stat-value">${activeCount} of ${totalCount}</div>
+            </div>
+            <div class="desk-combo-sub">
+              <button class="desk-combo-btn" data-desk-metric="inbox">
+                <span class="c-label">Inbox</span>
+                <span class="c-val">${dashboardCounts.typeCounts.inbox}</span>
+              </button>
+              <button class="desk-combo-btn" data-desk-metric="personal">
+                <span class="c-label">Personal</span>
+                <span class="c-val">${dashboardCounts.typeCounts.personal}</span>
+              </button>
+              <button class="desk-combo-btn" data-desk-metric="project">
+                <span class="c-label">Project</span>
+                <span class="c-val">${dashboardCounts.typeCounts.project}</span>
+              </button>
+            </div>
           </div>
-          <div class="desk-metric-card" tabindex="0" role="button" data-desk-metric="inbox">
-            <div class="desk-metric-label">Inbox</div>
-            <div class="desk-metric-value">${inboxTasks.length}</div>
+          <div class="card stat-card" tabindex="0" role="button" data-desk-metric="today">
+            <div class="mono-label">DUE TODAY${scopedCategoryTitle}</div>
+            <div class="stat-value">${dueTodayCount}</div>
           </div>
-          <div class="desk-metric-card" tabindex="0" role="button" data-desk-metric="today">
-            <div class="desk-metric-label">Due Today</div>
-            <div class="desk-metric-value">${todayTasks.length}</div>
+          <div class="card stat-card ${overdueCount ? 'warn' : ''}" tabindex="0" role="button" data-desk-metric="overdue">
+            <div class="mono-label">OVERDUE${scopedCategoryTitle}</div>
+            <div class="stat-value">${overdueCount}</div>
           </div>
-          <div class="desk-metric-card ${overdueTasks.length ? 'warn' : ''}" tabindex="0" role="button" data-desk-metric="focus">
-            <div class="desk-metric-label">Overdue</div>
-            <div class="desk-metric-value">${overdueTasks.length}</div>
-          </div>
-          <div class="desk-metric-card" tabindex="0" role="button" data-desk-metric="waiting">
-            <div class="desk-metric-label">Waiting</div>
-            <div class="desk-metric-value">${waitingTasks.length}</div>
+          <div class="card stat-card" tabindex="0" role="button" data-desk-metric="waiting">
+            <div class="mono-label">WAITING${scopedCategoryTitle}</div>
+            <div class="stat-value">${waitingCount}</div>
           </div>
         </div>
         
-        <div class="desk-controls">
-          <div class="desk-filters">
-            ${renderFilter('focus', 'Focus')}
-            ${renderFilter('inbox', 'Inbox')}
-            ${renderFilter('today', 'Today')}
-            ${renderFilter('upcoming', 'Upcoming')}
-            ${renderFilter('important', 'Important')}
-            ${renderFilter('waiting', 'Waiting')}
-            ${renderFilter('completed', 'Completed')}
+        <div class="desk-controls" style="position: sticky; top: 0; z-index: 10; background: var(--bg); padding-bottom: 12px; margin-top: 18px;">
+          <div class="filter-tabs" role="group" aria-label="Task view mode" style="margin-right: 12px;">
+            <button class="filter-tab ${state.deskViewMode === 'compact' ? 'active' : ''}" data-desk-view="compact" aria-pressed="${state.deskViewMode === 'compact'}">Compact</button>
+            <button class="filter-tab ${state.deskViewMode === 'detailed' ? 'active' : ''}" data-desk-view="detailed" aria-pressed="${state.deskViewMode === 'detailed'}">Detailed</button>
           </div>
-          
+          <div class="desk-filters-container">
+            <div class="desk-filter-segment">
+              <span class="desk-filter-label">Task Type</span>
+              <div class="desk-filter-group" role="group" aria-label="Task type">
+                ${rGroup('type', 'all', 'My Tasks')}
+                ${rGroup('type', 'inbox', 'Inbox')}
+                ${rGroup('type', 'personal', 'Personal')}
+                ${rGroup('type', 'project', 'Project')}
+              </div>
+            </div>
+            <div class="desk-filter-segment">
+              <span class="desk-filter-label">Time</span>
+              <div class="desk-filter-group" role="group" aria-label="Time">
+                ${rGroup('time', 'any', 'Any time')}
+                ${rGroup('time', 'today', 'Today')}
+                ${rGroup('time', 'overdue', 'Overdue')}
+                ${rGroup('time', 'upcoming', 'Upcoming')}
+              </div>
+            </div>
+            <div class="desk-filter-segment">
+              <span class="desk-filter-label">Importance</span>
+              <div class="desk-filter-group" role="group" aria-label="Importance">
+                ${rGroup('priority', 'any', 'Any priority')}
+                ${rGroup('priority', 'important', 'Important')}
+              </div>
+            </div>
+            <div class="desk-filter-segment">
+              <span class="desk-filter-label">State</span>
+              <div class="desk-filter-group" role="group" aria-label="State">
+                ${rGroup('status', 'open', 'Open')}
+                ${rGroup('status', 'waiting', 'Waiting')}
+                ${rGroup('status', 'completed', 'Completed')}
+              </div>
+            </div>
+            <button class="desk-filter-reset" data-desk-filter-action="reset" aria-label="Reset filters" title="Reset filters">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+            </button>
+          </div>
           <div class="desk-search-bar">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
             <input id="desk-search" type="text" placeholder="Search tasks..." value="${esc(state.deskSearch || '')}" autocomplete="off" />
@@ -6810,24 +6986,47 @@ async function renderDesk(el) {
         </div>
         
         <div class="desk-quick-capture">
-          <input id="desk-quick-capture" type="text" placeholder="Quick capture inbox task (Press Enter)" />
-          <button id="desk-quick-add" class="btn btn-primary">Add to Inbox</button>
+          <input id="desk-quick-capture" type="text" placeholder="Quick capture task..." />
+          <button id="desk-quick-add" class="btn btn-primary">Add Task</button>
         </div>
-        
-        ${renderGroup(state.deskFilter === 'focus' ? 'Focus Area' : state.deskFilter.toUpperCase(), displayTasks)}
-        ${!displayTasks.length ? '<div class="stat-note">No tasks in this view.</div>' : ''}
-      </div>
-    `;
-    
-    Array.from(el.querySelectorAll('[data-desk-filter]')).forEach(b => b.addEventListener('click', () => {
-      state.deskFilter = b.dataset.deskFilter;
+
+        ${hasVisibleGroups ? `
+          ${inboxHtml ? `<section class="desk-section"><div class="section-title" style="margin:18px 0 8px">Inbox</div>${inboxHtml}</section>` : ''}
+          ${personalGroupsHtml ? `<section class="desk-section"><div class="section-title" style="margin:18px 0 8px">Personal</div>${personalGroupsHtml}</section>` : ''}
+          ${projectGroupsHtml ? `<section class="desk-section"><div class="section-title" style="margin:18px 0 8px">Projects</div>${projectGroupsHtml}</section>` : ''}
+        ` : '<div class="stat-note" style="margin-top:18px">No tasks match the current view.</div>'}
+      </div></div>`;    
+
+    $$('[data-desk-view]', el).forEach((btn) => btn.addEventListener('click', () => {
+      if (state.deskViewMode === btn.dataset.deskView) return;
+      state.deskViewMode = btn.dataset.deskView === 'detailed' ? 'detailed' : 'compact';
       renderDesk(el);
     }));
+
+    Array.from(el.querySelectorAll('[data-desk-filter-group]')).forEach(b => b.addEventListener('click', () => {
+      state.deskFilters[b.dataset.deskFilterGroup] = b.dataset.deskFilterValue;
+      renderDesk(el);
+    }));
+    const rBtn = el.querySelector('[data-desk-filter-action="reset"]');
+    if (rBtn) rBtn.addEventListener('click', () => {
+      state.deskFilters = { ...DEFAULT_DESK_FILTERS };
+      renderDesk(el);
+    });
     
     $$('[data-desk-metric]', el).forEach(card => {
       const handleMetricClick = (e) => {
         e.preventDefault();
-        state.deskFilter = card.dataset.deskMetric;
+        const metric = card.dataset.deskMetric;
+        if (['all', 'inbox', 'personal', 'project'].includes(metric)) {
+          state.deskFilters.type = metric;
+        } else if (metric === 'today') {
+          state.deskFilters.time = 'today';
+        } else if (metric === 'overdue') {
+          state.deskFilters.time = 'overdue';
+        } else if (metric === 'waiting') {
+          state.deskFilters.status = 'waiting';
+        }
+        state.deskFilters = normalizeDeskFilters(state.deskFilters);
         renderDesk(el);
       };
       card.addEventListener('click', handleMetricClick);
@@ -6851,26 +7050,34 @@ async function renderDesk(el) {
     
     const addQuickTask = async () => {
       const val = qcap.value.trim();
-      if (!val) return;
       try {
         qcap.disabled = true;
         qadd.disabled = true;
-        await boardApi('/api/tasks', {
+        
+        const payload = { title: val || '', status: 'todo' };
+        if (state.deskFilters?.time === 'today') {
+          const d = new Date(); payload.due_at = dateToLocalEndISO(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`);
+        }
+        
+        const created = await boardApi('/api/tasks', {
           method: 'POST',
-          body: { title: val, status: 'todo' }
+          body: payload
         });
         qcap.value = '';
-        toast('ADDED TO INBOX');
+
+        projectState.tasks.push(created);
+        allTasks.push(created);
+        
         renderDesk(el);
+        openDeskTaskDrawer(created.id);
       } catch (e) {
         toast((e.message || 'FAILED TO ADD').toUpperCase(), true);
       } finally {
-        qcap.disabled = false;
-        qadd.disabled = false;
-        qcap.focus();
+        if (qcap) qcap.disabled = false;
+        if (qadd) qadd.disabled = false;
+        if (qcap) qcap.focus();
       }
     };
-    
     qcap?.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();
@@ -6883,12 +7090,44 @@ async function renderDesk(el) {
       card.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
           e.preventDefault();
-          openTaskDrawer(card.dataset.deskTaskId);
+          openDeskTaskDrawer(card.dataset.deskTaskId);
         }
       });
-      card.addEventListener('click', (e) => {
+      card.addEventListener('click', async (e) => {
         if (e.target.classList.contains('desk-task-checkbox')) return;
-        openTaskDrawer(card.dataset.deskTaskId);
+        if (e.target.classList.contains('desk-inline-subtask-checkbox')) {
+          e.stopPropagation();
+          const stEl = e.target.closest('.desk-inline-subtask');
+          if (!stEl) return;
+          const stId = stEl.dataset.subtaskId;
+          const tId = card.dataset.deskTaskId;
+          const task = allTasks.find(x => x.id === tId);
+          if (!task) return;
+          
+          const st = task.subtasks?.find(s => s.id === stId);
+          if (!st) return;
+          
+          const originalCompleted = st.completed;
+          st.completed = e.target.checked;
+          if (st.completed) stEl.classList.add('completed');
+          else stEl.classList.remove('completed');
+          
+          try {
+            await boardApi(`/api/tasks/${encodeURIComponent(task.id)}`, {
+              method: 'PATCH',
+              body: { version: task.version, ops: [{ op: 'set_subtasks', value: task.subtasks }] }
+            });
+            renderDesk(el);
+          } catch (err) {
+            st.completed = originalCompleted;
+            e.target.checked = originalCompleted;
+            if (st.completed) stEl.classList.add('completed');
+            else stEl.classList.remove('completed');
+            toast((err.message || 'SUBTASK UPDATE FAILED').toUpperCase(), true);
+          }
+          return;
+        }
+        openDeskTaskDrawer(card.dataset.deskTaskId);
       });
       
       const chk = card.querySelector('.desk-task-checkbox');
@@ -6899,7 +7138,7 @@ async function renderDesk(el) {
         const task = allTasks.find(x => x.id === tId);
         if (!task) return;
         
-        const isDone = ['done', 'completed', 'delivered'].includes(task.status);
+        const isDone = isDeskTaskCompleted(task);
         const targetStatus = isDone ? 'todo' : 'done'; // default toggle
         
         // Optimistic UI
@@ -6937,8 +7176,9 @@ async function renderDesk(el) {
         }
       });
     });
-    
+
   } catch (e) {
+    if (seq !== deskState.seq) return;
     el.innerHTML = `<div class="desk-shell"><div class="desk-header"><div class="section-title">My Desk</div></div><div class="stat-note" style="color:var(--apricot-deep)">Could not load desk: ${esc(e.message)}</div></div>`;
   }
 }
@@ -7169,4 +7409,3 @@ async function renderWorkspaces(el) {
   }
 }
 boot();
-

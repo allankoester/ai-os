@@ -14,6 +14,7 @@ import {
   PROJECT_STATUSES,
   PROJECT_VISIBILITIES,
   SCHEMA_VERSION,
+  TASK_DESK_SCOPES,
   TASK_STATUS_TRANSITIONS,
   TASK_STATUSES,
   TERMINAL_EXECUTION_STATES,
@@ -109,6 +110,20 @@ function actorIdFrom(actor) {
   return ensureId(raw || 'unknown', 'actor_id');
 }
 
+function actorDisplayNameFrom(actor) {
+  const candidate = String(actor?.name || actor?.display_name || actor?.id || '').trim();
+  return sanitizeHumanAssigneeLabel(candidate) || actorIdFrom(actor);
+}
+
+function taskListIdFromName(input) {
+  const slug = String(input || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 80);
+  return ensureId(slug || `list_${Date.now().toString(36)}`, 'id');
+}
+
 function isPathWithin(parentAbs, targetAbs) {
   const rel = path.relative(parentAbs, targetAbs);
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
@@ -196,6 +211,7 @@ function normalizeTaskShape(task) {
   try { task.dependencies = sanitizeDependencies(task.dependencies); } catch { task.dependencies = []; }
   try { task.external_links = sanitizeExternalLinks(task.external_links); } catch { task.external_links = []; }
   try { task.custom_fields = sanitizeCustomFields(task.custom_fields); } catch { task.custom_fields = {}; }
+  task.task_list_id = task.task_list_id ? String(task.task_list_id) : null;
   task.execution = task.execution && typeof task.execution === 'object' ? task.execution : {};
   task.execution.attempts = Array.isArray(task.execution.attempts) ? task.execution.attempts : [];
   task.execution.execution_updates = Array.isArray(task.execution.execution_updates) ? task.execution.execution_updates : [];
@@ -458,6 +474,21 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
     return { scope, visibility, project, activity };
   }
 
+  async function assertTaskListWritableInScope(scope, taskListId, actor) {
+    if (!taskListId) return null;
+    const listId = ensureId(taskListId, 'task_list_id');
+    if (scope !== 'private') {
+      throw boardError(422, 'validation_error', 'task_list_id is supported for private scope tasks only');
+    }
+    const list = await storage.readTaskList('private', listId);
+    if (!list) throw boardError(422, 'validation_error', 'task_list_id does not exist');
+    const actorId = actorIdFrom(actor);
+    if (String(list.owner_id || '') !== actorId) {
+      throw boardError(403, 'forbidden', 'task list access denied');
+    }
+    return list;
+  }
+
   async function auditArtifactAccess({
     actor,
     operation,
@@ -585,6 +616,9 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       if (!task.assignee_id) throw boardError(422, 'validation_error', 'assignee_id required for assignee_type=agent');
       const agents = await listCanonicalAgentIds();
       if (!agents.has(task.assignee_id)) throw boardError(422, 'unknown_assignee', `unknown agent assignee_id: ${task.assignee_id}`);
+      task.human_assignee_label = null;
+    } else if (task.assignee_type === 'unassigned') {
+      task.assignee_id = null;
       task.human_assignee_label = null;
     }
     if (task.assignee_type !== 'agent' && task.assignee_id) {
@@ -1356,6 +1390,7 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       const visibleProjects = new Set(allProjects.filter((p) => canReadProject(p, actor)).map((p) => p.id));
       const visibleActivities = new Set(allActivities.filter((a) => canReadActivity(a, actor)).map((a) => a.id));
       const actorId = actor ? actorIdFrom(actor) : null;
+      const deskScope = query?.desk_scope ? ensureEnum(String(query.desk_scope), TASK_DESK_SCOPES, 'desk_scope') : null;
       let all = sortByUpdatedDesc(allRaw.filter((t) => {
         if (t.project_id) return visibleProjects.has(t.project_id);
         if (t.activity_id) return visibleActivities.has(t.activity_id);
@@ -1363,13 +1398,32 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
         if (t.visibility === 'team') return Boolean(actor?.id);
         return actorId ? String(t.created_by || '') === actorId : true;
       }));
+      if (deskScope === 'my_desk') {
+        all = all.filter((task) => {
+          const isOwnedPrivateStandalone = Boolean(actorId)
+            && task.visibility === 'private'
+            && !task.project_id
+            && !task.activity_id
+            && String(task.created_by || '') === actorId;
+          const isHumanAssignedProjectTask = Boolean(actorId)
+            && Boolean(task.project_id)
+            && !task.activity_id
+            && task.assignee_type === 'human'
+            && String(task.assignee_id || '') === actorId;
+          return isOwnedPrivateStandalone || isHumanAssignedProjectTask;
+        });
+      }
       if (query?.project_id) all = all.filter((t) => t.project_id === query.project_id);
       if (query?.activity_id) all = all.filter((t) => t.activity_id === query.activity_id);
       if (query?.status) {
         const status = ensureEnum(String(query.status), TASK_STATUSES, 'status');
         all = all.filter((t) => t.status === status);
       }
-      if (query?.assignee_id) all = all.filter((t) => t.assignee_id === query.assignee_id);
+      if (query?.assignee_id && deskScope !== 'my_desk') all = all.filter((t) => t.assignee_id === query.assignee_id);
+      if (query?.task_list_id) {
+        const taskListId = ensureId(String(query.task_list_id), 'task_list_id');
+        all = all.filter((t) => String(t.task_list_id || '') === taskListId);
+      }
       const q = String(query?.q || '').trim().toLowerCase();
       if (q) all = all.filter((t) => t.title.toLowerCase().includes(q) || String(t.description || '').toLowerCase().includes(q));
       for (const task of all) normalizeTaskShape(task);
@@ -1378,12 +1432,119 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       return { items: asItemList(all, { limit, offset }), total: all.length };
     },
 
+    async listTaskLists(query, actor) {
+      const actorId = actorIdFrom(actor);
+      const all = await storage.listTaskLists('private', actorId);
+      const q = String(query?.q || '').trim().toLowerCase();
+      const filtered = q
+        ? all.filter((list) => list.name.toLowerCase().includes(q) || String(list.description || '').toLowerCase().includes(q))
+        : all;
+      const limit = Math.max(1, Math.min(200, Number(query?.limit || 200)));
+      const offset = Math.max(0, Number(query?.offset || 0));
+      return { items: asItemList(filtered, { limit, offset }), total: filtered.length };
+    },
+
+    async createTaskList(body, actor) {
+      const actorId = actorIdFrom(actor);
+      const now = nowIso();
+      const name = ensureLength(String(body?.name || '').trim(), 'name', 1, LIMITS.projectNameMax);
+      const id = ensureId(body?.id || taskListIdFromName(name), 'id');
+      const description = ensureLength(String(body?.description || '').trim(), 'description', 0, LIMITS.descriptionMax) || null;
+      const ordering = Number.isInteger(body?.ordering) ? body.ordering : Number.parseInt(String(body?.ordering || '0'), 10);
+      const list = {
+        id,
+        name,
+        description,
+        owner_id: actorId,
+        ordering: Number.isInteger(ordering) ? ordering : 0,
+        version: 1,
+        created_at: now,
+        created_by: actorId,
+        updated_at: now,
+        updated_by: actorId,
+      };
+      await storage.withLock(`task_list:${id}`, async () => {
+        const existing = await storage.readTaskList('private', id);
+        if (existing) throw boardError(409, 'conflict', 'task list id already exists');
+        await storage.writeTaskList('private', id, list, { expectedVersion: null });
+      });
+      return list;
+    },
+
+    async getTaskList(id, actor) {
+      const listId = ensureId(id, 'id');
+      const actorId = actorIdFrom(actor);
+      const list = await storage.readTaskList('private', listId);
+      if (!list) throw boardError(404, 'not_found', 'task list not found');
+      if (String(list.owner_id || '') !== actorId) throw boardError(403, 'forbidden', 'task list access denied');
+      return list;
+    },
+
+    async patchTaskList(id, body, actor) {
+      const listId = ensureId(id, 'id');
+      const actorId = actorIdFrom(actor);
+      const requestedVersion = Number(body?.version);
+      if (!Number.isInteger(requestedVersion) || requestedVersion < 1) {
+        throw boardError(422, 'validation_error', 'version is required');
+      }
+      return storage.withLock(`task_list:${listId}`, async () => {
+        const existing = await storage.readTaskList('private', listId);
+        if (!existing) throw boardError(404, 'not_found', 'task list not found');
+        if (String(existing.owner_id || '') !== actorId) throw boardError(403, 'forbidden', 'task list access denied');
+        if (existing.version !== requestedVersion) {
+          throw boardError(409, 'conflict', 'Version mismatch', { expected: existing.version, got: requestedVersion });
+        }
+        const next = {
+          ...existing,
+          name: body?.name === undefined ? existing.name : ensureLength(String(body.name || '').trim(), 'name', 1, LIMITS.projectNameMax),
+          description: body?.description === undefined
+            ? existing.description
+            : (ensureLength(String(body.description || '').trim(), 'description', 0, LIMITS.descriptionMax) || null),
+          ordering: body?.ordering === undefined
+            ? existing.ordering
+            : (Number.isInteger(body.ordering) ? body.ordering : Number.parseInt(String(body.ordering || '0'), 10) || 0),
+          version: existing.version + 1,
+          updated_at: nowIso(),
+          updated_by: actorId,
+        };
+        await storage.writeTaskList('private', listId, next, { expectedVersion: existing.version });
+        return next;
+      });
+    },
+
+    async deleteTaskList(id, body, actor) {
+      const listId = ensureId(id, 'id');
+      const actorId = actorIdFrom(actor);
+      const requestedVersion = Number(body?.version);
+      if (!Number.isInteger(requestedVersion) || requestedVersion < 1) {
+        throw boardError(422, 'validation_error', 'version is required');
+      }
+      return storage.withLock(`task_list:${listId}`, async () => {
+        const existing = await storage.readTaskList('private', listId);
+        if (!existing) throw boardError(404, 'not_found', 'task list not found');
+        if (String(existing.owner_id || '') !== actorId) throw boardError(403, 'forbidden', 'task list access denied');
+        if (existing.version !== requestedVersion) {
+          throw boardError(409, 'conflict', 'Version mismatch', { expected: existing.version, got: requestedVersion });
+        }
+        const result = await storage.deleteTaskList('private', listId);
+        return {
+          id: listId,
+          deleted: Boolean(result?.deleted),
+          cleared_task_count: Number(result?.clearedTaskCount || 0),
+        };
+      });
+    },
+
     async createTask(body, actor) {
       const actorId = actorIdFrom(actor);
       const task = validateTaskCreate(body);
       const container = await resolveTaskContainerForCreate(task, actor);
       await assertTeamMutationAllowed(container.scope);
       if (task.assignee_type === 'agent' && !task.assignee_id) task.assignee_id = 'danny';
+      if (task.task_list_id) {
+        task.task_list_id = ensureId(task.task_list_id, 'task_list_id');
+        await assertTaskListWritableInScope(container.scope, task.task_list_id, actor);
+      }
       task.schema_version = SCHEMA_VERSION;
       task.created_by = actorId;
       task.updated_by = actorId;
@@ -1541,12 +1702,32 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
               task.custom_fields = sanitizeCustomFields(op.value);
               break;
             case 'set_assignee': {
-              const type = ensureEnum(op?.value?.assignee_type, ASSIGNEE_TYPES, 'assignee_type');
+              const assigneeInput = (op?.value && typeof op.value === 'object') ? op.value : op;
+              const type = ensureEnum(assigneeInput?.assignee_type || assigneeInput?.type, ASSIGNEE_TYPES, 'assignee_type');
               task.assignee_type = type;
-              task.assignee_id = op?.value?.assignee_id ? ensureId(op.value.assignee_id, 'assignee_id') : null;
-              task.workflow_id = op?.value?.workflow_id ? ensureId(op.value.workflow_id, 'workflow_id') : task.workflow_id;
-              task.human_assignee_label = sanitizeHumanAssigneeLabel(op?.value?.human_assignee_label);
+              task.assignee_id = assigneeInput?.assignee_id || assigneeInput?.id
+                ? ensureId(assigneeInput.assignee_id || assigneeInput.id, 'assignee_id')
+                : null;
+              task.workflow_id = assigneeInput?.workflow_id ? ensureId(assigneeInput.workflow_id, 'workflow_id') : task.workflow_id;
+              task.human_assignee_label = sanitizeHumanAssigneeLabel(assigneeInput?.human_assignee_label || assigneeInput?.label);
               await assertCanonicalTaskRouting(task);
+              break;
+            }
+            case 'assign_to_me': {
+              task.assignee_type = 'human';
+              task.assignee_id = actorId;
+              task.human_assignee_label = actorDisplayNameFrom(actor);
+              await assertCanonicalTaskRouting(task);
+              break;
+            }
+            case 'set_task_list_id': {
+              const nextTaskListId = normalizeOptionalTaskLinkId(op.value, 'task_list_id');
+              if (!nextTaskListId) {
+                task.task_list_id = null;
+                break;
+              }
+              await assertTaskListWritableInScope(located.scope, nextTaskListId, actor);
+              task.task_list_id = nextTaskListId;
               break;
             }
             case 'set_workflow_id':
@@ -2112,9 +2293,11 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
       return storage.readAudit(located.scope, (row) => row.project_id === located.project.id || row.entity_id === located.project.id);
     },
 
-    async getMetadata() {
+    async getMetadata(actor = null) {
       const agents = [...(await listCanonicalAgentIds())].sort();
       const workflows = [...(await listCanonicalWorkflowIds())].sort();
+      const actorId = actor ? actorIdFrom(actor) : null;
+      const actorDisplayName = actor ? actorDisplayNameFrom(actor) : null;
       let teamConfigured = true;
       let teamAvailable = true;
       try {
@@ -2143,8 +2326,9 @@ export function createBoardService({ rootDir, guardrails, scheduler, storage, ge
           workflows,
         },
         defaults: {
-          assignee_type: 'agent',
-          assignee_id: 'danny',
+          assignee_type: 'human',
+          assignee_id: actorId,
+          human_assignee_label: actorDisplayName,
           visibility: 'private',
         },
         visibility: {

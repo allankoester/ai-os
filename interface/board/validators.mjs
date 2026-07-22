@@ -309,6 +309,7 @@ export function validateTaskCreate(body) {
     assignee_type: assigneeType,
     assignee_id: body?.assignee_id ? ensureId(body.assignee_id, 'assignee_id') : null,
     human_assignee_label: sanitizeHumanAssigneeLabel(body?.human_assignee_label),
+    task_list_id: normalizeOptionalId(body?.task_list_id, 'task_list_id'),
     workflow_id: body?.workflow_id ? ensureId(body.workflow_id, 'workflow_id') : null,
     subtasks: sanitizeSubtasks(body?.subtasks),
     component_tags: sanitizeComponentTags(body?.component_tags),

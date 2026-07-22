@@ -3,7 +3,6 @@
 import { execFileSync } from 'node:child_process';
 
 const PORT = Number(process.env.PORT || 4011);
-const CHAT_PORT = Number(process.env.CHAT_PORT || 4012);
 
 function unique(nums) {
   return [...new Set(nums.filter((n) => Number.isInteger(n) && n > 0))];
@@ -72,7 +71,7 @@ function stopPort(port, isWindows) {
 
 function main() {
   const isWindows = process.platform === 'win32';
-  const stopped = stopPort(PORT, isWindows) + stopPort(CHAT_PORT, isWindows);
+  const stopped = stopPort(PORT, isWindows);
 
   if (stopped === 0) {
     process.exitCode = 1;

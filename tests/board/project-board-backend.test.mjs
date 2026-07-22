@@ -11,6 +11,7 @@ import { createBoardService } from '../../interface/board/service.mjs';
 import { validateLinkedPaths } from '../../interface/board/validators.mjs';
 
 const HUMAN_ACTOR = { id: 'user_alpha', isHuman: true, isInternal: false };
+const OTHER_ACTOR = { id: 'user_bravo', isHuman: true, isInternal: false };
 const REVIEWER_ACTOR = { id: 'reviewer_alpha', isHuman: true, isInternal: false };
 const INTERNAL_ACTOR = { id: 'internal_callback', isHuman: false, isInternal: true };
 
@@ -335,6 +336,261 @@ test('task create supports activity-linked tasks and activity_id filter', async 
     assert.ok(listed.items.some((item) => item.id === task.id));
   } finally {
     await cleanupRoot(h.rootDir);
+  }
+});
+
+test('listTasks desk_scope=my_desk returns actor-scoped union and excludes non-matching tasks', async () => {
+  const h = await createHarness();
+  try {
+    const ownStandaloneA = await h.service.createTask({
+      id: 'task_desk_own_standalone_a',
+      title: 'Own standalone A',
+      assignee_type: 'unassigned',
+      status: 'todo',
+    }, HUMAN_ACTOR);
+    const ownStandaloneB = await h.service.createTask({
+      id: 'task_desk_own_standalone_b',
+      title: 'Own standalone B',
+      assignee_type: 'unassigned',
+      status: 'todo',
+    }, HUMAN_ACTOR);
+
+    const project = await h.service.createProject({ id: 'proj_desk_owned', name: 'Desk Owned Project' }, HUMAN_ACTOR);
+    const humanAssignedProjectTask = await h.service.createTask({
+      id: 'task_desk_project_human',
+      project_id: project.id,
+      title: 'Project task assigned to actor',
+      assignee_type: 'human',
+      assignee_id: HUMAN_ACTOR.id,
+      human_assignee_label: 'User Alpha',
+    }, HUMAN_ACTOR);
+
+    const agentProjectTask = await h.service.createTask({
+      id: 'task_desk_project_agent',
+      project_id: project.id,
+      title: 'Project task assigned to agent',
+      assignee_type: 'agent',
+      assignee_id: 'agent_alpha',
+      workflow_id: 'workflow_alpha',
+    }, HUMAN_ACTOR);
+    const unassignedProjectTask = await h.service.createTask({
+      id: 'task_desk_project_unassigned',
+      project_id: project.id,
+      title: 'Project task unassigned',
+      assignee_type: 'unassigned',
+      assignee_id: HUMAN_ACTOR.id,
+      human_assignee_label: 'user_alpha',
+    }, HUMAN_ACTOR);
+    const labelOnlyPseudoMatchTask = await h.service.createTask({
+      id: 'task_desk_project_label_only',
+      project_id: project.id,
+      title: 'Label only pseudo match',
+      assignee_type: 'human',
+      assignee_id: OTHER_ACTOR.id,
+      human_assignee_label: 'user_alpha',
+    }, HUMAN_ACTOR);
+
+    const activity = await h.service.createActivity({ id: 'activity_desk_alpha', name: 'Desk Activity', visibility: 'private' }, HUMAN_ACTOR);
+    const activityTask = await h.service.createTask({
+      id: 'task_desk_activity_human',
+      activity_id: activity.id,
+      title: 'Activity task assigned to actor',
+      assignee_type: 'human',
+      assignee_id: HUMAN_ACTOR.id,
+      human_assignee_label: 'User Alpha',
+    }, HUMAN_ACTOR);
+
+    const otherPersonalTask = await h.service.createTask({
+      id: 'task_desk_other_personal',
+      title: 'Other user personal task',
+      assignee_type: 'unassigned',
+      status: 'todo',
+    }, OTHER_ACTOR);
+
+    const privateProjectOwnedByOther = await h.service.createProject({
+      id: 'proj_desk_other_private',
+      name: 'Other private project',
+      visibility: 'private',
+    }, OTHER_ACTOR);
+    const privateProjectTaskAssignedToActor = await h.service.createTask({
+      id: 'task_desk_other_private_assigned',
+      project_id: privateProjectOwnedByOther.id,
+      title: 'Hidden private project task',
+      assignee_type: 'human',
+      assignee_id: HUMAN_ACTOR.id,
+      human_assignee_label: 'User Alpha',
+    }, OTHER_ACTOR);
+
+    const full = await h.service.listTasks({ desk_scope: 'my_desk' }, HUMAN_ACTOR);
+    const fullIds = full.items.map((item) => item.id);
+    assert.equal(full.total, 3);
+    assert.deepEqual(new Set(fullIds), new Set([
+      ownStandaloneA.id,
+      ownStandaloneB.id,
+      humanAssignedProjectTask.id,
+    ]));
+
+    assert.equal(fullIds.includes(agentProjectTask.id), false);
+    assert.equal(fullIds.includes(unassignedProjectTask.id), false);
+    assert.equal(fullIds.includes(labelOnlyPseudoMatchTask.id), false);
+    assert.equal(fullIds.includes(activityTask.id), false);
+    assert.equal(fullIds.includes(otherPersonalTask.id), false);
+    assert.equal(fullIds.includes(privateProjectTaskAssignedToActor.id), false);
+
+    const paged = await h.service.listTasks({
+      desk_scope: 'my_desk',
+      limit: 2,
+      offset: 1,
+      assignee_id: OTHER_ACTOR.id,
+    }, HUMAN_ACTOR);
+    assert.equal(paged.total, 3);
+    assert.deepEqual(
+      paged.items.map((item) => item.id),
+      full.items.slice(1, 3).map((item) => item.id),
+    );
+  } finally {
+    await cleanupRoot(h.rootDir);
+  }
+});
+
+test('listTasks keeps existing assignee_id behavior when desk_scope is absent', async () => {
+  const h = await createHarness();
+  try {
+    const project = await h.service.createProject({ id: 'proj_assignee_filter', name: 'Assignee Filter' }, HUMAN_ACTOR);
+    const taskAssignedToOther = await h.service.createTask({
+      id: 'task_assignee_filter_other',
+      project_id: project.id,
+      title: 'Assigned to other actor',
+      assignee_type: 'human',
+      assignee_id: OTHER_ACTOR.id,
+      human_assignee_label: 'User Bravo',
+    }, HUMAN_ACTOR);
+    await h.service.createTask({
+      id: 'task_assignee_filter_self',
+      project_id: project.id,
+      title: 'Assigned to current actor',
+      assignee_type: 'human',
+      assignee_id: HUMAN_ACTOR.id,
+      human_assignee_label: 'User Alpha',
+    }, HUMAN_ACTOR);
+
+    const listed = await h.service.listTasks({ assignee_id: OTHER_ACTOR.id }, HUMAN_ACTOR);
+    assert.equal(listed.total, 1);
+    assert.deepEqual(listed.items.map((item) => item.id), [taskAssignedToOther.id]);
+  } finally {
+    await cleanupRoot(h.rootDir);
+  }
+});
+
+test('assign_to_me repair action canonicalizes human assignment for ambiguous tasks', async () => {
+  const h = await createHarness();
+  try {
+    const project = await h.service.createProject({ id: 'proj_assign_repair', name: 'Assign Repair' }, HUMAN_ACTOR);
+    const task = await h.service.createTask({
+      id: 'task_assign_repair',
+      project_id: project.id,
+      title: 'Needs owner repair',
+      assignee_type: 'unassigned',
+      human_assignee_label: 'User Alpha',
+    }, HUMAN_ACTOR);
+
+    const repaired = await h.service.patchTask(task.id, {
+      version: task.version,
+      ops: [{ op: 'assign_to_me' }],
+    }, HUMAN_ACTOR);
+
+    assert.equal(repaired.assignee_type, 'human');
+    assert.equal(repaired.assignee_id, HUMAN_ACTOR.id);
+    assert.equal(repaired.human_assignee_label, 'user_alpha');
+  } finally {
+    await cleanupRoot(h.rootDir);
+  }
+});
+
+test('private task lists CRUD + actor isolation + membership cleanup + project coexistence', async () => {
+  const h = await createHarness();
+  try {
+    const created = await h.service.createTaskList({ name: 'Priority Lane', description: 'My top items', ordering: 10 }, HUMAN_ACTOR);
+    assert.equal(created.owner_id, HUMAN_ACTOR.id);
+
+    const listedByOwner = await h.service.listTaskLists({}, HUMAN_ACTOR);
+    assert.equal(listedByOwner.total, 1);
+    assert.equal(listedByOwner.items[0].id, created.id);
+
+    const listedByOther = await h.service.listTaskLists({}, OTHER_ACTOR);
+    assert.equal(listedByOther.total, 0);
+
+    await assert.rejects(
+      h.service.getTaskList(created.id, OTHER_ACTOR),
+      (err) => err?.status === 403,
+    );
+
+    const patched = await h.service.patchTaskList(created.id, {
+      version: created.version,
+      name: 'Priority Lane Updated',
+      ordering: 2,
+    }, HUMAN_ACTOR);
+    assert.equal(patched.name, 'Priority Lane Updated');
+    assert.equal(patched.ordering, 2);
+
+    const project = await h.service.createProject({ id: 'proj_list_membership', name: 'List Membership' }, HUMAN_ACTOR);
+    const task = await h.service.createTask({
+      id: 'task_list_membership',
+      project_id: project.id,
+      title: 'Task in project and list',
+      assignee_type: 'agent',
+      assignee_id: 'agent_alpha',
+      workflow_id: 'workflow_alpha',
+    }, HUMAN_ACTOR);
+
+    const listAssigned = await h.service.patchTask(task.id, {
+      version: task.version,
+      ops: [{ op: 'set_task_list_id', value: created.id }],
+    }, HUMAN_ACTOR);
+    assert.equal(listAssigned.task_list_id, created.id);
+
+    const byList = await h.service.listTasks({ task_list_id: created.id }, HUMAN_ACTOR);
+    assert.equal(byList.total, 1);
+    assert.equal(byList.items[0].id, task.id);
+
+    const removed = await h.service.deleteTaskList(created.id, { version: patched.version }, HUMAN_ACTOR);
+    assert.equal(removed.deleted, true);
+    assert.equal(removed.cleared_task_count, 1);
+
+    const after = await h.service.getTask(task.id, HUMAN_ACTOR);
+    assert.equal(after.task_list_id, null);
+  } finally {
+    await cleanupRoot(h.rootDir);
+  }
+});
+
+test('set_task_list_id rejects non-private scope tasks', async () => {
+  const privateRoot = path.join(os.tmpdir(), `board-private-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const teamRoot = path.join(os.tmpdir(), `board-team-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const h = await createHarness({ boardRoots: { privateRoot, teamRoot } });
+  try {
+    const list = await h.service.createTaskList({ name: 'Only Private' }, HUMAN_ACTOR);
+    const teamProject = await h.service.createProject({ id: 'proj_team_lists', name: 'Team List Test', visibility: 'team' }, HUMAN_ACTOR);
+    const teamTask = await h.service.createTask({
+      id: 'task_team_list_test',
+      project_id: teamProject.id,
+      title: 'Team scoped task',
+      assignee_type: 'agent',
+      assignee_id: 'agent_alpha',
+      workflow_id: 'workflow_alpha',
+    }, HUMAN_ACTOR);
+
+    await assert.rejects(
+      h.service.patchTask(teamTask.id, {
+        version: teamTask.version,
+        ops: [{ op: 'set_task_list_id', value: list.id }],
+      }, HUMAN_ACTOR),
+      (err) => err?.status === 422,
+    );
+  } finally {
+    await cleanupRoot(h.rootDir);
+    await fsp.rm(privateRoot, { recursive: true, force: true });
+    await fsp.rm(teamRoot, { recursive: true, force: true });
   }
 });
 
@@ -1999,21 +2255,31 @@ test('runtime mode dispatch snapshots include opencode and anthropic-api', async
   }
 });
 
-test('metadata and Danny default assignee are exposed and enforced', async () => {
+test('metadata defaults expose current human actor assignment (no Danny hard dependency)', async () => {
   const h = await createHarness();
   try {
-    const metadata = await h.service.getMetadata();
-    assert.equal(metadata.defaults.assignee_id, 'danny');
+    const metadata = await h.service.getMetadata(HUMAN_ACTOR);
+    assert.equal(metadata.defaults.assignee_type, 'human');
+    assert.equal(metadata.defaults.assignee_id, HUMAN_ACTOR.id);
+    assert.equal(metadata.defaults.human_assignee_label, HUMAN_ACTOR.id);
+
+    const metadataWithoutActor = await h.service.getMetadata();
+    assert.equal(metadataWithoutActor.defaults.assignee_type, 'human');
+    assert.equal(metadataWithoutActor.defaults.assignee_id, null);
+    assert.equal(metadataWithoutActor.defaults.human_assignee_label, null);
 
     const project = await h.service.createProject({ id: 'proj_meta', name: 'Meta Project' }, HUMAN_ACTOR);
     const task = await h.service.createTask({
       id: 'task_meta',
       project_id: project.id,
-      title: 'Default Danny',
-      assignee_type: 'agent',
-      workflow_id: 'workflow_alpha',
+      title: 'Default current human actor',
+      assignee_type: metadata.defaults.assignee_type,
+      assignee_id: metadata.defaults.assignee_id,
+      human_assignee_label: metadata.defaults.human_assignee_label,
     }, HUMAN_ACTOR);
-    assert.equal(task.assignee_id, 'danny');
+    assert.equal(task.assignee_type, 'human');
+    assert.equal(task.assignee_id, HUMAN_ACTOR.id);
+    assert.equal(task.human_assignee_label, HUMAN_ACTOR.id);
   } finally {
     await cleanupRoot(h.rootDir);
   }
@@ -2107,6 +2373,62 @@ test('task patch supports workflow/subtasks and human assignee label', async () 
       { id: 'st_1', text: 'Prep brief', completed: false, order: 1 },
       { id: 'st_2', text: 'Review output', completed: true, order: 2 },
     ]);
+  } finally {
+    await cleanupRoot(h.rootDir);
+  }
+});
+
+test('set_assignee canonicalizes non-human assignments and keeps my_desk actor-safe', async () => {
+  const h = await createHarness();
+  try {
+    const project = await h.service.createProject({ id: 'proj_assign_scope', name: 'Assignee Scope' }, HUMAN_ACTOR);
+    const task = await h.service.createTask({
+      id: 'task_assign_scope',
+      project_id: project.id,
+      title: 'Assigned project task',
+      assignee_type: 'human',
+      assignee_id: HUMAN_ACTOR.id,
+      human_assignee_label: 'User Alpha',
+    }, HUMAN_ACTOR);
+
+    const before = await h.service.listTasks({ desk_scope: 'my_desk' }, HUMAN_ACTOR);
+    assert.equal(before.items.some((item) => item.id === task.id), true);
+
+    const unassigned = await h.service.patchTask(task.id, {
+      version: task.version,
+      ops: [{
+        op: 'set_assignee',
+        value: {
+          assignee_type: 'unassigned',
+          assignee_id: HUMAN_ACTOR.id,
+          human_assignee_label: 'Should clear',
+        },
+      }],
+    }, HUMAN_ACTOR);
+    assert.equal(unassigned.assignee_type, 'unassigned');
+    assert.equal(unassigned.assignee_id, null);
+    assert.equal(unassigned.human_assignee_label, null);
+
+    const afterUnassigned = await h.service.listTasks({ desk_scope: 'my_desk' }, HUMAN_ACTOR);
+    assert.equal(afterUnassigned.items.some((item) => item.id === task.id), false);
+
+    const asAgent = await h.service.patchTask(task.id, {
+      version: unassigned.version,
+      ops: [{
+        op: 'set_assignee',
+        value: {
+          assignee_type: 'agent',
+          assignee_id: 'agent_alpha',
+          human_assignee_label: 'Also clear',
+        },
+      }],
+    }, HUMAN_ACTOR);
+    assert.equal(asAgent.assignee_type, 'agent');
+    assert.equal(asAgent.assignee_id, 'agent_alpha');
+    assert.equal(asAgent.human_assignee_label, null);
+
+    const afterAgent = await h.service.listTasks({ desk_scope: 'my_desk' }, HUMAN_ACTOR);
+    assert.equal(afterAgent.items.some((item) => item.id === task.id), false);
   } finally {
     await cleanupRoot(h.rootDir);
   }
@@ -2778,10 +3100,11 @@ test('pre-change private board SQLite schema migrates transactionally with migra
     const db = new DatabaseSync(storage.getPrivateDbPath());
     try {
       const migrationRows = db.prepare('SELECT version, name FROM board_schema_migrations ORDER BY version ASC').all();
-      assert.ok(migrationRows.length >= 4);
+      assert.ok(migrationRows.length >= 5);
       assert.ok(migrationRows.some((row) => Number(row.version) === 4102));
       assert.ok(migrationRows.some((row) => Number(row.version) === 4103));
       assert.ok(migrationRows.some((row) => Number(row.version) === 4104));
+      assert.ok(migrationRows.some((row) => Number(row.version) === 4105));
 
       const artifactColumns = db.prepare('PRAGMA table_info(board_task_execution_artifacts)').all();
       const artifactColumnNames = new Set(artifactColumns.map((row) => row.name));
@@ -2793,7 +3116,11 @@ test('pre-change private board SQLite schema migrates transactionally with migra
       const projectIdColumn = taskColumns.find((row) => row.name === 'project_id');
       const taskColumnNames = new Set(taskColumns.map((row) => row.name));
       assert.ok(taskColumnNames.has('activity_id'));
+      assert.ok(taskColumnNames.has('task_list_id'));
       assert.equal(Number(projectIdColumn?.notnull || 0), 0);
+
+      const taskListTables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'board_task_lists'").all();
+      assert.equal(taskListTables.length, 1);
 
       const taskFks = db.prepare('PRAGMA foreign_key_list(board_tasks)').all();
       assert.ok(taskFks.some((row) => row.table === 'board_projects'));

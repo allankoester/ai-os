@@ -17,12 +17,14 @@ import {
   prepareOpenCodeEnvironment,
   resolveManagedCliTargets,
 } from '../runtime/managed-runtime.mjs';
+import { createChatBoardAdapter } from './board-chat-adapter.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const PROVIDER_SETTINGS_FILE = path.join(ROOT, 'interface', 'provider-settings.json');
 const PUBLIC = path.join(__dirname, 'public');
-const PORT = Number(process.env.CHAT_PORT || 4012);
+const DEFAULT_CHAT_PORT = Number(process.env.CHAT_PORT || process.env.PORT || 4012);
+let ACTIVE_PORT = DEFAULT_CHAT_PORT;
 const DEFAULT_CHAT_MODEL = 'sonnet';
 const DEFAULT_CLAUDE_MODELS = ['sonnet', 'opus', 'haiku'];
 const DEFAULT_OPENCODE_MODELS = [
@@ -62,6 +64,10 @@ const STREAM_DIAGNOSTICS = {
   usageAppendFailures: 0,
   lastUsageFailureCode: null,
 };
+
+const CHAT_BOARD_ROOTDIR = String(process.env.STEADYMADE_CHAT_BOARD_ROOTDIR || '').trim();
+const CHAT_BOARD_PRIVATE_ROOT = String(process.env.STEADYMADE_CHAT_BOARD_PRIVATE_ROOT || '').trim();
+const CHAT_BOARD_TEAM_ROOT = String(process.env.STEADYMADE_CHAT_BOARD_TEAM_ROOT || '').trim();
 
 const PERMISSION_MODE = process.env.CHAT_PERMISSION_MODE || 'default';
 const ALLOWED_TOOLS = process.env.CHAT_ALLOWED_TOOLS || 'Task,Read,Glob,Grep,Skill,WebFetch';
@@ -156,8 +162,18 @@ Safety addendum (mandatory in this runtime):
 
 const RUN_REGISTRY = new Map(); // conversationId -> non-incognito run
 const PERM_RUN_REGISTRY = new Map(); // permRunId -> run (for the permission bridge; covers incognito too)
+const CHAT_PENDING_MUTATIONS = new Map(); // conversationId -> pending task mutation intent for Paula lane
 
-function readProviderSettingsForRuntime() {
+const CHAT_BOARD_ADAPTER = createChatBoardAdapter({
+  rootDir: CHAT_BOARD_ROOTDIR || ROOT,
+  runtimeRootOverride: CHAT_STORAGE_TEST_ROOT || undefined,
+  privateRoot: CHAT_BOARD_PRIVATE_ROOT || undefined,
+  teamRoot: CHAT_BOARD_TEAM_ROOT || undefined,
+});
+
+let providerSettingsReader = null;
+
+function defaultReadProviderSettingsForRuntime() {
   try {
     const parsed = JSON.parse(fs.readFileSync(PROVIDER_SETTINGS_FILE, 'utf8'));
     return {
@@ -169,6 +185,23 @@ function readProviderSettingsForRuntime() {
   } catch {
     return { runtimeMode: '', claudeBin: '', opencodeBin: '', opencodeConfigPath: '' };
   }
+}
+
+function readProviderSettingsForRuntime() {
+  if (typeof providerSettingsReader === 'function') {
+    try {
+      const provided = providerSettingsReader();
+      return {
+        runtimeMode: String(provided?.runtimeMode || '').trim(),
+        claudeBin: String(provided?.claudeBin || '').trim(),
+        opencodeBin: String(provided?.opencodeBin || '').trim(),
+        opencodeConfigPath: String(provided?.opencodeConfigPath || '').trim(),
+      };
+    } catch {
+      return defaultReadProviderSettingsForRuntime();
+    }
+  }
+  return defaultReadProviderSettingsForRuntime();
 }
 
 function resolveCliTargets() {
@@ -398,12 +431,13 @@ function hasJsonContentType(req) {
 function isTrustedLocalWebRequest(req, expectedPort) {
   const expected = Number(expectedPort);
   const hostHeader = String(req.headers.host || '').trim();
+  const isTrustedHost = (host) => host === 'localhost' || host === '127.0.0.1' || host === 'chat.localhost';
   try {
     const hostUrl = new URL(`http://${hostHeader || 'localhost'}`);
     const host = hostUrl.hostname;
     const port = Number(hostUrl.port || 80);
     const fetchSite = String(req.headers['sec-fetch-site'] || '').toLowerCase();
-    if ((host === 'localhost' || host === '127.0.0.1') && port === expected && (fetchSite === 'same-origin' || fetchSite === 'none')) {
+    if (isTrustedHost(host) && port === expected && (fetchSite === 'same-origin' || fetchSite === 'none')) {
       return true;
     }
   } catch {
@@ -417,7 +451,7 @@ function isTrustedLocalWebRequest(req, expectedPort) {
       const u = new URL(String(raw));
       const host = u.hostname;
       const port = Number(u.port || (u.protocol === 'https:' ? 443 : 80));
-      if ((host === 'localhost' || host === '127.0.0.1') && port === expected) return true;
+      if (isTrustedHost(host) && port === expected) return true;
     } catch {
       // invalid header value
     }
@@ -430,7 +464,7 @@ function requireTrustedLocalJsonMutation(req, res) {
     sendJson(res, 403, { error: 'forbidden: Content-Type must include application/json' });
     return false;
   }
-  if (!isTrustedLocalWebRequest(req, PORT)) {
+  if (!isTrustedLocalWebRequest(req, ACTIVE_PORT)) {
     sendJson(res, 403, { error: 'forbidden: untrusted origin/referer' });
     return false;
   }
@@ -438,7 +472,7 @@ function requireTrustedLocalJsonMutation(req, res) {
 }
 
 function requireTrustedLocalRead(req, res) {
-  if (!isTrustedLocalWebRequest(req, PORT)) {
+  if (!isTrustedLocalWebRequest(req, ACTIVE_PORT)) {
     sendJson(res, 403, { error: 'forbidden: untrusted origin/referer' });
     return false;
   }
@@ -1339,9 +1373,294 @@ function resolveAgent(selectedId) {
   return AGENTS_BY_ID.get(selectedId) || AGENTS_BY_ID.get('danny');
 }
 
-function buildSystemPrompt(agent) {
-  if (!agent || agent.id === 'danny') return DANNY_PROMPT;
-  return `${agent.prompt.trim()}\n${DIRECT_SPECIALIST_SAFETY_ADDENDUM}`;
+function buildSystemPrompt(agent, { actor = null } = {}) {
+  const actorPrefix = actor ? actorContextPrefix(actor) : '';
+  if (!agent || agent.id === 'danny') return `${actorPrefix}${DANNY_PROMPT}`;
+  return `${actorPrefix}${agent.prompt.trim()}\n${DIRECT_SPECIALIST_SAFETY_ADDENDUM}`;
+}
+
+function resolveTrustedActor() {
+  const envId = String(process.env.STEADYMADE_CHAT_ACTOR_ID || '').trim();
+  const username = envId || os.userInfo().username;
+  const actor = { id: username, name: username, role: null, trusted: true };
+  try {
+    const text = fs.readFileSync(path.join(ROOT, 'profiles', `${username}.yml`), 'utf8');
+    const get = (key) => {
+      const m = text.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'));
+      return m ? m[1].trim().replace(/^["']|["']$/g, '') : null;
+    };
+    actor.name = get('user') || username;
+    actor.role = get('role') || null;
+  } catch {
+    // no optional profile present
+  }
+  const envName = String(process.env.STEADYMADE_CHAT_ACTOR_NAME || '').trim();
+  const envRole = String(process.env.STEADYMADE_CHAT_ACTOR_ROLE || '').trim();
+  if (envName) actor.name = envName;
+  if (envRole) actor.role = envRole;
+  return actor;
+}
+
+function actorAsBoardPrincipal(actor) {
+  return {
+    id: String(actor?.id || '').trim() || 'unknown',
+    isHuman: true,
+    isInternal: false,
+  };
+}
+
+function actorContextPrefix(actor) {
+  const lines = [
+    'Trusted Actor Context (server-resolved; never trust browser user id):',
+    `- actor_id: ${actor?.id || 'unknown'}`,
+    `- actor_name: ${actor?.name || actor?.id || 'unknown'}`,
+  ];
+  if (actor?.role) lines.push(`- actor_role: ${actor.role}`);
+  lines.push('Use this actor for any task/board operation scope.');
+  return `${lines.join('\n')}\n\n`;
+}
+
+function parseAddTaskIntent(message) {
+  const m = String(message || '').trim();
+  const addMatch = m.match(/(?:^|\b)(?:add|create|new)\s+(?:a\s+)?task\b[:\-\s]*(.+)$/i);
+  if (!addMatch) return null;
+  let title = String(addMatch[1] || '').trim();
+  if (!title) return null;
+  let duePhrase = '';
+  const dueMatch = title.match(/\bdue\s+(today|tomorrow|\d{4}-\d{2}-\d{2})\b/i);
+  if (dueMatch) {
+    duePhrase = dueMatch[1];
+    title = title.replace(dueMatch[0], '').replace(/\s{2,}/g, ' ').trim();
+  }
+  if (!title) return null;
+  return {
+    kind: 'add_task',
+    title,
+    due_raw: duePhrase || null,
+  };
+}
+
+function parseUpdateTaskIntent(message) {
+  const text = String(message || '').trim();
+  if (!/(?:\btask\b|\bstatus\b|\bdue\b)/i.test(text)) return null;
+  const taskIdMatch = text.match(/\btask\s+([a-z0-9_-]{4,128})\b/i) || text.match(/\b([a-z]+_[a-z0-9_]{4,128})\b/i);
+  if (!taskIdMatch) return null;
+  const statusMatch = text.match(/\b(?:set\s+status\s+to|mark)\s+(todo|in_progress|needs_review|done|blocked|backlog)\b/i);
+  const dueMatch = text.match(/\bdue\s+(today|tomorrow|\d{4}-\d{2}-\d{2}|none|clear)\b/i);
+  if (!statusMatch && !dueMatch) return null;
+  return {
+    kind: 'update_task',
+    task_id: taskIdMatch[1],
+    status: statusMatch ? statusMatch[1].toLowerCase() : null,
+    due_raw: dueMatch ? dueMatch[1].toLowerCase() : null,
+  };
+}
+
+function detectPaulaIntent(message) {
+  const text = String(message || '').trim();
+  const lower = text.toLowerCase();
+  if (!lower) return { routeToPaula: false, kind: 'none' };
+  if (/^(confirm|yes|approve|do it|go ahead)\b/i.test(text)) return { routeToPaula: true, kind: 'confirm_mutation' };
+  if (/^(cancel|nevermind|never mind|stop)\b/i.test(text)) return { routeToPaula: true, kind: 'cancel_mutation' };
+  if (/\b(my day|workday|what.?s my day|today agenda|agenda today|day plan|plan for today)\b/i.test(text)) {
+    return { routeToPaula: true, kind: 'day_summary' };
+  }
+  const addIntent = parseAddTaskIntent(text);
+  if (addIntent) return { routeToPaula: true, ...addIntent };
+  const updateIntent = parseUpdateTaskIntent(text);
+  if (updateIntent) return { routeToPaula: true, ...updateIntent };
+  if (/\b(task|tasks|todo|to-do|my desk)\b/i.test(text)) {
+    return { routeToPaula: true, kind: 'task_read' };
+  }
+  return { routeToPaula: false, kind: 'none' };
+}
+
+function isPaulaIntentForServerAdapter(intent) {
+  return Boolean(intent?.routeToPaula && [
+    'day_summary',
+    'task_read',
+    'add_task',
+    'update_task',
+    'confirm_mutation',
+    'cancel_mutation',
+  ].includes(intent.kind));
+}
+
+function summarizeDayForChat(summary, actor) {
+  const loc = summary?.by_location || {};
+  const due = summary?.due_buckets || {};
+  const formatTask = (task) => `- ${task.title} (${task.id}) · status=${task.status}${task.due_at ? ` · due=${task.due_at.slice(0, 10)}` : ''}`;
+  const lines = [
+    `Paula day summary (actor: ${actor.id})`,
+    `- total: ${summary.total_tasks || 0}`,
+    '- locations:',
+    `  - private: ${(loc.private || []).length}`,
+    `  - inbox: ${(loc.inbox || []).length}`,
+    `  - project: ${(loc.project || []).length}`,
+    '- due buckets:',
+    `  - overdue: ${(due.overdue || []).length}`,
+    `  - today: ${(due.today || []).length}`,
+    `  - upcoming: ${(due.upcoming || []).length}`,
+    `  - later: ${(due.later || []).length}`,
+    `  - no_due: ${(due.no_due || []).length}`,
+  ];
+  if ((loc.inbox || []).length) {
+    lines.push('Inbox tasks:');
+    for (const task of loc.inbox.slice(0, 8)) lines.push(formatTask(task));
+  }
+  if ((loc.project || []).length) {
+    lines.push('Project tasks:');
+    for (const task of loc.project.slice(0, 8)) lines.push(formatTask(task));
+  }
+  return lines.join('\n');
+}
+
+function ensureConversationForSyntheticRun(run, context) {
+  if (context.incognito) return;
+  if (context.convId) {
+    run.conversationId = context.convId;
+    run.meta.session_id = context.convId;
+    return;
+  }
+  const conversationId = `chat_${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`;
+  context.convId = conversationId;
+  run.conversationId = conversationId;
+  run.meta.session_id = conversationId;
+  RUN_REGISTRY.set(conversationId, run);
+  CHAT_STORE.createSessionFromFirstTurn({
+    conversationId,
+    message: context.message,
+    selectedAgent: context.selectedAgent,
+    sessionId: conversationId,
+    userEntry: context.userEntry,
+  });
+}
+
+async function handleSyntheticPaulaIntent({ run, context, actor, intent }) {
+  if (context.incognito && ['add_task', 'update_task', 'confirm_mutation'].includes(intent.kind)) {
+    emitRunConversationInit(run, context, {
+      sessionId: run.meta.session_id || null,
+      model: 'paula-board-adapter',
+    });
+    emitAssistantResult(run, 'paula', 'Task mutations are disabled in incognito mode. Ask again without incognito to persist changes.');
+    finalizeRun(run, { code: 0, isError: false });
+    return;
+  }
+  ensureConversationForSyntheticRun(run, context);
+  emitRunConversationInit(run, context, {
+    sessionId: run.meta.session_id || context.convId || null,
+    model: 'paula-board-adapter',
+  });
+  const actorBoard = actorAsBoardPrincipal(actor);
+  const pending = context.convId ? CHAT_PENDING_MUTATIONS.get(context.convId) : null;
+
+  const emitAdapterTool = (status, detail, input = '') => {
+    emitToolLifecycle(run, {
+      id: 'board_lane3_tool',
+      name: 'BoardChatAdapter',
+      detail,
+      input,
+      status,
+    });
+  };
+  const reply = (text) => {
+    const safeText = String(text || '').trim();
+    if (safeText) {
+      run.finalText += safeText;
+      emitRunEvent(run, 'delta', { text: safeText });
+    }
+    emitAssistantResult(run, 'paula', safeText);
+  };
+
+  try {
+    if (intent.kind === 'cancel_mutation' && pending && pending.actor_id === actor.id) {
+      CHAT_PENDING_MUTATIONS.delete(context.convId);
+      reply(`Understood. I cancelled the pending task change for actor ${actor.id}.`);
+      finalizeRun(run, { code: 0, isError: false });
+      return;
+    }
+
+    if (intent.kind === 'confirm_mutation' && pending && pending.actor_id === actor.id) {
+      emitAdapterTool('running', pending.kind === 'create_task' ? 'create my desk task' : 'update task');
+      if (pending.kind === 'create_task') {
+        const created = await CHAT_BOARD_ADAPTER.createMyDeskTask(actorBoard, pending.payload);
+        CHAT_PENDING_MUTATIONS.delete(context.convId);
+        emitAdapterTool('completed', 'create my desk task');
+        reply(`Done. I created task \"${created.title}\" (${created.id}) for actor ${actor.id} in persistent board storage.`);
+      } else {
+        const updated = await CHAT_BOARD_ADAPTER.updateTaskStatusDue(actorBoard, pending.payload);
+        CHAT_PENDING_MUTATIONS.delete(context.convId);
+        emitAdapterTool('completed', 'update task');
+        reply(`Done. I updated task ${updated.id} for actor ${actor.id}.`);
+      }
+      finalizeRun(run, { code: 0, isError: false });
+      return;
+    }
+
+    if (intent.kind === 'confirm_mutation' && (!pending || pending.actor_id !== actor.id)) {
+      reply(`I don’t have a pending task mutation to confirm for actor ${actor.id}.`);
+      finalizeRun(run, { code: 0, isError: false });
+      return;
+    }
+
+    if (intent.kind === 'add_task') {
+      const dueAt = intent.due_raw ? CHAT_BOARD_ADAPTER.parseDueDate(intent.due_raw) : null;
+      CHAT_PENDING_MUTATIONS.set(context.convId, {
+        actor_id: actor.id,
+        kind: 'create_task',
+        payload: {
+          title: intent.title,
+          due_at: dueAt,
+        },
+        created_at: nowIsoUtc(),
+      });
+      reply(
+        `I’m ready to create this My Desk task for actor ${actor.id}: \"${intent.title}\"${dueAt ? ` (due ${dueAt.slice(0, 10)})` : ''}. Reply \"confirm\" to persist it, or \"cancel\" to abort.`,
+      );
+      finalizeRun(run, { code: 0, isError: false });
+      return;
+    }
+
+    if (intent.kind === 'update_task') {
+      const dueAt = intent.due_raw
+        ? (intent.due_raw === 'none' || intent.due_raw === 'clear' ? null : CHAT_BOARD_ADAPTER.parseDueDate(intent.due_raw))
+        : undefined;
+      CHAT_PENDING_MUTATIONS.set(context.convId, {
+        actor_id: actor.id,
+        kind: 'update_task',
+        payload: {
+          task_id: intent.task_id,
+          status: intent.status,
+          due_at: intent.due_raw ? dueAt : null,
+          has_due_at: Boolean(intent.due_raw),
+        },
+        created_at: nowIsoUtc(),
+      });
+      reply(
+        `I’m ready to update task ${intent.task_id} for actor ${actor.id}${intent.status ? ` to status ${intent.status}` : ''}${intent.due_raw ? ` with due ${intent.due_raw}` : ''}. Reply \"confirm\" to apply, or \"cancel\" to abort.`,
+      );
+      finalizeRun(run, { code: 0, isError: false });
+      return;
+    }
+
+    if (intent.kind === 'day_summary' || intent.kind === 'task_read') {
+      emitAdapterTool('running', 'list actor-scoped My Desk tasks', JSON.stringify({ desk_scope: 'my_desk' }));
+      const summary = await CHAT_BOARD_ADAPTER.buildDaySummary(actorBoard);
+      emitAdapterTool('completed', 'build day summary');
+      reply(summarizeDayForChat(summary, actor));
+      finalizeRun(run, { code: 0, isError: false });
+      return;
+    }
+
+    reply(`I can help with task/day requests. Tell me to add a task or ask \"what is my day?\".`);
+    finalizeRun(run, { code: 0, isError: false });
+  } catch (err) {
+    const safeMessage = err?.message || 'task lane failed';
+    emitStderrEvent(run, safeMessage, { code: err?.code || 'board_lane_error' });
+    run.meta.is_error = true;
+    reply(`I could not complete the task operation for actor ${actor.id}: ${safeMessage}`);
+    finalizeRun(run, { code: 1, isError: true });
+  }
 }
 
 function addSubscriber(run, res) {
@@ -2235,7 +2554,7 @@ function emitAssistantResult(run, selectedAgent, text, { errorText } = {}) {
   run.resultEmitted = true;
 }
 
-function startClaudeChatRun({ run, context, resumeId, model, agent }) {
+function startClaudeChatRun({ run, context, resumeId, model, agent, actor }) {
   const claudeDiagnostics = resolveBinaryCommand(CLAUDE_BIN, 'claude');
   if (!claudeDiagnostics.resolvedPath) {
     emitStderrEvent(run, `Claude Code setup required: ${claudeDiagnostics.reason || 'configured path is not executable'}`, {
@@ -2252,9 +2571,11 @@ function startClaudeChatRun({ run, context, resumeId, model, agent }) {
     return;
   }
   const effectiveModel = resolveChatModelSelection(model, 'claude').effective_model;
-  const runMessage = context.incognito
+  const actorPrefix = actorContextPrefix(actor);
+  const runMessageBase = context.incognito
     ? `[Incognito turn] Do not write memory files, daily notes, or run logs for this turn, and do not store anything about this exchange anywhere.\n\n${context.message}`
     : context.message;
+  const runMessage = `${actorPrefix}${runMessageBase}`;
   const args = [
     '-p', runMessage,
     '--output-format', 'stream-json',
@@ -2262,7 +2583,7 @@ function startClaudeChatRun({ run, context, resumeId, model, agent }) {
     '--verbose',
     '--permission-mode', PERMISSION_MODE,
     '--allowedTools', ALLOWED_TOOLS,
-    '--append-system-prompt', buildSystemPrompt(agent),
+    '--append-system-prompt', buildSystemPrompt(agent, { actor }),
   ];
   if (DISALLOWED_TOOLS) args.push('--disallowedTools', DISALLOWED_TOOLS);
   if (resumeId) args.push('--resume', resumeId);
@@ -2287,7 +2608,7 @@ function startClaudeChatRun({ run, context, resumeId, model, agent }) {
       },
     };
     args.push('--settings', JSON.stringify(settings));
-    env.CHAT_PERM_URL = `http://127.0.0.1:${PORT}`;
+    env.CHAT_PERM_URL = `http://127.0.0.1:${ACTIVE_PORT}`;
     env.CHAT_PERM_TOKEN = run.permToken;
     env.CHAT_PERM_RUN_ID = run.permRunId;
     env.CHAT_PERM_TIMEOUT_MS = String(PERMISSION_TIMEOUT_MS);
@@ -2428,7 +2749,7 @@ function startClaudeChatRun({ run, context, resumeId, model, agent }) {
   }
 }
 
-function startOpenCodeChatRun({ run, context, resumeId, model }) {
+function startOpenCodeChatRun({ run, context, resumeId, model, actor }) {
   const opencodeDiagnostics = resolveBinaryCommand(OPENCODE_BIN, 'opencode');
   if (!opencodeDiagnostics.resolvedPath) {
     emitStderrEvent(run, `OpenCode setup required: ${opencodeDiagnostics.reason || 'configured path is not executable'}`, {
@@ -2445,9 +2766,11 @@ function startOpenCodeChatRun({ run, context, resumeId, model }) {
     return;
   }
   const opencodeCmd = opencodeDiagnostics.resolvedPath;
-  const runMessage = context.incognito
+  const actorPrefix = actorContextPrefix(actor);
+  const runMessageBase = context.incognito
     ? `[Incognito turn] Do not write memory files, daily notes, or run logs for this turn, and do not store anything about this exchange anywhere.\n\n${context.message}`
     : context.message;
+  const runMessage = `${actorPrefix}${runMessageBase}`;
   const args = ['run', runMessage, '--format', 'json'];
   if (context.selectedAgent && context.selectedAgent !== 'danny') args.push('--agent', context.selectedAgent);
   if (resumeId) args.push('--session', resumeId);
@@ -2623,8 +2946,13 @@ async function handleChat(req, res) {
     ? payload.conversationId.trim() : '';
   const modelSelection = resolveChatModelSelection(payload.model, ACTIVE_CHAT_RUNTIME);
   const model = modelSelection.effective_model;
-  const agent = resolveAgent(payload.agent);
-  const selectedAgent = agent.id;
+  const requestedAgent = resolveAgent(payload.agent);
+  const trustedActor = resolveTrustedActor();
+  const paulaIntent = detectPaulaIntent(message);
+  const effectiveAgent = requestedAgent.id === 'danny' && paulaIntent.routeToPaula
+    ? resolveAgent('paula')
+    : requestedAgent;
+  const selectedAgent = effectiveAgent.id;
   const mode = selectedAgent === 'danny' ? 'danny' : 'direct_specialist';
   // Incognito turns leave no trace: no history, no index entry, no memory
   // writes (instructed below). Multi-turn continuity works in-memory via
@@ -2725,10 +3053,20 @@ async function handleChat(req, res) {
     });
   }
 
+  if (selectedAgent === 'paula' && isPaulaIntentForServerAdapter(paulaIntent)) {
+    await handleSyntheticPaulaIntent({
+      run,
+      context,
+      actor: trustedActor,
+      intent: paulaIntent,
+    });
+    return;
+  }
+
   if (ACTIVE_CHAT_RUNTIME === 'opencode') {
-    startOpenCodeChatRun({ run, context, resumeId, model });
+    startOpenCodeChatRun({ run, context, resumeId, model, actor: trustedActor });
   } else {
-    startClaudeChatRun({ run, context, resumeId, model, agent });
+    startClaudeChatRun({ run, context, resumeId, model, agent: effectiveAgent, actor: trustedActor });
   }
 
   res.on('close', () => {
@@ -2755,8 +3093,8 @@ function staticSecurityHeaders(extra = {}) {
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "img-src 'self' data:",
     "font-src 'self' data: https://fonts.gstatic.com",
-    "connect-src 'self' ws://localhost:* ws://127.0.0.1:*",
-    'frame-ancestors http://localhost:4011 http://127.0.0.1:4011',
+    "connect-src 'self' ws://localhost:* ws://127.0.0.1:* ws://chat.localhost:*",
+    `frame-ancestors http://localhost:${ACTIVE_PORT} http://127.0.0.1:${ACTIVE_PORT}`,
   ].join('; ');
   return {
     'X-Content-Type-Options': 'nosniff',
@@ -2816,7 +3154,8 @@ function serveStatic(req, res) {
   fs.createReadStream(file).pipe(res);
 }
 
-const server = http.createServer((req, res) => {
+function createChatRequestHandler() {
+  return (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname.startsWith('/api/terminal/')) {
     if (!CHAT_CLI_BRIDGE_ENABLED) {
@@ -2905,7 +3244,7 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       ok: true,
-      port: PORT,
+      port: ACTIVE_PORT,
       provider_mode: PROVIDER_MODE,
       active_chat_runtime: ACTIVE_CHAT_RUNTIME,
       claude_bin: cliDiagnostics.resolvedCommands?.claude || null,
@@ -2915,30 +3254,32 @@ const server = http.createServer((req, res) => {
     return;
   }
   serveStatic(req, res);
-});
+  };
+}
 
-const terminalWss = new WebSocketServer({ noServer: true, maxPayload: TERMINAL_WS_MAX_PAYLOAD });
+function createTerminalWsServer() {
+  const terminalWss = new WebSocketServer({ noServer: true, maxPayload: TERMINAL_WS_MAX_PAYLOAD });
 
-terminalWss.on('connection', (ws, req, session) => {
-  if (!session || !TERMINAL_STATE.sessions.has(session.id)) {
-    try { ws.close(1008, 'session not found'); } catch {}
-    return;
-  }
-  if (session.clients.size >= TERMINAL_MAX_CLIENTS_PER_SESSION) {
-    ws.send(JSON.stringify({ type: 'error', error: `session client limit reached (max ${TERMINAL_MAX_CLIENTS_PER_SESSION})` }));
-    ws.close(1013, 'too many clients');
-    return;
-  }
+  terminalWss.on('connection', (ws, req, session) => {
+    if (!session || !TERMINAL_STATE.sessions.has(session.id)) {
+      try { ws.close(1008, 'session not found'); } catch {}
+      return;
+    }
+    if (session.clients.size >= TERMINAL_MAX_CLIENTS_PER_SESSION) {
+      ws.send(JSON.stringify({ type: 'error', error: `session client limit reached (max ${TERMINAL_MAX_CLIENTS_PER_SESSION})` }));
+      ws.close(1013, 'too many clients');
+      return;
+    }
 
-  session.clients.add(ws);
-  clearTerminalTimer(session, 'noClientTimer');
-  clearTerminalTimer(session, 'reapTimer');
-  ws.send(JSON.stringify({ type: 'status', session: terminalSnapshot(session) }));
-  if (session.outputBuffer) {
-    ws.send(JSON.stringify({ type: 'output', sessionId: session.id, data: session.outputBuffer }));
-  }
+    session.clients.add(ws);
+    clearTerminalTimer(session, 'noClientTimer');
+    clearTerminalTimer(session, 'reapTimer');
+    ws.send(JSON.stringify({ type: 'status', session: terminalSnapshot(session) }));
+    if (session.outputBuffer) {
+      ws.send(JSON.stringify({ type: 'output', sessionId: session.id, data: session.outputBuffer }));
+    }
 
-  ws.on('message', (raw) => {
+    ws.on('message', (raw) => {
     const rawBytes = Buffer.isBuffer(raw) ? raw.length : Buffer.byteLength(String(raw || ''), 'utf8');
     if (rawBytes > TERMINAL_WS_MAX_PAYLOAD) {
       ws.send(JSON.stringify({ type: 'error', error: `payload too large (max ${TERMINAL_WS_MAX_PAYLOAD} bytes)` }));
@@ -2988,18 +3329,21 @@ terminalWss.on('connection', (ws, req, session) => {
     ws.send(JSON.stringify({ type: 'error', error: 'unsupported message type' }));
   });
 
-  ws.on('close', () => {
-    session.clients.delete(ws);
-    scheduleNoClientStop(session);
-  });
+    ws.on('close', () => {
+      session.clients.delete(ws);
+      scheduleNoClientStop(session);
+    });
 
-  ws.on('error', () => {
-    session.clients.delete(ws);
-    scheduleNoClientStop(session);
+    ws.on('error', () => {
+      session.clients.delete(ws);
+      scheduleNoClientStop(session);
+    });
   });
-});
+  return terminalWss;
+}
 
-server.on('upgrade', (req, socket, head) => {
+function createTerminalUpgradeHandler(terminalWss) {
+  return (req, socket, head) => {
   let url;
   try {
     url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
@@ -3021,7 +3365,7 @@ server.on('upgrade', (req, socket, head) => {
     socket.destroy();
     return;
   }
-  if (!isTrustedLocalWebRequest(req, PORT)) {
+  if (!isTrustedLocalWebRequest(req, ACTIVE_PORT)) {
     socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
     socket.destroy();
     return;
@@ -3038,35 +3382,95 @@ server.on('upgrade', (req, socket, head) => {
   terminalWss.handleUpgrade(req, socket, head, (ws) => {
     terminalWss.emit('connection', ws, req, session);
   });
-});
-
-server.listen(PORT, '127.0.0.1', () => {
-  const cliDiagnostics = inspectCliTargets();
-  console.log(`Steadymade AI OS Chat → http://localhost:${PORT}`);
-  console.log(`provider mode: ${PROVIDER_MODE} (active normal chat runtime: ${ACTIVE_CHAT_RUNTIME})`);
-  console.log(`claude binary: ${cliDiagnostics.resolvedCommands?.claude || `setup required (${cliDiagnostics.commands?.claude?.reason || 'not configured'})`}`);
-  console.log(`opencode binary: ${cliDiagnostics.resolvedCommands?.opencode || `setup required (${cliDiagnostics.commands?.opencode?.reason || 'not configured'})`}`);
-  if (!CHAT_CLI_BRIDGE_ENABLED) {
-    console.log('CLI bridge: disabled (set CHAT_CLI_BRIDGE_ENABLED=1 to enable)');
-  }
-});
-
-let shuttingDown = false;
-function shutdown(signal) {
-  if (shuttingDown) return;
-  shuttingDown = true;
-  const run = CLI_STATE.run;
-  if (run?.active) {
-    run.stopReason = 'shutdown';
-    cliStopRunSignals(run);
-  }
-  for (const session of TERMINAL_STATE.sessions.values()) {
-    stopTerminalSessionSignals(session);
-  }
-  try { CHAT_STORE.close(); } catch {}
-  server.close(() => process.exit(0));
-  setTimeout(() => process.exit(0), 1500).unref();
-  if (signal) console.log(`Received ${signal}; shutting down chat server…`);
+  };
 }
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+export function createChatRuntime(options = {}) {
+  const requestedPort = Number(options.port || options.chatPort || process.env.CHAT_PORT || process.env.PORT || DEFAULT_CHAT_PORT || 4012);
+  ACTIVE_PORT = Number.isFinite(requestedPort) && requestedPort > 0 ? requestedPort : DEFAULT_CHAT_PORT;
+  providerSettingsReader = typeof options.providerSettingsReader === 'function' ? options.providerSettingsReader : null;
+
+  const requestHandler = createChatRequestHandler();
+  const terminalWss = createTerminalWsServer();
+  const upgradeHandler = createTerminalUpgradeHandler(terminalWss);
+
+  let server = null;
+  let shuttingDown = false;
+
+  function getHealth() {
+    const cliDiagnostics = inspectCliTargets();
+    return {
+      ok: true,
+      port: ACTIVE_PORT,
+      provider_mode: PROVIDER_MODE,
+      active_chat_runtime: ACTIVE_CHAT_RUNTIME,
+      claude_bin: cliDiagnostics.resolvedCommands?.claude || null,
+      opencode_bin: cliDiagnostics.resolvedCommands?.opencode || null,
+      diagnostics: getHealthDiagnostics(),
+    };
+  }
+
+  function close(signal = null) {
+    if (shuttingDown) return Promise.resolve();
+    shuttingDown = true;
+    const run = CLI_STATE.run;
+    if (run?.active) {
+      run.stopReason = 'shutdown';
+      cliStopRunSignals(run);
+    }
+    for (const session of TERMINAL_STATE.sessions.values()) stopTerminalSessionSignals(session);
+    try { CHAT_BOARD_ADAPTER.close(); } catch {}
+    try { CHAT_STORE.close(); } catch {}
+    if (signal) console.log(`Received ${signal}; shutting down chat server…`);
+    return new Promise((resolve) => {
+      if (!server) {
+        resolve();
+        return;
+      }
+      server.close(() => resolve());
+      setTimeout(() => resolve(), 1500).unref();
+    });
+  }
+
+  function listen({ host = '127.0.0.1', port = ACTIVE_PORT } = {}) {
+    ACTIVE_PORT = Number(port) || ACTIVE_PORT;
+    server = http.createServer(requestHandler);
+    server.on('upgrade', upgradeHandler);
+    return new Promise((resolve) => {
+      server.listen(ACTIVE_PORT, host, () => {
+        const cliDiagnostics = inspectCliTargets();
+        console.log(`Steadymade AI OS Chat → http://localhost:${ACTIVE_PORT}`);
+        console.log(`provider mode: ${PROVIDER_MODE} (active normal chat runtime: ${ACTIVE_CHAT_RUNTIME})`);
+        console.log(`claude binary: ${cliDiagnostics.resolvedCommands?.claude || `setup required (${cliDiagnostics.commands?.claude?.reason || 'not configured'})`}`);
+        console.log(`opencode binary: ${cliDiagnostics.resolvedCommands?.opencode || `setup required (${cliDiagnostics.commands?.opencode?.reason || 'not configured'})`}`);
+        if (!CHAT_CLI_BRIDGE_ENABLED) console.log('CLI bridge: disabled (set CHAT_CLI_BRIDGE_ENABLED=1 to enable)');
+        resolve(server);
+      });
+    });
+  }
+
+  return {
+    requestHandler,
+    upgradeHandler,
+    getHealth,
+    close,
+    listen,
+  };
+}
+
+const isMain = (() => {
+  try { return process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url); } catch { return false; }
+})();
+
+if (isMain) {
+  const standalone = createChatRuntime({ port: DEFAULT_CHAT_PORT });
+  standalone.listen({ host: '127.0.0.1', port: DEFAULT_CHAT_PORT });
+  process.on('SIGINT', async () => {
+    await standalone.close('SIGINT');
+    process.exit(0);
+  });
+  process.on('SIGTERM', async () => {
+    await standalone.close('SIGTERM');
+    process.exit(0);
+  });
+}
